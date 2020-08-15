@@ -70,7 +70,7 @@ Bye
 
 创建表
 
-> ~~~sql
+> ```sql
 > create [TEMPORARY] TABLE [IF NOT EXITS] [库名.]表名 （表的结构定义）[表选项]
 > 
 > 每个字段必须有数据类型
@@ -78,7 +78,7 @@ Bye
 > TEMPORARY 临时表，会话结束时表自动消失
 > 对字段的定义：
 > 字段名 数据类型 [NOT NULL | NULL] [DEFAULT default_value] [AUTO_INCREMENT] [UNIQUE [KEY] | [PRIMARY] KEY] [COMMENT '备注']
-> ~~~
+> ```
 >
 > 表选项有：
 >
@@ -91,20 +91,20 @@ Bye
 >
 > 例子：
 >
-> ~~~sql
+> ```sql
 > CREATE TABLE `tb_ad` (
->   `id` int(11) NOT NULL AUTO_INCREMENT COMMENT 'ID',
->   `name` varchar(50) DEFAULT NULL COMMENT '广告名称',
->   `position` varchar(50) DEFAULT NULL COMMENT '广告位置',
->   `start_time` datetime DEFAULT NULL COMMENT '开始时间',
->   `end_time` datetime DEFAULT NULL COMMENT '到期时间',
->   `status` char(1) DEFAULT NULL COMMENT '状态',
->   `image` varchar(100) DEFAULT NULL COMMENT '图片地址',
->   `url` varchar(100) DEFAULT NULL COMMENT 'URL',
->   `remarks` varchar(1000) DEFAULT NULL COMMENT '备注',
->   PRIMARY KEY (`id`)
+> `id` int(11) NOT NULL AUTO_INCREMENT COMMENT 'ID',
+> `name` varchar(50) DEFAULT NULL COMMENT '广告名称',
+> `position` varchar(50) DEFAULT NULL COMMENT '广告位置',
+> `start_time` datetime DEFAULT NULL COMMENT '开始时间',
+> `end_time` datetime DEFAULT NULL COMMENT '到期时间',
+> `status` char(1) DEFAULT NULL COMMENT '状态',
+> `image` varchar(100) DEFAULT NULL COMMENT '图片地址',
+> `url` varchar(100) DEFAULT NULL COMMENT 'URL',
+> `remarks` varchar(1000) DEFAULT NULL COMMENT '备注',
+> PRIMARY KEY (`id`)
 > ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8
-> ~~~
+> ```
 
 删除表
 
@@ -126,9 +126,9 @@ Bye
 >
 > 例子：
 >
-> ~~~sql
+> ```sql
 > alter table customer add name varchar(20);
-> ~~~
+> ```
 
 查看当前数据库中的所有表
 
@@ -258,18 +258,123 @@ select ... union [all|distinct] select ...
 
 例子：
 
-~~~sql
+```sql
 select country from websites
 union 
 select country from apps
 order by country;
-~~~
+```
 
 查询websites表和apps表中所有不同的country
 
 ### 子查询
 
+#### form形式
+
+把内层的查询结果供外层再次查询
+
+form后面是一个表，必须给子查询取别名
+
+form型需将结果生成临时表格，子查询返回一个表，**表型子查询**
+
+eg：
+
+```sql
+select * from (select * from tb where id>0) as t where id>1;
+```
+
+#### where形式
+
+把内层查询结果当作外层查询的比较条件
+
+返回的结果集是一个标量集合，一行一列，也就是一个标量值，**标量子查询**
+
+> 从定义上讲，每个标量子查询也是一个行子查询和一个列子查询，反之则不是；每个行子查询和列子查询也是一个表子查询，反之也不是。
+
+不需要起别名
+
+```sql
+select * from tb where money =(select max(money) from tb); 
+```
+
+子查询返回的结果是一列，**列子查询**
+
+使用in、not in、exists、not exists条件
+
+eg：
+
+```sql
+select * from tb1 
+where exists(
+    select * from tb2 where tb1.id = tb2.id
+);
+select * from tb1 
+where tb1.id in (
+    select id from tb2
+);
+```
+
+查询条件是一个行,**行子查询**
+
+```sql
+select * from tb1 
+where (id,gender) in (
+    select id,gender from tb2
+);
+
+```
+
+
+
 ### 连接查询
+
+将多个表的字段进行连接，可以指定连接条件。三张图片来自菜鸟教程
+
+#### 内连接 inner join
+
+获取两个表中字段匹配关系的记录
+
+默认，可省略inner，连接结果不能出现空行，on表示连接条件，与where类似，using也可用于连接条件
+
+![img](https://www.runoob.com/wp-content/uploads/2014/03/img_innerjoin.gif)
+
+eg：
+
+```sql
+select * from tb1 a inner join tb2 b on a.id=b.id
+等价于
+select * from tb1,tb2 where tb1.id =tb2.id
+改为using
+select * from tb1 as a join tb2 b using(id)
+
+```
+
+交叉连接，
+
+#### 外连接
+
+如果数据不存在，也会出现在连接结果中。
+    -- 左外连接 left join
+        如果数据不存在，左表记录会出现，而右表为null填充
+
+![img](https://www.runoob.com/wp-content/uploads/2014/03/img_leftjoin.gif)   
+
+ -- 右外连接 right join
+        如果数据不存在，右表记录会出现，而左表为null填充
+
+![img](https://www.runoob.com/wp-content/uploads/2014/03/img_rightjoin.gif)
+
+eg：
+
+```sql
+左外连接
+select * from tb1 a left join tb2 b on a.id =b.id
+右外连接
+select * from tb1 a left join tb2 b on a.id =b.id
+
+```
+
+
 
 ### truncate
 
@@ -283,32 +388,17 @@ order by country;
 2 truncate 重置auto_increment的值。而delete不会
 3 当被用于带分区的表时，truncate 会保留分区
 
-## 五. Mysql-DCL
-
-### root重置密码
-
-1. 停止mysql服务
-
-2. ```
-   [Linux] /usr/local/mysql/bin/safe_mysqld --skip-grant-tables &
-   [Windows] mysqld --skip-grant-tables
-   ```
-
-3. use mysql
-
-4. UPDATE  \` user \` SET PASSWORD=PASSWORD("密码") WHERE \` user \`= "root";
-
-5. flush privileges;//刷新权限
-
-PS:用户信息表mysql.user 
-
-### 增加用户
-
-create user 用户名 identified by 密码
-
-## 六、索引
+## 五. Mysql-用户和权限管理
 
 
+
+## 六、备份和还原
+
+## 七、事务
+
+## 八、触发器
+
+## 九、索引
 
 
 
