@@ -296,9 +296,12 @@ HashSet是Set接口的典型实现，大多数时候使用Set集合时就是使�
 2. HashSet不是同步的，如果多个线程同时访问一个HashSet，假设有两个或者两个以上线程同时修改了HashSet集合时，则必须通过代码来保证其同步。
 3. 集合元素值可以是null。
 
+当向HashSet集合中存入一个元素时，HashSet会调用该对象的hashCode()方法来得到该对象的hashCode值，然后根据该HashCode值决定该对象在HashSet中的存储位置。如果有两个元素通过equals()方法比较返回true，但它们的hashCode()方法返回值不相等，HashSet将会把它们存储在不同的位置，依然可以添加成功。
+
 简单地说，HashSet集合判断两个元素相等的标准是两个对象通过equals()方法比较相等，并且两个对象的hashCode()方法返回值也相等。
 
 ~~~java
+下面程序分别提供了三个类A、B和C，它们分别重写了equals()、hashCode()两个方法的一个或全部
 class A{//类A的equals方法总是返回true；没有重写hashCode方法
     public boolean equals(Object obj){return true;}
 }
@@ -322,7 +325,9 @@ System.out.println(books);
 
 运行结果：
 
-> [b@1,B@1,C@2,A@5438cd,A@9931f5]
+> [b@1,B@1,C@2,A@5438cd,A@9931f5]‘
+
+从上面程序可以看出，即使两个A对象通过equals()方法比较返回true，但HashSet依然把它们当成两个对象；即使两个B对象的hashCode()返回相同值（都是1），但HashSet依然把它们当成两个对象。这里有一个问题需要注意：当把一个对象放入HashSet中时，如果需要重写该对象对应类的equals()方法，则也应该重写其hashCode()方法。其规则是：**如果两个对象通过equals()方法比较返回true，这两个对象的hashCode值也应该相同。**
 
 如果该对象哈希码与集合已存在对象的哈希码不一致，则该对象没有与其他对象重复，添加到集合中.如果存在于该对象相同的哈希码，那么通过equals方法判断两个哈希码相同的对象是否为同一对象（判断的标准是：属性是否相同）
 
@@ -369,6 +374,17 @@ return f1.hashCode()*17+(int)f2*13;
 > 当向HashSet中添加可变对象时，必须十分小心。如果修改HashSet集合中的对象，有可能导致该对象与集合中的其他对象相等，从而导致HashSet无法准确访问该对象。
 >
 > 比如改变了Set集合中第一个对象的count实例变量的值，这将导致该该对象与集合中的其他对象相同。这时的HashSet集合会变得十分混乱。
+
+**底层实现**
+
+~~~java
+private transient HashMap<E, Object> map;
+public HashSet() {
+    this.map = new HashMap();
+}
+~~~
+
+由以上源码可见HashSet底层是由HashMap实现的
 
 ### LinkedHashSet类
 
@@ -456,7 +472,7 @@ class Test{
 }
 ~~~
 
-上面程序试图向TreeSet集合中添加两个Err对象，添加第一个对象时，TreeSet里没有任何元素，所以不会出现任何问题；当添加第二个Err对象时，TreeSet就会调用该对象的compareTo(Object obj)方法与集合中的其他元素进行比较——如果其对应的类没有实现Comparable接口，则会引发ClassCastException异常
+上面程序试图向TreeSet集合中添加两个A对象，添加第一个对象时，TreeSet里没有任何元素，所以不会出现任何问题；当添加第二个A对象时，TreeSet就会调用该对象的compareTo(Object obj)方法与集合中的其他元素进行比较——如果其对应的类没有实现Comparable接口，则会引发ClassCastException异常
 
 而且向TreeSet中添加的应该是同一个类的对象，否则也会引发ClassCastException异常。
 
@@ -471,6 +487,8 @@ class Test{
 **与HashSet类似的是，如果TreeSet中包含了可变对象，当可变对象的Field被修改时，TreeSet在处理这些对象时将非常复杂，而且容易出错。为了让程序更加健壮，推荐HashSet和TreeSet集合中只放入不可变对象。**
 
 **定制排序**
+
+TreeSet的自然排序是根据集合元素的大小，TreeSet将它们以升序排列。如果需要实现定制排序，例如以降序排列，则可以通过Comparator接口的帮助。该接口里包含一个int compare(T o1, T o2)方法，该方法用于比较o1和o2的大小：如果该方法返回正整数，则表明o1大于o2；如果该方法返回0，则表明o1等于o2；如果该方法返回负整数，则表明o1小于o2。
 
 ~~~java
 class M{
@@ -502,6 +520,8 @@ class Test{
 ### EnumSet类
 
 EnumSet是一个专为枚举类设计的集合类，EnumSet中的所有元素都必须是指定枚举类型的枚举值，该枚举类型在创建EnumSet时显式或隐式地指定。EnumSet的集合元素也是有序的，EnumSet以枚举值在Enum类内的定义顺序来决定集合元素的顺序。
+
+EnumSet集合不允许加入null元素，如果试图插入null元素，EnumSet将抛出NullPointerException异常。如果只是想判断EnumSet是否包含null元素或试图删除null元素都不会抛出异常，只是删除操作将返回false，因为没有任何null元素被删除。
 
 ### 各Set的性能分析
 
@@ -621,17 +641,213 @@ while(lit.hasPrevious()){
 
 ### ArrayList和Vector实现类
 
-ArrayList和Vector类都是基于数组实现的List类，所以ArrayList和Vector类封装了一个动态的、允许再分配的Object[]数组。ArrayList或Vector对象使用initialCapacity参数来设置该数组的长度，当向ArrayList或Vector中添加元素超出了该数组的长度时，它们的initialCapacity会自动增加。
+ArrayList和Vector类都是基于数组实现的List类，所以ArrayList和Vector类封装了一个动态的、允许再分配的Object[]数组。从源码（Java8）看，默认大小是10.
+
+~~~java
+private static final Object[] DEFAULTCAPACITY_EMPTY_ELEMENTDATA = new Object[0];
+~~~
+
+ArrayList或Vector对象使用initialCapacity参数来设置该数组的长度，当向ArrayList或Vector中添加元素超出了该数组的长度时，它们的initialCapacity会自动增加。ArrayList和Vector还提供了如下两个方法来重新分配Object[]数组。
+
+> void ensureCapacity(int minCapacity)：将ArrayList或Vector集合的Object[]数组长度增加minCapacity。
+>
+> void trimToSize()：调整ArrayList或Vector集合的Object[]数组长度为当前元素的个数。程序可调用该方法来减少ArrayList或Vector集合对象占用的存储空间。
 
 ArrayList和Vector在用法上几乎完全相同，但由于Vector是一个古老的集合（从JDK 1.0就有了），那时候Java还没有提供系统的集合框架，所以Vector里提供了一些方法名很长的方法，例如addElement(Object obj)，实际上这个方法与add (Object obj)没有任何区别
 
-ArrayList和Vector的显著区别是：ArrayList是线程不安全的，当多个线程访问同一个ArrayList集合时，如果有超过一个线程修改了ArrayList集合，则程序必须手动保证该集合的同步性；但Vector集合则是线程安全的，无须程序保证该集合的同步性。因为Vector是线程安全的，所以Vector的性能比ArrayList的性能要低。实际上，即使需要保证List集合线程安全，也同样不推荐使用Vector实现类。有一个Collections工具类，它可以将一个ArrayList变成线程安全的。
+ArrayList和Vector的显著区别是：ArrayList是线程不安全的，当多个线程访问同一个ArrayList集合时，如果有超过一个线程修改了ArrayList集合，则程序必须手动保证该集合的同步性；但Vector集合则是线程安全的，无须程序保证该集合的同步性。因为Vector是线程安全的，所以Vector的性能比ArrayList的性能要低。
+
+~~~java
+public synchronized E firstElement() {
+        if (this.elementCount == 0) {
+            throw new NoSuchElementException();
+        } else {
+            return this.elementData(0);
+        }
+    }
+~~~
+
+由上面源码可见Vector是由synchronized实现同步。
+
+实际上，即使需要保证List集合线程安全，也同样不推荐使用Vector实现类。有一个Collections工具类，它可以将一个ArrayList变成线程安全的。
+
+### LinkedList实现类
+
+~~~java
+public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>, Deque<E>, Cloneable, Serializable 
+~~~
+
+以上为LinkedList的源码（Java8）可见该类实现了List和Deque接口，所以详见下面Deque接口。
 
 ### 固定长度的List
 
 操作数组的工具类：Arrays，该工具类里提供了asList(Object... a)方法，该方法可以把一个数组或指定个数的对象转换成一个List集合，这个List集合既不是ArrayList实现类的实例，也不是Vector实现类的实例，而是Arrays的内部类ArrayList的实例。
 
+~~~java
+@SafeVarargs
+public static <T> List<T> asList(T... var0) {
+    return new Arrays.ArrayList(var0);//1
+}
+上面1位置的这个类是在Arrays类中的内部类见下面
+private static class ArrayList<E> extends AbstractList<E> implements RandomAccess, Serializable {
+        private static final long serialVersionUID = -2764017481108945198L;
+        private final E[] a;
+
+        ArrayList(E[] var1) {
+            this.a = (Object[])Objects.requireNonNull(var1);
+        }
+
+        public int size() {
+            return this.a.length;
+        }
+        //。。。。。。
+    }
+~~~
+
 Arrays.ArrayList是一个固定长度的List集合，程序只能遍历访问该集合里的元素，不可增加、删除该集合里的元素。试图增加删除元素都会引发UnsupportedOperationException异常。
+
+## Queue
+
+Queue用于模拟队列这种数据结构，队列的头部保存存放时间最长的元素，队列的尾部保存存放时间最短的元素。queue接口中定义了如下几个方法：
+
+~~~java
+void add(Object e):将指定元素加入到队列的尾部
+Object element():获取队列头部的元素，但是不删除元素
+boolean offer(Object e):将指定元素加入到队列的尾部。当时拥有容量限制的队列时，此方法只会返回false，而add会抛出IllegalStateException异常。
+Object peek():获取队列头部的元素，但是不删除元素，如果队列为空，则返回null
+Object poll():获取队列头部的元素，并删除元素。如果队列为空，则返回null
+Object remove():获取队列头部的元素，并删除元素。
+
+~~~
+
+### PriorityQueue实现类
+
+PriorityQueue是一个比较标准的队列实现类。之所以说它是比较标准的队列实现，而不是绝对标准的队列实现，是因为PriorityQueue保存队列元素的顺序并不是按加入队列的顺序，而是按队列元素的大小进行重新排序。因此当调用peek()方法或者poll()方法取出队列中的元素时，并不是取出最先进入队列的元素，而是取出队列中最小的元素。从这个意义上来看，PriorityQueue已经违反了队列的最基本规则：先进先出（FIFO）。
+
+~~~java
+    public static void main(String []args){
+        Queue queue = new PriorityQueue();
+        queue.add(30);
+        queue.offer(15);
+        queue.add(6);
+        queue.offer(52);
+        queue.add(-9);
+        System.out.println(queue);
+    }
+运行结果：
+[-9, 6, 15, 52, 30]
+~~~
+
+**PriorityQueue不允许插入null元素**，它还需要对队列元素进行排序，PriorityQueue的元素有两种排序方式。自然排序、定制排序。PriorityQueue队列对元素的要求与TreeSet对元素的要求基本一致。
+
+### Deque接口
+
+Deque接口是Queue接口的子接口，它代表一个双端队列，Deque接口里定义了一些双端队列的方法，这些方法允许从两端来操作队列的元素。
+
+~~~java
+void addFirst(Object e)：将指定元素插入该双端队列的开头。
+void addLast(Object e)：将指定元素插入该双端队列的末尾。
+Iterator descendingIterator()：返回该双端队列对应的迭代器，该迭代器将以逆向顺序来迭代队列中的元素。
+Object getFirst()：获取但不删除双端队列的第一个元素。
+Object getLast()：获取但不删除双端队列的最后一个元素。
+boolean offerFirst(Object e)：将指定元素插入该双端队列的开头。
+boolean offerLast(Object e)：将指定元素插入该双端队列的末尾。
+Object peekFirst()：获取但不删除该双端队列的第一个元素；如果此双端队列为空，则返回null。
+Object peekLast()：获取但不删除该双端队列的最后一个元素；如果此双端队列为空，则返回null。
+Object pollFirst()：获取并删除该双端队列的第一个元素；如果此双端队列为空，则返回null。
+Object pollLast()：获取并删除该双端队列的最后一个元素；如果此双端队列为空，则返回null。
+Object pop()（栈方法）：pop出该双端队列所表示的栈的栈顶元素。相当于removeFirst()。
+void push(Object e)（栈方法）：将一个元素push进该双端队列所表示的栈的栈顶。相当于addFirst(e)。
+Object removeFirst()：获取并删除该双端队列的第一个元素。
+Object removeFirstOccurrence(Object o)：删除该双端队列的第一次出现的元素o。
+removeLast()：获取并删除该双端队列的最后一个元素。
+removeLastOccurrence(Object o)：删除该双端队列的最后一次出现的元素o。
+~~~
+
+从上面方法中可以看出，Deque不仅可以当成双端队列使用，而且可以被当成栈来使用，因为该类里还包含了pop（出栈）、push（入栈）两个方法。
+
+**Deque方法与Queue方法对照**
+
+| Queue的方法      | Deque的方法               |
+| ---------------- | ------------------------- |
+| add(e)/offer(e)  | addLast(e)/offerLast(e)   |
+| remove()/pool()  | removeFirst()/poolFirst() |
+| element()/peek() | getFirst()/peekFirst()    |
+
+**Deque方法与Stack方法对照**
+
+| Stack的方法 | Deque的方法               |
+| ----------- | ------------------------- |
+| push(e)     | addFirst(e)/offerFirst(e) |
+| pop()       | removeFirst()/poolFirst() |
+| peek()      | getFirst()/peekFirst()    |
+
+### Deque接口与ArrayDeque实现类
+
+Deque接口提供了一个典型的实现类：ArrayDeque，从该名称就可以看出，它是一个基于数组实现的双端队列，创建Deque时同样可指定一个numElements参数，该参数用于指定Object[]数组的长度；如果不指定numElements参数，Deque底层数组的长度为16。以下为ArrayDeque的构造函数源码（Java8）
+
+~~~java
+    public ArrayDeque() {
+        this.elements = new Object[16];
+    }
+~~~
+
+以下示例将ArrayDeque用作栈来使用：
+
+~~~java
+public static void main(String[] args) {
+        ArrayDeque stack = new ArrayDeque();
+        stack.push("aaa");
+        stack.push("bbb");
+        stack.push("ccc");
+        //输出 ccc,bbb,aaa
+        System.out.println(stack);
+        System.out.println(stack.peek());
+        System.out.println(stack);
+        System.out.println(stack.pop());
+        System.out.println(stack);
+    }
+~~~
+
+使用ArrayDeque的性能会更加出色，因此现在的程序中需要使用“栈”这种数据结构时，推荐使用ArrayDeque或LinkedList，而不是Stack。
+
+### Deque接口与LinkedList实现类
+
+LinkedList类是List接口的实现类——这意味着它是一个List集合，可以根据索引来随机访问集合中的元素。除此之外，LinkedList还实现了Deque接口，因此它可以被当成双端队列来使用，自然也可以被当成“栈”来使用了。
+
+简单示例：
+
+~~~java
+public static void main(String[] args) {
+        LinkedList linkedList = new LinkedList();
+        linkedList.offer("aaa");//加入队列尾部
+        linkedList.push("bbb");//加入栈的顶部
+        linkedList.offerFirst("ccc");//加入到队列的头部（相当于栈的顶部）
+        for (int i = 0; i <linkedList.size() ; i++) {
+            System.out.println(linkedList.get(i));
+        }
+        System.out.println(linkedList.peekFirst());
+        System.out.println(linkedList.peekLast());
+        System.out.println(linkedList.pop());
+        System.out.println(linkedList);
+        System.out.println(linkedList.pollLast());
+        System.out.println(linkedList);
+    }
+~~~
+
+运行结果：
+
+> ccc
+> bbb
+> aaa
+> ccc
+> aaa
+> ccc
+> [bbb, aaa]
+> aaa
+> [bbb]
+
+> LinkedList与ArrayList、ArrayDeque的实现机制完全不同，ArrayList、ArrayDeque内部以数组的形式来保存集合中的元素，因此随机访问集合元素时有较好的性能；而LinkedList内部以链表的形式来保存集合中的元素，因此随机访问集合元素时性能较差，但在插入、删除元素时性能非常出色（只需改变指针所指的地址即可）。需要指出的是，虽然Vector也是以数组的形式来存储集合元素的，但因为它实现了线程同步功能，所以各方面性能都有所下降。
 
 ## Map
 
@@ -867,7 +1083,7 @@ Collections类中提供了多个synchronizedXxx()方法，该方法可以将指�
 Java中常用的集合框架中的实现类HashSet、TreeSet、ArrayList、ArrayDeque、LinkedList、HashMap和TreeMap都是线程不安全的。如果有多个线程访问它们，而且有超过一个的线程试图修改它们，则可能出现错误。Collections提供了多个静态方法可以把它们包装成线程同步的集合。
 
 ~~~java
-main(){
+public static void main(){
     Collection c =Collections.synchronizedCollection(new ArrayList());
     List list =Collections.synchronizedList(new ArrayList());
     Set s=Collections.synchronizedSet(new HashSet());
