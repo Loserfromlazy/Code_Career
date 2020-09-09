@@ -1300,11 +1300,153 @@ synchronized通过Monitor来实现线程同步，Monitor是依赖于底层的操
 
 **偏向锁**
 
+偏向锁是指，一个同步代码一直被一个线程所访问，该线程会自动获取锁，降低锁获取的代价。
+
+当一个线程访问同步代码块并获取锁时，会在Mark Word里存储锁偏向的线程ID。在线程进入和退出同步块时不再通过CAS操作来加锁和解锁，而是检测Mark Word里是否存储着指向当前线程的偏向锁。引入偏向锁是为了在无多线程竞争的情况下尽量减少不必要的轻量级锁执行路径，因为轻量级锁的获取及释放依赖多次CAS原子指令，而偏向锁只需要在置换ThreadID的时候依赖一次CAS原子指令即可。
+
+偏向锁只有遇到其他线程尝试竞争偏向锁时，持有偏向锁的线程才会释放锁，线程不会主动释放偏向锁。偏向锁的撤销，需要等待全局安全点（在这个时间点上没有字节码正在执行），它会首先暂停拥有偏向锁的线程，判断锁对象是否处于被锁定状态。撤销偏向锁后恢复到无锁（标志位为“01”）或轻量级锁（标志位为“00”）的状态。
+
 **轻量级锁**
+
+轻量级锁是指锁是偏向锁的时候，被另外的线程所访问，偏向锁就会升级成轻量级锁，其他线程会通过自旋的形式尝试获取锁，不会阻塞，从而提高性能。
+
+在代码进入同步块的时候，如果同步对象锁状态为无锁状态（锁标志位为“01”状态，是否为偏向锁为“0”），虚拟机首先将在当前线程的栈帧中建立一个名为锁记录（Lock Record）的空间，用于存储锁对象目前的Mark Word的拷贝，然后拷贝对象头中的Mark Word复制到锁记录中。
+
+拷贝成功后，虚拟机将使用CAS操作尝试将对象的Mark Word更新为指向Lock Record的指针，并将Lock Record里的owner指针指向对象的Mark Word。
+
+如果这个更新动作成功了，那么这个线程就拥有了该对象的锁，并且对象Mark Word的锁标志位设置为“00”，表示此对象处于轻量级锁定状态。
+
+如果轻量级锁的更新操作失败了，虚拟机首先会检查对象的Mark Word是否指向当前线程的栈帧，如果是就说明当前线程已经拥有了这个对象的锁，那就可以直接进入同步块继续执行，否则说明多个线程竞争锁。
+
+若当前只有一个等待线程，则该线程通过自旋进行等待。但是当自旋超过一定的次数，或者一个线程在持有锁，一个在自旋，又有第三个来访时，轻量级锁升级为重量级锁。
 
 **重量级锁**
 
+升级为重量级锁时，锁标志的状态值变为“10”，此时Mark Word中存储的是指向重量级锁的指针，此时等待锁的线程都会进入阻塞状态。
+
+整体的锁状态升级流程如下：
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_lock/%E9%94%81%E5%8D%87%E7%BA%A7.png)
+
+偏向锁通过对比Mark Word解决加锁问题，避免执行CAS操作。而轻量级锁是通过用CAS操作和自旋来解决加锁问题，避免线程阻塞和唤醒而影响性能。重量级锁是将除了拥有锁的线程以外的线程都阻塞。
+
+### 公平锁与非公平锁
+
+公平锁是指多个线程按照申请锁的顺序来获取锁，线程直接进入队列中排队，队列中的第一个线程才能获得锁。公平锁的优点是等待锁的线程不会饿死。缺点是整体吞吐效率相对非公平锁要低，等待队列中除第一个线程以外的所有线程都会阻塞，CPU唤醒阻塞线程的开销比非公平锁大。
+
+非公平锁是多个线程加锁时直接尝试获取锁，获取不到才会到等待队列的队尾等待。但如果此时锁刚好可用，那么这个线程可以无需阻塞直接获取到锁，所以非公平锁有可能出现后申请锁的线程先获取锁的场景。非公平锁的优点是可以减少唤起线程的开销，整体的吞吐效率高，因为线程有几率不阻塞直接获得锁，CPU不必唤醒所有线程。缺点是处于等待队列中的线程可能会饿死，或者等很久才会获得锁。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_lock/%E5%85%AC%E5%B9%B3%E9%94%81.png)
+
+以水井为例，由管理员看守且管理员只有一把锁，如果前面有人打水，那么这个d想打水就必须排队，且必须去队尾排队，管理员只会给队伍中最前面的人锁并让你去打水。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_lock/%E9%9D%9E%E5%85%AC%E5%B9%B3%E9%94%81.png)
+
+如果是非公平锁，即便队伍中有等待的人，但如果刚好上一个人刚打完水交还锁且管理员还没有允许下一个人去打水时，这时来了一个插队的人，这个插队的人可以直接去拿锁不需要排队。
+
+以ReentrantLock源码（Java8）为例：
+
+~~~java
+public class ReentrantLock implements Lock, Serializable {
+
+    private final ReentrantLock.Sync sync;
+
+    public ReentrantLock() {
+        this.sync = new ReentrantLock.NonfairSync();
+    }
+
+    public ReentrantLock(boolean var1) {
+        this.sync = (ReentrantLock.Sync)(var1 ? new ReentrantLock.FairSync() : new ReentrantLock.NonfairSync());
+    }
+    
+    static final class FairSync extends ReentrantLock.Sync {
+        //。。。
+    }
+    static final class NonfairSync extends ReentrantLock.Sync {
+        //。。。
+    }
+    abstract static class Sync extends AbstractQueuedSynchronizer {
+    	//。。。
+    }
+}
+~~~
+
+由源码可知ReentrantLock里面有一个内部类Sync，他又FairSync公平锁和NonfairSync非公平锁两个子类。默认使用非公平锁。
+
+以下为省略的公平锁和非公平锁的源码：
+
+~~~java
+//非公平锁
+final boolean nonfairTryAcquire(int var1) {
+            Thread var2 = Thread.currentThread();
+            int var3 = this.getState();
+            if (var3 == 0) {
+                if (this.compareAndSetState(0, var1)) {//————————————1————————————
+                    this.setExclusiveOwnerThread(var2);
+                    return true;
+                }
+            } else if (var2 == this.getExclusiveOwnerThread()) {
+                int var4 = var3 + var1;
+                if (var4 < 0) {
+                    throw new Error("Maximum lock count exceeded");
+                }
+
+                this.setState(var4);
+                return true;
+            }
+
+            return false;
+        }
+//公平锁
+ protected final boolean tryAcquire(int var1) {
+            Thread var2 = Thread.currentThread();
+            int var3 = this.getState();
+            if (var3 == 0) {
+                if (!this.hasQueuedPredecessors() && this.compareAndSetState(0, var1)) {
+                    this.setExclusiveOwnerThread(var2);
+                    return true;
+                }
+            } else if (var2 == this.getExclusiveOwnerThread()) {
+                int var4 = var3 + var1;
+                if (var4 < 0) {
+                    throw new Error("Maximum lock count exceeded");
+                }
+
+                this.setState(var4);
+                return true;
+            }
+
+            return false;
+        }
+~~~
+
+由源码可见两个方法区别为————1————处公平锁多了`if (!this.hasQueuedPredecessors()) `
+
+~~~java
+public final boolean hasQueuedPredecessors() {
+        AbstractQueuedSynchronizer.Node var1 = this.tail;
+        AbstractQueuedSynchronizer.Node var2 = this.head;
+        boolean var10000;
+        if (var2 != var1) {
+            AbstractQueuedSynchronizer.Node var3 = var2.next;
+            if (var2.next == null || var3.thread != Thread.currentThread()) {
+                var10000 = true;
+                return var10000;
+            }
+        }
+
+        var10000 = false;
+        return var10000;
+    }
+~~~
+
+该方法主要做一件事情：主要是判断当前线程是否位于同步队列中的第一个。如果是则返回true，否则返回false。
+
 ### 可重入锁与非可重入锁
+
+可重入锁又名递归锁，是指在同一个线程在外层方法获取锁的时候，再进入该线程的内层方法会自动获取锁（前提锁对象得是同一个对象或者class），不会因为之前已经获取过还没释放而阻塞。Java中ReentrantLock和synchronized都是可重入锁，可重入锁的一个优点是可一定程度避免死锁。
+
+
 
 ### 共享锁与排他锁
 
