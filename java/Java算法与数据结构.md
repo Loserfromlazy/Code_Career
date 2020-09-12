@@ -2331,7 +2331,7 @@ public class LianHash {
 
 图示一种和树想象的数据结构，图通常有个固定的形状，这是由物理或抽象的问题所决定的。
 
-![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_lock/%E5%9B%BE.png)
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/%E5%9B%BE.png)
 
 **邻接**
 
@@ -2362,16 +2362,27 @@ public class LianHash {
 顶点对象可以用顶点类来表示，顶点对象能放在数组中，用下标指示，也可以·放在链表或其他数据结构中。
 
 ~~~java
+/**
+ * 顶点类
+ * @author Loserfromlazy
+ */
+public class Vertex {
+    public char label;//
+    public boolean wasVisited;//表示是否被访问
 
+    public Vertex(char label){
+        this.label = label;
+        wasVisited = false;
+    }
+
+}
 ~~~
-
-
 
 #### 边
 
 上面的各种数据结构中，大多数树都是每个节点包好其他子节点的引用，比如红黑树、二叉树。然而图不像树，图没有固定的结构，图的每一个顶点可以与任意多个顶点项链，所以用以下两种方式表视图：邻接表和邻接矩阵。
 
-![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_lock/%E5%9B%BE1.png)
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/%E5%9B%BE1.png)
 
 **邻接矩阵：**
 
@@ -2399,7 +2410,293 @@ public class LianHash {
 
 ### 10.3 搜索
 
+在图中最基本的操作之一就是搜索一个顶点可以到达那些顶点，有两种方法可以用于搜索图：分别是深度优先搜索（DSF）和广度优先搜索（BSF）。深度优先搜索通过栈来实现，而广度优先搜索通过队列来实现。
+
+**深度优先搜索**
+
+1. 如果可以，访问一个邻接的未访问顶点，标记它并放入栈中。
+2. 当不能执行第一条，如果栈不为空，就弹出一个顶点。
+3. 如果不能执行第一条和第二条，就完成了搜索过程。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/%E5%9B%BE2.png)
+
+以上图为例，深度优先算法结果为*ABCDE*（此结果以A为第一点）
+
+**广度优先搜索**
+
+1. 访问下一个未访问的临界点，这个顶点必须是当前顶点的邻接点，标记它，并将它插入到队列中
+2. 如果已经没有未访问的邻接点而不能执行规则1时，从队列头取出一个顶点，并使其成为当前顶点。
+3. 如果因为队列为空而不能执行规则2，则搜索结束。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/%E5%9B%BE2.png)
+
+以上图为例，广度优先算法的结果为：*ABDCE*（此结果以A为第一点）
+
+**代码实现**
+
+深度优先搜索的栈
+
+~~~java
+/**
+ * 深度优先搜索使用的栈
+ */
+public class Stack {
+
+    private int [] arr;
+    private int top;
+
+    public Stack(){
+        arr = new int[10];
+        top=-1;
+    }
+
+    public Stack(int maxSize){
+        arr = new int[maxSize];
+        top=-1;
+    }
+
+    public void push(int value){
+        arr[++top]=value;
+    }
+
+    public int pop(){
+        return arr[top--];
+    }
+
+    public int peek(){
+        return arr[top];
+    }
+
+    public boolean isEmpty(){
+        return top == -1;
+    }
+}
+~~~
+
+广度优先搜索使用的队列
+
+~~~java
+/**
+ * 广度优先搜索使用的队列
+ */
+public class Queue {
+
+    private int[] arr;
+    private int front;
+    private int end;
+
+    public Queue(){
+        arr = new int[10];
+        end=-1;
+        front =0;
+    }
+
+    public Queue(int maxSize){
+        arr = new int[maxSize];
+        end=-1;
+        front=0;
+    }
+
+    public void insert(int value){
+        if (end == arr.length-1){
+            end=-1;
+        }
+        arr[++end] = value;
+    }
+
+    public int remove(){
+        int value =arr[front++];
+        if (front==arr.length){
+            front=0;
+        }
+        return value;
+    }
+
+    public int peek(){
+        return arr[front];
+    }
+    
+    public boolean isEmpty(){
+        return (end+1==front || front+arr.length-1 ==end );
+    }
+}
+~~~
+
+Graph.java（图类代码）
+
+~~~java
+package ch10;
+
+
+/**
+ * 图类
+ *
+ */
+public class Graph {
+
+    private final int MAX_NUMS = 20;//最大顶点个数
+    private Vertex vertexArr[];//用来存储顶点的数组
+    private int adjMat[][];//邻接矩阵
+    private int VertexNum;//顶点个数
+    private Stack stack;//用于深度优先搜索的栈
+    private Queue queue;//用于广度优先搜索的队列
+
+    /**
+     * 顶点类
+     * @author Loserfromlazy
+     */
+    class Vertex {
+        public char label;//
+        public boolean isVisited;//表示是否被访问
+
+        public Vertex(char label){
+            this.label = label;
+            isVisited = false;
+        }
+    }
+
+    public Graph(){
+        vertexArr = new Vertex[MAX_NUMS];
+        adjMat = new int[MAX_NUMS][MAX_NUMS];
+        VertexNum =0;
+        //初始化邻接矩阵
+        for (int i = 0; i <MAX_NUMS ; i++) {
+            for (int j = 0; j <MAX_NUMS ; j++) {
+                adjMat[0][0]=0;
+            }
+        }
+        stack = new Stack();
+        queue = new Queue();
+    }
+
+    /**
+     * 将顶点添加到数组中，是否访问设置为未访问
+     * @param lab
+     */
+    public void addVertex(char lab){
+        vertexArr[VertexNum++] = new Vertex(lab);
+    }
+
+    /**
+     * 用邻接矩阵表示边，无权无向图是对称的，两部分要赋值
+     * @param start
+     * @param end
+     */
+    public void addEdge(int start , int end){
+        adjMat[start][end]=1;
+        adjMat[end][start]=1;
+    }
+
+    public void  displayVertex(int val){
+        System.out.println(vertexArr[val].label);
+    }
+
+    /**
+     * 找到与某一顶点邻接且未被访问的顶点
+     * @param v
+     * @return
+     */
+    public int getAdjUnvisitedVertex(int v){
+        for (int i = 0; i <VertexNum ; i++) {
+            if (adjMat[v][i]==1 && vertexArr[i].isVisited==false){
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 深度优先算法
+     * 1. 用peek()方法检查栈顶的顶点
+     * 2. 用getAdjUnvisitedVertex()方法找到当前 栈 顶点邻接且未被访问的顶点
+     * 3. 第二步方法返回值不等于-1 则找到下一个未访问的邻接顶点，访问这个顶点，并入栈
+     *    如果第二部方法返回值等于-1 ，则没有找到，出栈
+     */
+    public void depthFirstSearch(){
+        //从第一个顶点开始访问
+        vertexArr[0].isVisited=true;
+        displayVertex(0);//显示第一个顶点
+        stack.push(0);//将第一个顶点放入栈中
+
+        while (!stack.isEmpty()){
+            //找到栈顶邻接且未访问的点
+            int v = getAdjUnvisitedVertex(stack.peek());
+            if (v == -1){
+                stack.pop();
+            }else {
+                vertexArr[v].isVisited =true;
+                displayVertex(v);
+                stack.push(v);
+            }
+        }
+        //栈访问完毕，充值所有标记位
+        for (int i = 0; i <VertexNum ; i++) {
+            vertexArr[i].isVisited =false;
+        }
+    }
+
+    /**
+     * 广度优先算法
+     * 1.用remove()方法检查队列的队头
+     * 2.试图找到这个顶点的未访问的邻接点
+     * 3.如果未找到。则顶点出列
+     * 4.如果找到了，访问这个顶点，并把它放入队列中
+     */
+    public void breadthFirstSearch(){
+        vertexArr[0].isVisited =true;
+        displayVertex(0);
+        queue.insert(0);
+        int v2;
+
+        while(!queue.isEmpty()){
+            int v1 =queue.remove();
+            while((v2 = getAdjUnvisitedVertex(v1))!=-1){
+                vertexArr[v2].isVisited =true;
+                displayVertex(v2);
+                queue.insert(v2);
+            }
+        }
+
+        //搜索完毕，初始化
+        for (int i = 0; i <VertexNum ; i++) {
+            vertexArr[i].isVisited =false;
+
+        }
+    }
+
+    public static void main(String[] args) {
+        Graph graph = new Graph();
+        graph.addVertex('A');
+        graph.addVertex('B');
+        graph.addVertex('C');
+        graph.addVertex('D');
+        graph.addVertex('E');
+
+        graph.addEdge(0, 1);//AB
+        graph.addEdge(1, 2);//BC
+        graph.addEdge(0, 3);//AD
+        graph.addEdge(3, 4);//DE
+
+        System.out.println("深度优先搜索算法 :");
+        graph.depthFirstSearch();//ABCDE
+
+        System.out.println();
+        System.out.println("----------------------");
+
+        System.out.println("广度优先搜索算法 :");
+        graph.breadthFirstSearch();//ABDCE
+    }
+}
+
+~~~
+
 ### 10.4 最小生成树
+
+对于一张图，我们有一个定理：n个点用n-1条边连接，形成的图形只可能是树。我们可以这样理解：树的每一个结点都有一个唯一的父亲，也就是至少有n条边，但是根节点要除外，所以就是n-1条边。还有一种理解：树里不存在环，那么既要连接n个点又不能形成环，只能用n-1条边。
+
+那么，对于一张n个点带权图，它的生成树就是用其中的n-1条边来连接这n个点，那么最小生成树就是n-1条边的边权之和最小的一种方案，简单的理解，就是用让这张图只剩下n-1条边，同时这n-1条边的边权总和最小。
+
+
 
 
 
