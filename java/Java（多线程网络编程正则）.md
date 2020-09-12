@@ -1126,7 +1126,11 @@ Java集合的ArrayList、LinkedList、HashSet、TreeSet、HashMap、TreeMap等�
 
 其中以Concurrent开头的集合类代表了支持并发访问的集合，它们可以支持多个线程并发写入访问，这些写入线程的所有操作都是线程安全的，但读取操作不必锁定。以Concurrent开头的集合类采用了更复杂的算法来保证永远不会锁住整个集合，因此在并发写入时有较好的性能。
 
-## 九、Java锁
+## 九、volatile关键字
+
+Java语言提供了一种稍弱的同步机制，即volatile关键之，它具备两种特性，变量可见性和和禁止重排序。
+
+## 十、Java锁
 
 Java中往往是按照是否含有某一特性来定义锁，通过特性将锁进行分组归类：
 
@@ -1446,17 +1450,231 @@ public final boolean hasQueuedPredecessors() {
 
 可重入锁又名递归锁，是指在同一个线程在外层方法获取锁的时候，再进入该线程的内层方法会自动获取锁（前提锁对象得是同一个对象或者class），不会因为之前已经获取过还没释放而阻塞。Java中ReentrantLock和synchronized都是可重入锁，可重入锁的一个优点是可一定程度避免死锁。
 
+~~~java
+    public synchronized void doSomethings(){
+        System.out.println("do somethings");
+        doOthers();
+    }
 
+    public synchronized void doOthers(){
+        System.out.println("do others");
+    }
+~~~
+
+在上面的代码中,两个方法都是被synchronized修饰的，doSomething()方法中调用diOthers()方法。因为内置锁是可重入的，所以同一个线程在调用doOthers()时可以直接获得当前对象的锁，进入doOthers()操作。
+
+如果是一个不可重入锁，那么当前线程在调用doOthers()之前需要将执行doSomething()时获取当前对象的锁释放掉，实际上该对象锁已被当前线程所持有，且无法释放。所以此时会出现死锁。
+
+以水井为例，有多个人在排队打水，此时管理员允许锁和同一个人的多个水桶绑定。这个人用多个水桶打水时，第一个水桶和锁绑定并打完水之后，第二个水桶也可以直接和锁绑定并开始打水，所有的水桶都打完水之后打水人才会将锁还给管理员。这个人的所有打水流程都能够成功执行，后续等待的人也能够打到水。这就是可重入锁。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_lock/%E5%8F%AF%E9%87%8D%E5%85%A5%E9%94%81.png)
+
+如果是非可重入锁的话，此时管理员只允许锁和同一个人的一个水桶绑定。第一个水桶和锁绑定打完水之后并不会释放锁，导致第二个水桶不能和锁绑定也无法打水。当前线程出现死锁，整个等待队列中的所有线程都无法被唤醒。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_lock/%E9%9D%9E%E5%8F%AF%E9%87%8D%E5%85%A5%E9%94%81.png)
+
+下面将展示源码：
+
+~~~java
+public class ReentrantLock implements Lock, Serializable {
+    private static final long serialVersionUID = 7373984872572414699L;
+    private final ReentrantLock.Sync sync;
+    
+    abstract static class Sync extends AbstractQueuedSynchronizer {
+        
+        final boolean nonfairTryAcquire(int var1) {
+            Thread var2 = Thread.currentThread();
+            int var3 = this.getState();
+            if (var3 == 0) {
+                if (this.compareAndSetState(0, var1)) {
+                    this.setExclusiveOwnerThread(var2);
+                    return true;
+                }
+            } else if (var2 == this.getExclusiveOwnerThread()) {
+                /*当线程尝试获取锁时，可重入锁先尝试获取并更新status值，如果status == 0表示没有其他线程在执行同步代码，则把status置为1，当前线程开始执行。如果status != 0，则判断当前线程是否是获取到这个锁的线程，如果是的话执行status+1，且当前线程可以再次获取锁。而非可重入锁是直接去获取并尝试更新当前status的值，如果status != 0的话会导致其获取锁失败，当前线程阻塞。*/
+                int var4 = var3 + var1;
+                if (var4 < 0) {
+                    throw new Error("Maximum lock count exceeded");
+                }
+
+                this.setState(var4);
+                return true;
+            }
+
+            return false;
+        }
+
+        protected final boolean tryRelease(int var1) {
+            /*释放锁时，可重入锁同样先获取当前status的值，在当前线程是持有锁的线程的前提下。如果status-1 == 0，则表示当前线程所有重复获取锁的操作都已经执行完毕，然后该线程才会真正释放锁。而非可重入锁则是在确定当前线程是持有锁的线程之后，直接将status置为0，将锁释放。*/
+            int var2 = this.getState() - var1;
+            if (Thread.currentThread() != this.getExclusiveOwnerThread()) {
+                throw new IllegalMonitorStateException();
+            } else {
+                boolean var3 = false;
+                if (var2 == 0) {
+                    var3 = true;
+                    this.setExclusiveOwnerThread((Thread)null);
+                }
+
+                this.setState(var2);
+                return var3;
+            }
+        }
+}
+~~~
+
+通过上面的公平锁已知ReentrantLock中有内部类，内部类继承AQS父类，其父类AQS中维护了一个同步状态status来计数重入次数，status初始值为0。
+
+~~~java
+public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchronizer implements Serializable {
+    
+    private volatile int state;
+}
+~~~
 
 ### 共享锁与排他锁
 
-## 十、总结
+共享锁也叫排他锁，是指该锁一次只能被一个线程所持有，如果线程T对数据A加上排他锁后，其他线程不能在对A加任何类型的锁。获得排他锁的线程既能读数据又能修改数据。JDK中的synchronized和JUC（java.util.concurrent）中的Lock实现类就是互斥锁。
+
+共享锁是指该锁可以被多个线程所持有。如果线程T对数据A假声共享锁后，则其他线程只能对A再加共享锁，不能加排他锁。获得共享锁的线程只能读数据，不能修改数据。对ReentrantReadWriteLock而言，其读锁是共享锁，其写锁是独占锁。读锁的共享性可保证并发读是非常高效的，读写、写读、写写的过程都是互斥的。
+
+下面是ReentrantReadWriteLock的部分源码（Java8）：
+
+~~~java
+public class ReentrantReadWriteLock implements ReadWriteLock, Serializable {
+    private static final long serialVersionUID = -6992448646407690164L;
+    private final ReentrantReadWriteLock.ReadLock readerLock;
+    private final ReentrantReadWriteLock.WriteLock writerLock;
+    final ReentrantReadWriteLock.Sync sync;
+    private static final Unsafe UNSAFE;
+    private static final long TID_OFFSET;
+
+    public ReentrantReadWriteLock() {
+        this(false);
+    }
+
+    public ReentrantReadWriteLock(boolean var1) {
+        this.sync = (ReentrantReadWriteLock.Sync)(var1 ? new ReentrantReadWriteLock.FairSync() : new ReentrantReadWriteLock.NonfairSync());
+        this.readerLock = new ReentrantReadWriteLock.ReadLock(this);
+        this.writerLock = new ReentrantReadWriteLock.WriteLock(this);
+    }
+
+    public ReentrantReadWriteLock.WriteLock writeLock() {
+        return this.writerLock;
+    }
+
+    public ReentrantReadWriteLock.ReadLock readLock() {
+        return this.readerLock;
+    }
+    
+    //
+        public static class ReadLock implements Lock, Serializable {
+        private final ReentrantReadWriteLock.Sync sync;
+        protected ReadLock(ReentrantReadWriteLock var1) {
+            this.sync = var1.sync;
+        }
+    }
+    
+    //
+        public static class WriteLock implements Lock, Serializable {
+        private final ReentrantReadWriteLock.Sync sync;
+        protected WriteLock(ReentrantReadWriteLock var1) {
+            this.sync = var1.sync;
+        }
+    }
+}
+~~~
+
+我们看到ReentrantReadWriteLock有两把锁：ReadLock和WriteLock，由词知意，一个读锁一个写锁，合称“读写锁”。再进一步观察可以发现ReadLock和WriteLock是靠内部类Sync实现的锁。Sync是AQS的一个子类，这种结构在CountDownLatch、ReentrantLock、Semaphore里面也都存在。
+
+在ReentrantReadWriteLock里面，读锁和写锁的锁主体都是Sync，但读锁和写锁的加锁方式不一样。读锁是共享锁，写锁是独享锁。读锁的共享锁可保证并发读非常高效，而读写、写读、写写的过程互斥，因为读锁和写锁是分离的。所以ReentrantReadWriteLock的并发性相比一般的互斥锁有了很大提升。
+
+在AQS中有state字段，该字段用来描述有多少线程持有锁。
+
+再独享锁中这个值通常为0或1（如果是重入锁就是重入的次数），在共享锁中state就是持有锁的数量。但是在ReentrantReadWriteLock中有读、写两把锁，所以需要在一个整型变量state上分别描述读锁和写锁的数量（或者也可以叫状态）。于是将state变量“按位切割”切分成了两个部分，高16位表示读锁状态（读锁个数），低16位表示写锁状态（写锁个数）。
+
+以下是写锁的加锁代码：
+
+~~~java
+protected final boolean tryAcquire(int var1) {
+            Thread var2 = Thread.currentThread();
+            int var3 = this.getState();//获取当前锁的个数
+            int var4 = exclusiveCount(var3);//获取写锁的个数
+            if (var3 != 0) {//如果已经有线程持有了锁
+                //如果写线程数var4为0，即存在读锁，或者持有锁不是当前线程就返回失败
+                if (var4 != 0 && var2 == this.getExclusiveOwnerThread()) {
+                    //如果写锁的数量大于最大数65535(2的16次幂-1)就抛出Error
+                    if (var4 + exclusiveCount(var1) > 65535) {
+                        throw new Error("Maximum lock count exceeded");
+                    } else {
+                        this.setState(var3 + var1);
+                        return true;
+                    }
+                } else {
+                    return false;
+                }
+                //如果当写线程数为0，且当前相乘需要阻塞那么就返回失败；或者如果通过CAS增加写线程数失败也返回失败
+            } else if (!this.writerShouldBlock() && this.compareAndSetState(var3, var3 + var1)) {
+                this.setExclusiveOwnerThread(var2);
+                return true;
+            } else {
+                return false;
+            }
+        }
+~~~
+
+tryAcquire()除了重入条件（当前线程为获取了写锁的线程）之外，增加了一个读锁是否存在的判断。如果存在读锁，则写锁不能被获取，原因在于：必须确保写锁的操作对读锁可见，如果允许读锁在已被获取的情况下对写锁的获取，那么正在运行的其他读线程就无法感知到当前写线程的操作。
+
+因此，只有等待其他读线程都释放了读锁，写锁才能被当前线程获取，而写锁一旦被获取，则其他读写线程的后续访问均被阻塞。写锁的释放与ReentrantLock的释放过程基本类似，每次释放均减少写状态，当写状态为0时表示写锁已被释放，然后等待的读写线程才能够继续访问读写锁，同时前次写线程的修改对后续的读写线程可见。
+
+以下是读锁的加锁代码：
+
+~~~java
+        protected final int tryAcquireShared(int var1) {
+            Thread var2 = Thread.currentThread();
+            int var3 = this.getState();
+            if (exclusiveCount(var3) != 0 && this.getExclusiveOwnerThread() != var2) {
+                return -1;//如果去他线程已经获取了写锁，则当前线程获取读锁失败，进入等待状态
+            } else {
+                int var4 = sharedCount(var3);
+                if (!this.readerShouldBlock() && var4 < 65535 && this.compareAndSetState(var3, var3 + 65536)) {
+                    if (var4 == 0) {
+                        this.firstReader = var2;
+                        this.firstReaderHoldCount = 1;
+                    } else if (this.firstReader == var2) {
+                        ++this.firstReaderHoldCount;
+                    } else {
+                        ReentrantReadWriteLock.Sync.HoldCounter var5 = this.cachedHoldCounter;
+                        if (var5 != null && var5.tid == ReentrantReadWriteLock.getThreadId(var2)) {
+                            if (var5.count == 0) {
+                                this.readHolds.set(var5);
+                            }
+                        } else {
+                            this.cachedHoldCounter = var5 = (ReentrantReadWriteLock.Sync.HoldCounter)this.readHolds.get();
+                        }
+
+                        ++var5.count;
+                    }
+
+                    return 1;
+                } else {
+                    return this.fullTryAcquireShared(var2);
+                }
+            }
+        }
+~~~
+
+可以看到在tryAcquireShared(int unused)方法中，如果其他线程已经获取了写锁，则当前线程获取读锁失败，进入等待状态。如果当前线程获取了写锁或者写锁未被获取，则当前线程（线程安全，依靠CAS保证）增加读状态，成功获取读锁。读锁的每次释放（线程安全的，可能有多个读线程同时释放读锁）均减少读状态，减少的值是“1<<16”。所以读写锁才能实现读读的过程共享，而读写、写读、写写的过程互斥。
+
+## 十一、总结
 
 ### sleep与wait区别
 
-### start与runqubie
+1. sleep是属于Thread类中的，而wait方法是属于Object类中的
+2. sleep方法线程不会释放对象锁
+3. 调用wait方法时，线程会放弃对象锁，进入等待锁定池，只有针对此对象调用notify方法后本线程才进入对象锁定池准备获取对象所进入运行状态
 
-### 终止线程的四种方式
+
 
 
 
