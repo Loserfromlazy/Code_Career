@@ -388,17 +388,183 @@ select * from tb1 a left join tb2 b on a.id =b.id
 2 truncate 重置auto_increment的值。而delete不会
 3 当被用于带分区的表时，truncate 会保留分区
 
-## 五. Mysql-用户和权限管理
+## 五、索引
+
+索引是数据库用来提高性能的最常用工具，是帮助mysql搞笑获取数据的数据结构。
+
+### 概述
+
+**使用索引的原因**
+
+1. 通过创建唯一性索引，可以保证数据库表中的每一行数据的唯一性。
+2. 可以大大加快数据的检索速度，这也是创建索引的最主要的原因。
+3. 帮助服务器避免排序和临时表
+4. 将随机IO变为顺序IO
+5. 可以加速表之间的连接，特别是在实现数据的参考完整性方面有意义。
+
+**为什么不对表中的每一个列创建一个索引**
+
+1. 当对表中的数据进行增删改时，索引也需要维护，这样就降低了数据的维护速度。
+2. 索引需要占用物理空间，除了数据表占数据空间之外，每一个索引还要占一定的物理空间，如果要建立聚簇索引，那么需要的空间就会更大。
+3. 创建索引和维护索引要耗费时间，这种时间随着数据量的增加而增加。
+
+**使用索引的注意事项**
+
+1. 在经常需要搜索的列上，可以加快搜索的速度；
+2. 在经常使用在WHERE子句中的列上面创建索引，加快条件的判断速度。
+3. 在经常需要排序的列上创 建索引，因为索引已经排序，这样查询可以利用索引的排序，加快排序查询时间；
+4. 对于中到大型表索引都是非常有效的，但是特大型表的话维护开销会很大，不适合建索引
+5. 在经常用在连接的列上，这 些列主要是一些外键，可以加快连接的速度；
+6. 避免 where 子句中对字段施加函数，这会造成无法命中索引。
+
+### 索引提高查询速度的原因
+
+> 本小节图片来自于Java3y，地址 https://juejin.im/post/5b55b842f265da0f9e589e79
+
+首先了解mysql的基本存储结构（记录都存在页里面）：
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/mysql/mysql_cunchu.jpg)
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/mysql/mysql_cunchu2.jpg)
+
+- 各个数据也可以组成双向链表
+- 每个数据也中的记录又可以组成单向链表
+  - 每个数据页都会为存储在它里面的记录生成一个页目录，在通过主键查找某条记录的时候可以在页目录中使用二分法快速定位到对应的槽，然后在遍历该槽对应分组中的记录即可快速找到指定的记录。
+  - 以其他列（非主键）作为搜索条件：只能从最小记录开始一次遍历单链表中的每条记录。
+
+所以，在使用`select * from user where indexname ='xxx'`这样没有进行任何优化的sql渔具，默认会这样做：
+
+1. 定位到记录所在的页：需要遍历双向链表，找到所在的页
+2. 从所在的页内中查找相应的记录：由于不是根据主键查询，只能遍历所在页的单链表
+
+这样的时间复杂度为O(n)
+
+**使用索引之后**
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/mysql/mysql_suoyin1.jpg)
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/mysql/mysql_suoyin2.jpg)
+
+没有用索引是需要遍历双向链表来定位对应的页，现在通过"目录"就可以很快的定位到对应的页上。(二分查找，时间复杂度近似O(logn))
+
+它的底层结构就是B+树。
+
+### mysql索引数据结构
+
+**哈希索引**
+
+对于哈希索引来说，底层的数据结构就是哈希表，因此在绝大多数需求为单条记录查询的时候，可以选择哈希索引，查询性能最快；其余大部分场景，建议选择BTree索引。哈希索引只有Memory引擎支持。
+
+**BTree索引**
+
+最常见的索引类型，大部分都支持B树索引。
+
+**R-tree 索引**（空间索引）：
+
+空间索引是MyISAM引擎的一个特殊索引类型，主要用于地理空间数据类型，通常使用较少，不做特别介绍。
+
+**Full-text** （全文索引） ：
+
+全文索引也是MyISAM的一个特殊索引类型，主要用于全文索引，InnoDB从Mysql5.6版本开始支持全文索引。
+
+*平常所说的索引，如果没有特别指明，都是指B+树（多路搜索树，并不一定是二叉的）结构组织的索引。其中聚集索引、复合索引、前缀索引、唯一索引默认都是使用 B+tree 索引，统称为 索引。*
+
+### 索引分类
+
+**普通索引**
+
+这是一种最基本的索引类型，而且他没有唯一性之类的限制。普通索引可以通过以下方式创建：
+
+创建索引：
+
+~~~sql
+create index indexName ON tableName (columnName)
+~~~
+
+修改表：
+
+~~~sql
+alter table tablename ADD INDEX indexName(columnName) 
+~~~
+
+创建表时指定：
+
+~~~sql
+create table tablename(
+id int not null,
+    name verchar(10) not null,
+    index [indexname](name(length))
+);
+~~~
+
+**唯一性索引**
+
+和普通索引基本相同，但唯一性索引列的所有值都只能出现一次，即必须唯一。唯一性索引可以通过以下方式创建：
+
+创建索引：
+
+```mysql
+create unique index indexName ON tableName (columnName)
+```
+
+修改表：
+
+```mysql
+alter table tablename ADD unique INDEX indexName(columnName) 
+```
+
+创建表时指定：
+
+```mysql
+create table tablename(
+id int not null,
+    name verchar(10) not null,
+    unique [indexname](name(length))
+);
+```
+
+**主键**
+
+主键是一种唯一性索引，但它必须指定为“PRIMARY KEY”。如果你曾经用过AUTO_INCREMENT类型的列，你可能已经熟悉主键之类的概念了。
+
+**全文索引**
+
+全文索引的索引类型为FULLTEXT。全文索引可以在VARCHAR或者TEXT类型的列上创建。
+
+~~~mysql
+alter table tablename add fulltext indexname(columnname)
+~~~
+
+### 索引语法
+
+**创建索引**
+
+见上
+
+**删除索引**
+
+~~~mysql
+drop index indexname on mytable
+alter table tablename drop index indexname
+~~~
+
+删除主键时只需指定PRIMARY KEY，但在删除索引时，你必须知道索引名。
+
+**显示索引信息**
+
+~~~mysql
+show index from tablename;
+~~~
 
 
 
-## 六、备份和还原
 
-## 七、事务
 
-## 八、触发器
 
-## 九、索引
+
+
+
+
 
 
 
