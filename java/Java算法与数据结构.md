@@ -421,11 +421,11 @@ public class MyQueue {
 
 ## 四. 链表
 
-链表是一种物理存储单元上非连续、非顺序的存储结构，数据元素的逻辑顺序是通过链表中的指针链接次序实现的。链表由一系列结点（链表中每一个元素称为结点）组成，结点可以在运行时动态生成。每个结点包括两个部分：一个是存储数据元素的数据域，另一个是存储下一个结点地址的指针域。 相比于线性表顺序结构，操作复杂。由于不必须按顺序存储，链表在插入的时候可以达到O(1)的复杂度，比另一种线性表顺序表快得多，但是查找一个节点或者访问特定编号的节点则需要O(n)的时间，而线性表和顺序表相应的时间复杂度分别是O(logn)和O(1)。
+链表是一种物理存储单元上非连续、非顺序的存储结构，数据元素的逻辑顺序是通过链表中的指针链接次序实现的。链表由一系列结点（链表中每一个元素称为结点）组成，结点可以在运行时动态生成。每个结点包括两个部分：一个是存储数据元素的数据域，另一个是存储下一个结点地址的指针域。 相比于线性表顺序结构，操作复杂。由于不必须按顺序存储，链表在插入的时候可以达到O(1)的复杂度，比另一种线性表顺序表快得多，但是查找一个结点或者访问特定编号的结点则需要O(n)的时间，而线性表和顺序表相应的时间复杂度分别是O(logn)和O(1)。
 
 ### 4.1单向链表
 
-单链表是链表中结构最简单的。一个单链表的节点(Node)分为两个部分，第一个部分(data)保存或者显示关于节点的信息，另一个部分存储下一个节点的地址。最后一个节点存储地址的部分指向空值。
+单链表是链表中结构最简单的。一个单链表的结点(Node)分为两个部分，第一个部分(data)保存或者显示关于结点的信息，另一个部分存储下一个结点的地址。最后一个结点存储地址的部分指向空值。
 
 ![img](https://bkimg.cdn.bcebos.com/pic/d833c895d143ad4bd199922a89025aafa50f06a0?x-bce-process=image/watermark,g_7,image_d2F0ZXIvYmFpa2U4MA==,xp_5,yp_5)
 
@@ -433,14 +433,14 @@ public class MyQueue {
 
 ~~~java
 /**
- * 节点
+ * 结点
  * @author Loserfromlazy
  *
  */
 public class Node {
 	//数据域
 	public Object data;
-	//节点域
+	//结点域
 	public Node next;
 	
 	public Node(Object value) {
@@ -459,34 +459,34 @@ public class Node {
  * 链表
  */
 public class LinkList {
-	//头节点
+	//头结点
 	private Node first;
-	//节点的个数
+	//结点的个数
 	private int size;
 	public LinkList() {
 		first=null;
 	}
 	
 	/**
-	 * 插入一个节点，在头节点进行插入
+	 * 插入一个结点，在头结点进行插入
 	 */
 	public void insertFirst(Object value) {
-		Node node = new Node(value);//待插入的节点
+		Node node = new Node(value);//待插入的结点
 		if(size==0) {
 			first= node;
 		}else {
-			node.next=first;//将新插入的节点的下一个节点指向头节点
-			first=node;//将新插入的节点变成头节点，这样就可以实现在头节点之前插入节点
+			node.next=first;//将新插入的结点的下一个结点指向头结点
+			first=node;//将新插入的结点变成头结点，这样就可以实现在头结点之前插入结点
 		}
 		size++;
 	}
 	
 	/**
-	 * 删除一个节点，在头节点进行删除
+	 * 删除一个结点，在头结点进行删除
 	 */
 	public Node deleteFirst() {
 		Node node= first;
-		first=node.next;//将头节点的下一个节点变成头节点，这样就可以删除当前头节点
+		first=node.next;//将头结点的下一个结点变成头结点，这样就可以删除当前头结点
 		size--;
 		return node;
 	}
@@ -519,7 +519,7 @@ public class LinkList {
 	}
 	
 	/**
-	 * 删除节点，根据数据域进行删除
+	 * 删除结点，根据数据域进行删除
 	 */
 	public boolean delete(Object value) {
 		if(size==0) {
@@ -527,11 +527,11 @@ public class LinkList {
 		}
 		Node current =first;
 		Node previous =first;
-		while(current.data!=value) {//当查到相等的数据current就是要找的节点
+		while(current.data!=value) {//当查到相等的数据current就是要找的结点
 			if(current.data==null) {
 				return false;
 			}else {
-                //指向下一个节点继续查
+                //指向下一个结点继续查
 				previous=current;
 				current =current.next;
 			}
@@ -540,7 +540,7 @@ public class LinkList {
 			first=current.next;
 			size--;
 		}else {
-            //将前一个节点直接指向下一个节点，即跳过current节点，就可以完成删除
+            //将前一个结点直接指向下一个结点，即跳过current结点，就可以完成删除
 			previous.next=current.next;
 			size--;
 		}
@@ -551,13 +551,13 @@ public class LinkList {
 
 ### 4.2 双端列表
 
-链表中保存着对最后一个链节点的引用。
+链表中保存着对最后一个链结点的引用。
 
-对于单项链表，如果想在尾部添加一个节点，那么必须从头部一直遍历到尾部，找到尾节点，然后在尾节点后面插入一个节点。如果多个对尾节点的引用，那么会简单很多。
+对于单项链表，如果想在尾部添加一个结点，那么必须从头部一直遍历到尾部，找到尾结点，然后在尾结点后面插入一个结点。如果多个对尾结点的引用，那么会简单很多。
 
 **java实现双端列表**
 
-主要不同就是新增了一个尾节点，所以修改insertFirst和deleteFirst方法，新增insertLast方法
+主要不同就是新增了一个尾结点，所以修改insertFirst和deleteFirst方法，新增insertLast方法
 
 ~~~java
 /**
@@ -565,18 +565,18 @@ public class LinkList {
  * 双端链表
  */
 public class FirstLastLinkList {
-	//头节点
+	//头结点
 	private Node first;
-	//尾节点
+	//尾结点
 	private Node last;
-	//节点的个数
+	//结点的个数
 	private int size;
 	public FirstLastLinkList() {
 		first=null;
 	}
 	
 	/**
-	 * 插入一个节点，在头节点进行插入
+	 * 插入一个结点，在头结点进行插入
 	 */
 	public void insertFirst(Object value) {
 		Node node = new Node(value);
@@ -590,7 +590,7 @@ public class FirstLastLinkList {
 		size++;
 	}
 	/**新增的方法
-	 * 插入一个节点，从尾节点进行插入
+	 * 插入一个结点，从尾结点进行插入
 	 */
 	public void insertLast(Object value) {
 		Node node = new Node(value);
@@ -598,18 +598,18 @@ public class FirstLastLinkList {
 			first=node;
 			last=node;
 		}else {
-            //将待加入的节点插入到尾节点之后，将新插入的节点变成尾节点
+            //将待加入的结点插入到尾结点之后，将新插入的结点变成尾结点
 			last.next=node;
 			last=node;
 		}
 		size++;
 	}
 	/**
-	 * 删除一个节点，在头节点进行删除
+	 * 删除一个结点，在头结点进行删除
 	 */
 	public Node deleteFirst() {
 		Node node= first;
-		if(first.next==null) {//修改的地方，如果头节点没有下一个节点，那么尾节点也为空
+		if(first.next==null) {//修改的地方，如果头结点没有下一个结点，那么尾结点也为空
 			last=null;
 		}else {
 			first=node.next;
@@ -633,7 +633,7 @@ public class FirstLastLinkList {
 
 我们知道单向链表只能从一个方向遍历，那么双向链表它可以从两个方向遍历。
 
-**PS：注意双端链表与双向链表的区别：双端链表只是增加了一个指向尾节点的节点，但这个节点没有向回指的指针。索引不能进行双向遍历。而双向链表在每一个节点都增加了向回指的指针所以可以双向遍历。**
+**PS：注意双端链表与双向链表的区别：双端链表只是增加了一个指向尾结点的结点，但这个结点没有向回指的指针。索引不能进行双向遍历。而双向链表在每一个结点都增加了向回指的指针所以可以双向遍历。**
 
 **java双向链表的实现**
 
@@ -641,14 +641,14 @@ public class FirstLastLinkList {
 package ch4;
 
 /**
- * 节点
+ * 结点
  * @author Loserfromlazy
  *
  */
 public class DoubleNode {
 	//数据域
 	public Object data;
-	//节点域
+	//结点域
 	public DoubleNode next;
 	//向前的指针
 	public DoubleNode previous;
@@ -669,11 +669,11 @@ public class DoubleNode {
  * 双端链表
  */
 public class DoubleLinkList {
-	//头节点
+	//头结点
 	private DoubleNode first;
-	//尾节点
+	//尾结点
 	private DoubleNode last;
-	//节点的个数
+	//结点的个数
 	private int size;
 	public DoubleLinkList() {
 		first=null;
@@ -682,7 +682,7 @@ public class DoubleLinkList {
 	}
 	
 	/**
-	 * 插入一个节点，在头节点进行插入
+	 * 插入一个结点，在头结点进行插入
 	 */
 	public void insertFirst(Object value) {
 		DoubleNode node = new DoubleNode(value);
@@ -691,7 +691,7 @@ public class DoubleLinkList {
 			last= node;
             size++;
 		}else {
-            //将头节点的前一个节点变成新插入的节点，然后将新插入的节点的下一个节点指向头节点，这样就可以实现将头节点与新插入的节点相连，然后将新插入的节点变为头节点即可
+            //将头结点的前一个结点变成新插入的结点，然后将新插入的结点的下一个结点指向头结点，这样就可以实现将头结点与新插入的结点相连，然后将新插入的结点变为头结点即可
 			first.previous=node;
             node.next=first;
 			first=node;
@@ -701,7 +701,7 @@ public class DoubleLinkList {
 	
 	}
 	/**
-	 * 插入一个节点，从尾节点进行插入
+	 * 插入一个结点，从尾结点进行插入
 	 */
 	public void insertLast(Object value) {
 		DoubleNode node = new DoubleNode(value);
@@ -710,20 +710,20 @@ public class DoubleLinkList {
 			last=node;
 		}else {
 			last.next=node;
-			node.previous=last;//将尾节点与新插入的节点相连
+			node.previous=last;//将尾结点与新插入的结点相连
 			last=node;
 		}
 		size++;
 	}
 	/**
-	 * 删除一个节点，在头节点进行删除
+	 * 删除一个结点，在头结点进行删除
 	 */
 	public DoubleNode deleteFirst() {
 		DoubleNode node= first;
 		if(first.next==null) {
 			last=null;
 		}else {
-            //将头节点的下一个节点的前节点变为空这样就切断了两个节点的联系
+            //将头结点的下一个结点的前结点变为空这样就切断了两个结点的联系
 			first.next.previous=null;
 		}
 		first=node.next;
@@ -731,14 +731,14 @@ public class DoubleLinkList {
 		return node;
 	}
 	/**
-	 * 删除节点，从尾部进行删除
+	 * 删除结点，从尾部进行删除
 	 */
 	public DoubleNode deleteLast() {
 		DoubleNode node= last;
 		if(first.next==null) {
 			first=null;
 		}else {
-            //将尾节点的前一个节点的下一个节点变为空这样就切断了两个节点的联系
+            //将尾结点的前一个结点的下一个结点变为空这样就切断了两个结点的联系
 			last.previous.next=null;
 			
 		}
@@ -774,7 +774,7 @@ public class DoubleLinkList {
 	}
 	
 	/**
-	 * 删除节点，根据数据域进行删除
+	 * 删除结点，根据数据域进行删除
 	 */
 	public boolean delete(Object value) {
 		if(size==0) {
@@ -1230,7 +1230,7 @@ public class QuickSort {
 
 ### 7.2 二叉树
 
-树的每个节点最多只能有两个子节点
+树的每个结点最多只能有两个子结点
 
 二叉树是递归定义的，其结点有左右子树之分，逻辑上二叉树有五种基本形态：
 
@@ -1264,14 +1264,14 @@ public class QuickSort {
 
 ~~~java
 /**
- * 二叉树节点
+ * 二叉树结点
  */
 public class Node {
     //数据项,设置为default可以同一个包访问，方便tree访问
     long data;
-    //左子节点
+    //左子结点
     Node leftChild;
-    //右子节点
+    //右子结点
     Node rightChild;
 
     public Node(long data){
@@ -1287,22 +1287,22 @@ public class Node {
  * 二叉树类
  */
 public class Tree {
-    //根节点，测试Tree类时可以改为public，查看数据
+    //根结点，测试Tree类时可以改为public，查看数据
     private Node root;
     /**
-     * 插入节点
+     * 插入结点
      * @param value
      */
     public void insert(long value){
     }
     /**
-     * 查找节点
+     * 查找结点
      * @param value
      */
     public void find(long value){
     }
     /**
-     * 删除节点
+     * 删除结点
      * @param value
      */
     public void delete(long value){
@@ -1313,41 +1313,41 @@ public class Tree {
 
 ### 7.4 二叉树的插入和查找
 
-**插入节点**
+**插入结点**
 
-从根节点开始查找一个相应的节点，这个节点将成为新插入既然点的父节点，当父节点找到后，通过判断新节点的值比父节点的值的大小来决定链接到左子节点还是右子节点。
+从根结点开始查找一个相应的结点，这个结点将成为新插入既然点的父结点，当父结点找到后，通过判断新结点的值比父结点的值的大小来决定链接到左子结点还是右子结点。
 
-java代码如下，可直接放到上面插入节点代码处
+java代码如下，可直接放到上面插入结点代码处
 
 ~~~java
 /**
- * 插入节点
+ * 插入结点
  * @param value
  */
 public void insert(long value){
-    //封装节点
+    //封装结点
     Node newNode = new Node(value);
-    //引用当前节点
+    //引用当前结点
     Node current =root;
-    //引用父节点
+    //引用父结点
     Node parent;
     //如果root为null，第一次插入时
     if (root == null){
         root = newNode;
     }else {
         while (true) {
-            //父节点指向当前节点
+            //父结点指向当前结点
             parent = current;
-            //如果当前节点数据比插入的大，则向左走
+            //如果当前结点数据比插入的大，则向左走
             if (current.data > value) {
                 current = current.leftChild;
-                if (current == null){//如果左子节点为空
+                if (current == null){//如果左子结点为空
                     parent.leftChild = newNode;//插入新值，返回
                     return;
                 }
             } else {
                 current = current.rightChild;
-                if (current == null){//如果右子节点为空
+                if (current == null){//如果右子结点为空
                     parent.rightChild = newNode;//插入新值，返回
                     return;
                 }
@@ -1359,21 +1359,21 @@ public void insert(long value){
 
 查找结点
 
-从根节点开始查找，如果查找的节点值比当前节点小，则继续查左子树，否则查找右子树。
+从根结点开始查找，如果查找的结点值比当前结点小，则继续查左子树，否则查找右子树。
 
 Java代码如下：
 
 ~~~java
 /**
- * 查找节点
+ * 查找结点
  * @param value
  */
 public Node find(long value){
-    //引用当前节点，从根节点开始
+    //引用当前结点，从根结点开始
     Node current = root;
-    //循环，查找值不等于当前节点的数据项
+    //循环，查找值不等于当前结点的数据项
     while (current.data != value){
-        //比较当前节点大小与查找值
+        //比较当前结点大小与查找值
         if (current.data > value){
             current = current.leftChild;
         }else if(current.data < value) {
@@ -1388,13 +1388,13 @@ public Node find(long value){
 
 ### 7.5 遍历树
 
-遍历树是根据一种特定的顺序访问树的每一个节点。比较常用的有前序遍历，中序遍历和后序遍历。而二叉搜索树最常用的是中序遍历。
+遍历树是根据一种特定的顺序访问树的每一个结点。比较常用的有前序遍历，中序遍历和后序遍历。而二叉搜索树最常用的是中序遍历。
 
-前序遍历:（**根左右**）访问根节点——>前序遍历左子树——>前序遍历右子树
+前序遍历:（**根左右**）访问根结点——>前序遍历左子树——>前序遍历右子树
 
-中序遍历（**左根右**）:中序遍历左子树——>访问根节点——>中序遍历右子树
+中序遍历（**左根右**）:中序遍历左子树——>访问根结点——>中序遍历右子树
 
-后序遍历（**左右根**）:后序遍历左子树——>后序遍历右子树——>访问根节点
+后序遍历（**左右根**）:后序遍历左子树——>后序遍历右子树——>访问根结点
 
 ![例子](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/bianli.png)
 
@@ -1413,37 +1413,37 @@ package ch7;
  * 二叉树类
  */
 public class Tree {
-    //根节点
+    //根结点
     public Node root;
 
     /**
-     * 插入节点
+     * 插入结点
      * @param value
      */
     public void insert(long value){
-        //封装节点
+        //封装结点
         Node newNode = new Node(value);
-        //引用当前节点
+        //引用当前结点
         Node current =root;
-        //引用父节点
+        //引用父结点
         Node parent;
         //如果root为null，第一次插入时
         if (root == null){
             root = newNode;
         }else {
             while (true) {
-                //父节点指向当前节点
+                //父结点指向当前结点
                 parent = current;
-                //如果当前节点数据比插入的大，则向左走
+                //如果当前结点数据比插入的大，则向左走
                 if (current.data > value) {
                     current = current.leftChild;
-                    if (current == null){//如果左子节点为空
+                    if (current == null){//如果左子结点为空
                         parent.leftChild = newNode;//插入新值，返回
                         return;
                     }
                 } else {
                     current = current.rightChild;
-                    if (current == null){//如果右子节点为空
+                    if (current == null){//如果右子结点为空
                         parent.rightChild = newNode;//插入新值，返回
                         return;
                     }
@@ -1453,15 +1453,15 @@ public class Tree {
     }
 
     /**
-     * 查找节点
+     * 查找结点
      * @param value
      */
     public Node find(long value){
-        //引用当前节点，从根节点开始
+        //引用当前结点，从根结点开始
         Node current = root;
-        //循环，查找值不等于当前节点的数据项
+        //循环，查找值不等于当前结点的数据项
         while (current.data != value){
-            //比较当前节点大小与查找值
+            //比较当前结点大小与查找值
             if (current.data > value){
                 current = current.leftChild;
             }else if(current.data < value) {
@@ -1479,7 +1479,7 @@ public class Tree {
      */
     public void frontOrder(Node localNode){
         if (localNode != null){
-            //访问根节点
+            //访问根结点
             System.out.println(localNode.data+" ");
             //前序遍历左子树
             frontOrder(localNode.leftChild);
@@ -1496,7 +1496,7 @@ public class Tree {
         if (localNode != null){
             //中序遍历左子树
             inOrder(localNode.leftChild);
-            //访问根节点
+            //访问根结点
             System.out.println(localNode.data+" ");
             //中序遍历右子树
             inOrder(localNode.rightChild);
@@ -1512,13 +1512,13 @@ public class Tree {
             afterOrder(localNode.leftChild);
             //后序遍历右子树
             afterOrder(localNode.rightChild);
-            //访问根节点
+            //访问根结点
             System.out.println(localNode.data+" ");
         }
     }
 
     /**
-     * 查找中序后继节点
+     * 查找中序后继结点
      * @param delNode
      * @return
      */
@@ -1528,29 +1528,29 @@ public class Tree {
         Node current =delNode.rightChild;
 
         while (current != null){
-            successorParent = successor;//保存父节点的引用
-            successor =current;//保存当前节点的引用
+            successorParent = successor;//保存父结点的引用
+            successor =current;//保存当前结点的引用
             current = current.leftChild;
         }
-        //将中序后继节点与删除节点替换
+        //将中序后继结点与删除结点替换
         if (successor != delNode.rightChild){
-            successorParent.leftChild = successor.rightChild;//如果这个中序后继节点还有右子节点，将他变成这个中序后继节点位置
+            successorParent.leftChild = successor.rightChild;//如果这个中序后继结点还有右子结点，将他变成这个中序后继结点位置
             successor.rightChild = delNode.rightChild;
         }
         return successor;
     }
     /**
-     * 删除节点
+     * 删除结点
      * @param value
      */
     public boolean delete(long value){
-        //引用当前节点
+        //引用当前结点
         Node current =root;
-        //引用当前节点父节点
+        //引用当前结点父结点
         Node parent = root;
-        //判断是否是左子节点
+        //判断是否是左子结点
         boolean isLeftChild = false;
-        //查找节点
+        //查找结点
         while (current.data!= value){
             parent=current;
             if (current.data > value){
@@ -1564,38 +1564,38 @@ public class Tree {
             }
         }
 
-        //删除节点
-        if (current.leftChild == null && current.rightChild ==null){//删除叶子节点，该节点没有子节点
+        //删除结点
+        if (current.leftChild == null && current.rightChild ==null){//删除叶子结点，该结点没有子结点
             if (current == root){
                 root = null;
             }
-            //如果是父节点的左子节点
+            //如果是父结点的左子结点
             else if (isLeftChild){
                 parent.leftChild=null;
             }else {
                 parent.rightChild=null;
             }
             return true;
-        }else if (current.rightChild == null){//如果节点只有一个左节点
-            if (current == root){//跳过待删除节点，让待删除节点的左子节点变成根节点
+        }else if (current.rightChild == null){//如果结点只有一个左结点
+            if (current == root){//跳过待删除结点，让待删除结点的左子结点变成根结点
                 root=current.leftChild;
             }
-            else if (isLeftChild){//如果待删除节点是左子节点，让父节点的左子节点等于待删除节点的左子节点
+            else if (isLeftChild){//如果待删除结点是左子结点，让父结点的左子结点等于待删除结点的左子结点
                 parent.leftChild=current.leftChild;
-            }else {//如果待删除节点是右子节点，让父节点的右子节点等于待删除节点的左子节点
+            }else {//如果待删除结点是右子结点，让父结点的右子结点等于待删除结点的左子结点
                 parent.rightChild=current.leftChild;
             }
             return true;
-        }else if (current.leftChild == null){//如果节点只有一个右节点
-            if (current == root){//跳过待删除节点，让待删除节点的右子节点变成根节点
+        }else if (current.leftChild == null){//如果结点只有一个右结点
+            if (current == root){//跳过待删除结点，让待删除结点的右子结点变成根结点
                 root=current.rightChild;
-            }else if (isLeftChild){//如果待删除节点是左子节点，让父节点的左子节点等于待删除节点的右子节点
+            }else if (isLeftChild){//如果待删除结点是左子结点，让父结点的左子结点等于待删除结点的右子结点
                 parent.leftChild =current.rightChild;
             }else {
                 parent.rightChild=current.rightChild;
             }
             return true;
-        }else {//如果有两个子节点
+        }else {//如果有两个子结点
             Node successor =getSuccessor(current);
             if (current == root){
                 root =successor;
@@ -1613,29 +1613,29 @@ public class Tree {
 
 ~~~
 
-### 7.6 删除节点
+### 7.6 删除结点
 
-删除节点非常复杂，在删除钱首先要查找要删除的节点，找到节点后还有三种情况：
+删除结点非常复杂，在删除钱首先要查找要删除的结点，找到结点后还有三种情况：
 
-1. 该节点是叶子节点，没有子节点
+1. 该结点是叶子结点，没有子结点
 
-   要删除叶子节点，只需要改变该节点的父节点的引用值为null即可。
+   要删除叶子结点，只需要改变该结点的父结点的引用值为null即可。
 
    ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/deletetree1.png)
 
-2. 该节点有一个子节点
+2. 该结点有一个子结点
 
-   改变父节点的引用，将其直接指向要删除节点的子节点
+   改变父结点的引用，将其直接指向要删除结点的子结点
 
    ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/deletetree2.png)
 
-3. 该节点有两个字节点
+3. 该结点有两个字结点
 
-   需要使用它的中序后继来代替该节点。实际上就是要找比删除节点关键值大的节点集合中最小的一个节点，只有这样代替删除节点后才能满足二叉搜索树的特性。
+   需要使用它的中序后继来代替该结点。实际上就是要找比删除结点关键值大的结点集合中最小的一个结点，只有这样代替删除结点后才能满足二叉搜索树的特性。
 
-   **程序找到删除节点的右节点，然后转到该右节点的左子节点，依次顺着左子节点找下去，最后一个左子节点即是后继节点；如果该右节点没有左子节点，那么该右节点便是后继节点。**
+   **程序找到删除结点的右结点，然后转到该右结点的左子结点，依次顺着左子结点找下去，最后一个左子结点即是后继结点；如果该右结点没有左子结点，那么该右结点便是后继结点。**
 
-   后继节点也就是：比删除节点大的最小节点。
+   后继结点也就是：比删除结点大的最小结点。
 
    ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/deletetree3.png)
 
@@ -1647,37 +1647,37 @@ package ch7;
  * 二叉树类
  */
 public class Tree {
-    //根节点
+    //根结点
     public Node root;
 
     /**
-     * 插入节点
+     * 插入结点
      * @param value
      */
     public void insert(long value){
-        //封装节点
+        //封装结点
         Node newNode = new Node(value);
-        //引用当前节点
+        //引用当前结点
         Node current =root;
-        //引用父节点
+        //引用父结点
         Node parent;
         //如果root为null，第一次插入时
         if (root == null){
             root = newNode;
         }else {
             while (true) {
-                //父节点指向当前节点
+                //父结点指向当前结点
                 parent = current;
-                //如果当前节点数据比插入的大，则向左走
+                //如果当前结点数据比插入的大，则向左走
                 if (current.data > value) {
                     current = current.leftChild;
-                    if (current == null){//如果左子节点为空
+                    if (current == null){//如果左子结点为空
                         parent.leftChild = newNode;//插入新值，返回
                         return;
                     }
                 } else {
                     current = current.rightChild;
-                    if (current == null){//如果右子节点为空
+                    if (current == null){//如果右子结点为空
                         parent.rightChild = newNode;//插入新值，返回
                         return;
                     }
@@ -1687,15 +1687,15 @@ public class Tree {
     }
 
     /**
-     * 查找节点
+     * 查找结点
      * @param value
      */
     public Node find(long value){
-        //引用当前节点，从根节点开始
+        //引用当前结点，从根结点开始
         Node current = root;
-        //循环，查找值不等于当前节点的数据项
+        //循环，查找值不等于当前结点的数据项
         while (current.data != value){
-            //比较当前节点大小与查找值
+            //比较当前结点大小与查找值
             if (current.data > value){
                 current = current.leftChild;
             }else if(current.data < value) {
@@ -1713,7 +1713,7 @@ public class Tree {
      */
     public void frontOrder(Node localNode){
         if (localNode != null){
-            //访问根节点
+            //访问根结点
             System.out.println(localNode.data+" ");
             //前序遍历左子树
             frontOrder(localNode.leftChild);
@@ -1730,7 +1730,7 @@ public class Tree {
         if (localNode != null){
             //中序遍历左子树
             frontOrder(localNode.leftChild);
-            //访问根节点
+            //访问根结点
             System.out.println(localNode.data+" ");
             //中序遍历右子树
             frontOrder(localNode.rightChild);
@@ -1746,13 +1746,13 @@ public class Tree {
             frontOrder(localNode.leftChild);
             //后序遍历右子树
             frontOrder(localNode.rightChild);
-            //访问根节点
+            //访问根结点
             System.out.println(localNode.data+" ");
         }
     }
 
     /**
-     * 查找中序后继节点
+     * 查找中序后继结点
      * @param delNode
      * @return
      */
@@ -1762,29 +1762,29 @@ public class Tree {
         Node current =delNode.rightChild;
 
         while (current != null){
-            successorParent = successor;//保存父节点的引用
-            successor =current;//保存当前节点的引用
+            successorParent = successor;//保存父结点的引用
+            successor =current;//保存当前结点的引用
             current = current.leftChild;
         }
-        //将中序后继节点与删除节点替换
+        //将中序后继结点与删除结点替换
         if (successor != delNode.rightChild){
-            successorParent.leftChild = successor.rightChild;//如果这个中序后继节点还有右子节点，将他变成这个中序后继节点位置
+            successorParent.leftChild = successor.rightChild;//如果这个中序后继结点还有右子结点，将他变成这个中序后继结点位置
             successor.rightChild = delNode.rightChild;
         }
         return successor;
     }
     /**
-     * 删除节点
+     * 删除结点
      * @param value
      */
     public boolean delete(long value){
-        //引用当前节点
+        //引用当前结点
         Node current =root;
-        //引用当前节点父节点
+        //引用当前结点父结点
         Node parent = root;
-        //判断是否是左子节点
+        //判断是否是左子结点
         boolean isLeftChild = false;
-        //查找节点
+        //查找结点
         while (current.data!= value){
             parent=current;
             if (current.data > value){
@@ -1798,38 +1798,38 @@ public class Tree {
             }
         }
 
-        //删除节点
-        if (current.leftChild == null && current.rightChild ==null){//删除叶子节点，该节点没有子节点
+        //删除结点
+        if (current.leftChild == null && current.rightChild ==null){//删除叶子结点，该结点没有子结点
             if (current == root){
                 root = null;
             }
-            //如果是父节点的左子节点
+            //如果是父结点的左子结点
             else if (isLeftChild){
                 parent.leftChild=null;
             }else {
                 parent.rightChild=null;
             }
             return true;
-        }else if (current.rightChild == null){//如果节点只有一个左节点
-            if (current == root){//跳过待删除节点，让待删除节点的左子节点变成根节点
+        }else if (current.rightChild == null){//如果结点只有一个左结点
+            if (current == root){//跳过待删除结点，让待删除结点的左子结点变成根结点
                 root=current.leftChild;
             }
-            else if (isLeftChild){//如果待删除节点是左子节点，让父节点的左子节点等于待删除节点的左子节点
+            else if (isLeftChild){//如果待删除结点是左子结点，让父结点的左子结点等于待删除结点的左子结点
                 parent.leftChild=current.leftChild;
-            }else {//如果待删除节点是右子节点，让父节点的右子节点等于待删除节点的左子节点
+            }else {//如果待删除结点是右子结点，让父结点的右子结点等于待删除结点的左子结点
                 parent.rightChild=current.leftChild;
             }
             return true;
-        }else if (current.leftChild == null){//如果节点只有一个右节点
-            if (current == root){//跳过待删除节点，让待删除节点的右子节点变成根节点
+        }else if (current.leftChild == null){//如果结点只有一个右结点
+            if (current == root){//跳过待删除结点，让待删除结点的右子结点变成根结点
                 root=current.rightChild;
-            }else if (isLeftChild){//如果待删除节点是左子节点，让父节点的左子节点等于待删除节点的右子节点
+            }else if (isLeftChild){//如果待删除结点是左子结点，让父结点的左子结点等于待删除结点的右子结点
                 parent.leftChild =current.rightChild;
             }else {
                 parent.rightChild=current.rightChild;
             }
             return true;
-        }else {//如果有两个子节点
+        }else {//如果有两个子结点
             Node successor =getSuccessor(current);
             if (current == root){
                 root =successor;
@@ -1862,7 +1862,7 @@ public class Tree {
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/huffman1.png)
 
-它们父节点的权重是两者相加的结果，现在将b和d的权重从最序列( 50, 10, 16, 8, 12)中删除，再将它们的父节点的权重加入为50,16,12,18重复直到序列中只有一个元素为止
+它们父结点的权重是两者相加的结果，现在将b和d的权重从最序列( 50, 10, 16, 8, 12)中删除，再将它们的父结点的权重加入为50,16,12,18重复直到序列中只有一个元素为止
 
 最后生成的哈夫曼树为
 
@@ -1870,13 +1870,11 @@ public class Tree {
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/huffman2.png)
 
-可见，根节点到权重最高的字符所需的路径最短。
+可见，根结点到权重最高的字符所需的路径最短。
 
 ## 八. 红黑树
 
 红黑树（Red Black Tree） 是一种自平衡二叉查找树，是在计算机科学中用到的一种数据结构，典型的用途是实现关联数组。
-
-红黑树过于复杂，这里只做简单介绍。
 
 ### 8.1 简介
 
@@ -1884,7 +1882,7 @@ public class Tree {
 
 二叉树作为数据存储工具有很大的优势，可以快速插入删除和查找数据项，但这仅仅针对于插入随机数据，如果插入的数据是有序的，那么速度将变得特别慢。
 
-如下图，如果是顺序数组，那么会造成二叉树的右节点为空造成浪费。
+如下图，如果是顺序数组，那么会造成二叉树的右结点为空造成浪费。
 
 ![文件无法预览。](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/erchaquedian.png)
 
@@ -1896,31 +1894,31 @@ public class Tree {
 因为插入随机的数据可以保证树是大部分平衡或完全平衡，如果插入有序的数那么树将变得不平衡
 
 **红黑树**
-红黑树的节点都有颜色，且在插入或删除的过程中须保持颜色的不同排列规则，此规则就是红黑规则：
+红黑树的结点都有颜色，且在插入或删除的过程中须保持颜色的不同排列规则，此规则就是红黑规则：
 
-1. 每个节点不是红色就是黑色。
-2. 根节点总是黑色的
-3. 每个叶子节点（NUIL）是黑色（这里叶子节点，是指为空(NIL或NULL)的叶子节点！）
-4. 每个红色节点的两个子节点都是黑色（从每个叶子到根的所有路径上不能有两个连续的红色节点）
-5. 从任一节点到其每个叶子的所有路径都包含相同数目的黑色节点
+1. 每个结点不是红色就是黑色。
+2. 根结点总是黑色的
+3. 每个叶子结点（NUIL）是黑色（这里叶子结点，是指为空(NIL或NULL)的叶子结点！）
+4. 每个红色结点的两个子结点都是黑色（从每个叶子到根的所有路径上不能有两个连续的红色结点）
+5. 从任一结点到其每个叶子的所有路径都包含相同数目的黑色结点
 
 ### 8.2 红黑树的纠正
 
-如果出现违反规则进行自我纠正，纠正有两种方式，改变节点的颜色或者是进行旋转操作（旋转包括左旋和右旋）。
+如果出现违反规则进行自我纠正，纠正有两种方式，改变结点的颜色或者是进行旋转操作（旋转包括左旋和右旋）。
 
-#### 改变节点颜色
+#### 改变结点颜色
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/honghei1.png)
 
-如上面所示，将插入一个新的节点10，通常新插入的节点为红色，此时插入违反规则三，如果将10这个节点改为黑色那么又将违反规则四。
+如上面所示，将插入一个新的结点10，通常新插入的结点为红色，此时插入违反规则三，如果将10这个结点改为黑色那么又将违反规则四。
 
-这时如果将25改为黑色，那么75这个兄弟节点也需要改为黑色，50这个节点是根节点只能为黑色，所以变为如下:
+这时如果将25改为黑色，那么75这个兄弟结点也需要改为黑色，50这个结点是根结点只能为黑色，所以变为如下:
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/honghei2.png)
 
-#### 左旋
+#### 左旋（右子结点为轴，当前结点左旋）
 
-A为父节点，B为孩子节点。左旋操作后，B节点代替A节点的位置，A节点成为B节点的左孩子，B节点的左孩子成为A节点的右孩子。
+A为父结点，B为孩子结点。左旋操作后，B结点代替A结点的位置，A结点成为B结点的左孩子，B结点的左孩子成为A结点的右孩子。
 
 旋转前：
 
@@ -1930,9 +1928,9 @@ A为父节点，B为孩子节点。左旋操作后，B节点代替A节点的位�
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/hongheizuohou.png)
 
-#### 右旋
+#### 右旋（左子结点为轴，当前结点右旋）
 
-节点本身是不会旋转的，旋转改变的是节点之间的关系，选择一个节点作为旋转的顶端。A为父节点，B为孩子节点。右旋操作后，B节点代替A节点的位置，A节点成为B节点的右孩子，B节点的右孩子成为A节点的左孩子。
+结点本身是不会旋转的，旋转改变的是结点之间的关系，选择一个结点作为旋转的顶端。A为父结点，B为孩子结点。右旋操作后，B结点代替A结点的位置，A结点成为B结点的右孩子，B结点的右孩子成为A结点的左孩子。
 
 旋转前：
 
@@ -1952,15 +1950,120 @@ A为父节点，B为孩子节点。左旋操作后，B节点代替A节点的位�
 
 ### 8.4 红黑树插入
 
-红黑树的插入过程与二叉树插入过程基本类似，不同的地方在于红黑树插入新节点是，需要进行调整，以满足红黑树的性质。
+红黑树的插入过程与二叉树插入过程基本类似，不同的地方在于红黑树插入新结点是，需要进行调整，以满足红黑树的性质。
 
-再插入新节点时，这个节点是红色，因为如果插入的节点是黑色的，那么这个插入节点所在的路径就比其他路径多一个黑色节点，调整会很麻烦。
+再插入新结点时，这个结点是红色，因为如果插入的结点是黑色的，那么这个插入结点所在的路径就比其他路径多一个黑色结点，调整会很麻烦。
 
-插入红色节点后会出现五种情况，设插入的节点为N，N的父节点为P，祖父节点为G，叔叔节点为U：
+所有插入情景如下：
 
-**情况一**
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/RBtree_all.png)
 
-插入的新节点N是红黑树的根节点，
+插入红色结点后会出现五种情况，设插入的结点为I，I的父结点为P，祖父结点为G，叔叔结点为U：
+
+**情况1: 红黑树为空树**
+
+把插入结点作为根结点，并把结点设置为黑色
+
+**情况2：插入结点的父结点为黑色**
+
+由于插入的结点是红色的，当插入结点的父结点为黑色不会影响平衡直接插入即可。
+
+**情况3：插入结点的父结点为红色**
+
+如果插入的父结点为红结点，那么该父结点不可能为根结点，所以插入结点总是存在祖父结点。这时又分为很多种情况：
+
+**情况3.1：叔叔结点存在并且为红色**
+
+- 将P和U设置为黑色
+- 将G设置为红色
+- 将G作为当前插入结点
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/rbtree_insert1.png)
+
+由上图可见将G设置为红色，如果G的父结点是黑色那么无需任何处理，但如果G的父结点是红色那么需要将G当作新插入结点继续进行自平衡处理。
+
+如果G刚好为根结点那么必须将G结点设为黑色，树的结构就会变为黑黑红。也就是说从根结点到叶子结点的路径中黑色结点增加了**这也是唯一一种会增加红黑树黑色结点层数的插入情景**
+
+> PS：红黑树是自底向上的，这不同于二叉搜索树。普通的二叉搜索树是自顶向下的。
+
+**情况3.2：叔叔结点不存在或为黑色结点，并且插入结点的父结点是祖父结点的左子结点**
+
+叔叔结点非红即为叶子结点(Nil)。因为如果叔叔结点为黑结点，而父结点为红结点，那么叔叔结点所在的子树的黑色结点就比父结点所在子树的多了，这不满足红黑树的性质5。
+
+需要旋转操作时，肯定一边子树的结点多了或少了，需要租或借给另一边。插入显然是多的情况，那么把多的结点租给另一边子树就可以了。
+
+**插入情景3.2.1：插入结点是其父结点的左子结点**
+
+- 将P设为黑色
+- 将G设为红色
+- 对G进行右旋
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/rbtree_insert2.png)
+
+左边两个红结点，右边不存在，那么一边一个刚刚好，并且因为为红色，肯定不会破坏树的平衡。
+
+**插入情景3.2.2：插入结点是其父结点的右子结点**
+
+- 对P进行左旋
+- 将P设置为插入结点
+- 进行3.2.1的处理
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/rbtree_insert3.png)
+
+**插入情景3.3：叔叔结点不存在或为黑色结点，并且插入结点的父结点是祖父结点的右子结点**
+
+与插入情况3.2类似，只是方向反转
+
+**插入情景3.3.1：插入结点是其父结点的右子结点**
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/rbtree_insert4.png)
+
+**插入情景3.3.2：插入节点是其父结点的左子结点**
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/rbtree_insert5.png)
+
+以上为全部的插入情况。
+
+### 8.5红黑树的删除
+
+红黑树的删除也包括两部分工作：一个是查找目标结点，之后是自平衡。查找目标结点可以复用查找操作，当不存在目标结点时，忽略本次操作；当存在目标结点时，删除后就得做自平衡处理了。删除了结点后还需要找结点来替代删除结点的位置，不然子树跟父辈结点断开了，除非删除结点刚好没子结点，那么就不需要替代。
+
+二叉树的删除有三种情况
+
+- 情景1：若删除结点无子结点，直接删除
+- 情景2：若删除结点只有一个子结点，用子结点替换删除结点
+- 情景3：若删除结点有两个子结点，用后继结点（大于删除结点的最小结点）替换删除结点
+
+详细见7.6
+
+> PS：这里介绍一下找前继结点和后继结点直观方法：**把二叉树搜右节点投射到X轴上，所有结点都是从左到右排好序的，所有的目标结点前后结点就是对应的前继结点和后继结点**如下图：
+>
+> ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/rbtree.png)
+
+当删除结点被代替后，在不考虑结点的键值的情况下，对于树来说可以认为删除的是代替结点，如下图：
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/rbtree_delete1.png)
+
+基于上图，三种二叉树的删除情景都可以转换为情景1：
+
+- 情景2：删除结点用其唯一的子结点替换，子结点替换为删除结点后，可以认为删除的是子结点，若子结点又有两个子结点，那么相当于转换为情景3
+- 情景3：删除结点用后继结点（肯定不存在左结点），如果后继结点有右子结点，那么相当于转换为情景2，否则转为为情景1
+
+**删除操作删除的结点可以看作删除替代结点，而替代结点最后总是在树末。**有了这结论，我们讨论的删除红黑树的情景就少了很多，因为我们只考虑删除树末结点的情景了。
+
+**情况1：替换结点是红色节点**
+
+**情况2：替换结点是黑色结点**
+
+**情况2.1：替换结点是其父结点的左子结点**
+
+*情况2.1.1*
+
+*情况2.1.2*
+
+**情况2.2：替换结点是其父结点的右子结点**
+
+
 
 ## 九.哈希表
 
@@ -2399,7 +2502,7 @@ public class Vertex {
 
 #### 边
 
-上面的各种数据结构中，大多数树都是每个节点包好其他子节点的引用，比如红黑树、二叉树。然而图不像树，图没有固定的结构，图的每一个顶点可以与任意多个顶点项链，所以用以下两种方式表视图：邻接表和邻接矩阵。
+上面的各种数据结构中，大多数树都是每个结点包好其他子结点的引用，比如红黑树、二叉树。然而图不像树，图没有固定的结构，图的每一个顶点可以与任意多个顶点项链，所以用以下两种方式表视图：邻接表和邻接矩阵。
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_data/%E5%9B%BE1.png)
 
@@ -2711,7 +2814,7 @@ public class Graph {
 
 ### 10.4 最小生成树
 
-对于一张图，我们有一个定理：n个点用n-1条边连接，形成的图形只可能是树。我们可以这样理解：树的每一个结点都有一个唯一的父亲，也就是至少有n条边，但是根节点要除外，所以就是n-1条边。还有一种理解：树里不存在环，那么既要连接n个点又不能形成环，只能用n-1条边。
+对于一张图，我们有一个定理：n个点用n-1条边连接，形成的图形只可能是树。我们可以这样理解：树的每一个结点都有一个唯一的父亲，也就是至少有n条边，但是根结点要除外，所以就是n-1条边。还有一种理解：树里不存在环，那么既要连接n个点又不能形成环，只能用n-1条边。
 
 那么，对于一张n个点带权图，它的生成树就是用其中的n-1条边来连接这n个点，那么最小生成树就是n-1条边的边权之和最小的一种方案，简单的理解，就是用让这张图只剩下n-1条边，同时这n-1条边的边权总和最小。
 
