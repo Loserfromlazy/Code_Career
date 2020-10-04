@@ -36,16 +36,13 @@ Expert One-to-One J2EE Development without EJB(2004)
 
 本章介绍了控制反转（IoC）原理的Spring框架实现。IoC也称为依赖注入（DI）。在此过程中，对象仅通过构造函数参数，工厂方法的参数或在构造或从工厂方法返回后在对象实例上设置的属性来定义其依赖项（即，与它们一起使用的其他对象） 。然后，容器在创建bean时注入那些依赖项。此过程从根本上讲是通过使用类的直接构造或诸如服务定位器模式的机制来控制其依赖项的实例化或位置的Bean本身的逆过程（因此称为控件的倒置）。
 
-在`org.springframework.beans`和`org.springframework.context`包是Spring框架的IoC容器的基础。
+在`org.springframework.beans`和`org.springframework.context`包是Spring框架的IoC容器的基础。简而言之，BeanFactory提供了配置框架和基本功能，而ApplicationContext添加了更多企业特定的功能。ApplicationContext是BeanFactory的完整超集
 
 在Spring中，构成应用程序主干并由Spring IoC容器管理的对象称为bean。Bean是由Spring IoC容器实例化，组装和以其他方式管理的对象。
 
 ## 2.1程序的耦合
 
-​	耦合性(Coupling)，也叫耦合度，是对模块间关联程度的度量。耦合的强弱取决于模块间接口的复杂性、调
-用模块的方式以及通过界面传送数据的多少。模块间的耦合度是指模块之间的依赖关系，包括控制关系、调用关
-系、数据传递关系。模块间联系越多，其耦合性越强，同时表明其独立性越差( 降低耦合性，可以提高其独立
-性)。耦合性存在于各个领域，而非软件设计中独有的，但是我们只讨论软件工程中的耦合。
+​	耦合性(Coupling)，也叫耦合度，是对模块间关联程度的度量。耦合的强弱取决于模块间接口的复杂性、调用模块的方式以及通过界面传送数据的多少。模块间的耦合度是指模块之间的依赖关系，包括控制关系、调用关系、数据传递关系。模块间联系越多，其耦合性越强，同时表明其独立性越差( 降低耦合性，可以提高其独立性)。耦合性存在于各个领域，而非软件设计中独有的，但是我们只讨论软件工程中的耦合。
 ​	在软件工程中，耦合指的就是就是对象之间的依赖性。对象之间的耦合越高，维护成本越高。因此对象的设计
 应使类和构件之间的耦合最小。软件设计中通常用耦合度和内聚度作为衡量模块独立程度的标准。**划分模块的一个**
 **准则就是高内聚低耦合。**
@@ -103,7 +100,7 @@ Expert One-to-One J2EE Development without EJB(2004)
 思路：
 
 当是我们讲解jdbc时，是通过反射来注册驱动的，代码如下：
-Class.forName("com.mysql.jdbc.Driver");//此处只是一个字符串
+`Class.forName("com.mysql.jdbc.Driver");`//此处只是一个字符串
 此时的好处是，我们的类中不再依赖具体的驱动类，此时就算删除mysql的驱动jar包，依然可以编译（运
 行就不要想了，没有驱动不可能运行成功的）。
 同时，也产生了一个新的问题，mysql驱动的全限定类名字符串是在java类中写死的，一旦要改还是要修改
@@ -140,11 +137,13 @@ Class.forName("com.mysql.jdbc.Driver");//此处只是一个字符串
 
 ## 2.3 IOC概述
 
-`org.springframework.context.ApplicationContext`接口代表Spring IoC容器，并负责实例化，配置和组装Bean。容器通过读取配置元数据来获取有关要实例化，配置和组装哪些对象的指令。配置元数据以XML，Java批注或Java代码表示。它使您能够表达组成应用程序的对象以及这些对象之间的丰富相互依赖关系。
+`org.springframework.context.ApplicationContext`接口代表Spring IoC容器，并负责实例化，配置和组装Bean。容器通过读取配置元数据来获取有关要实例化，配置和组装哪些对象的指令。配置元数据以XML，Java批注或Java代码表示。它能够表达组成应用程序的对象以及这些对象之间的丰富相互依赖关系。
 
 ### 2.3.1 配置元数据
 
-Spring IoC容器使用一种形式的配置元数据。此配置元数据表示您作为应用程序开发人员如何告诉Spring容器实例化，配置和组装应用程序中的对象。
+Spring IoC容器使用一种形式的配置元数据如下图所示。此配置元数据表示您作为开发人员如何告诉Spring容器实例化，配置和组装应用程序中的对象。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/spring/container-magic.png)
 
 Spring中主要采用三种方式配置元数据：
 
@@ -154,9 +153,11 @@ Spring中主要采用三种方式配置元数据：
 >
 > 基于Java的配置：从Spring3.0开始，Spring JavaConfig项目提供的许多功能成为了Spring核心框架的一部分。因此，您可以使用Java而不是XML文件来定义应用程序类外部的bean。
 
-Spring配置由容器必须管理的至少一个（通常是一个以上）bean定义组成。基于XML的配置元数据将这些bean配置为`<bean/>`顶级元素内的`<beans/>`元素。Java配置通常`@Bean`在`@Configuration`类中使用带注释的方法。
+Spring配置由容器必须管理的至少一个（通常是一个以上）bean定义组成。基于XML的配置元数据将这些bean配置`<bean/>`放在`<beans/>`元素内。Java配置通常为`@Bean`在`@Configuration`类中使用带注释的方法。
 
-简单示例：
+这些bean用于组成应用程序的实际对象。比如DAO对象等等。
+
+基于XML配置元数据简单示例：
 
 ~~~xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -189,16 +190,87 @@ ApplicationContext context = new ClassPathXmlApplicationContext("services.xml", 
 
 ### 2.3.3  使用容器
 
-该`ApplicationContext`是一个维护bean定义以及相互依赖的注册表的高级工厂的接口。通过使用方法 `T getBean(String name, Class<T> requiredType)`，您可以检索bean的实例。
+`ApplicationContext`是一个维护bean定义以及相互依赖的注册表的高级工厂的接口。通过使用方法 `T getBean(String name, Class<T> requiredType)`，您可以检索bean的实例。
 
 ~~~JAVA
 // create and configure beans
 ApplicationContext context = new ClassPathXmlApplicationContext("services.xml", "daos.xml");
-// retrieve configured instance
+// 检索配置的示例
 PetStoreService service = context.getBean("petStore", PetStoreService.class);
-// use configured instance
+// 使用配置的示例
 List<String> userList = service.getUsernameList();
 ~~~
+
+
+
+## 2.4 Bean概述
+
+spring ioc容器管理一个或多个bean。这些bean是使用提供给容器的配置元数据创建的。（例如XML`<bean>`的形式）。
+
+#### 2.4.1 bean的命名
+
+每个bean具有一个或多个标识符。这些标识符在承载Bean的容器内必须唯一。一个bean通常只有一个标识符。但是，如果需要多个，则可以将多余的别名视为别名。
+
+在基于xml方式配置bean，可以使用id属性指定唯一ID，name属性可以指定别名。如果使用Java配置，则`@Bean`注释可用于提供别名。
+
+bean可以使用驼峰式命名如accountManager。
+
+#### 2.4.2 实例化bean
+
+第一种方式：使用默认无参构造函数
+
+```xml
+<!--在默认情况下：
+它会根据默认无参构造函数来创建类对象。如果bean中没有默认无参构造函数，将会创建失败。-->
+<bean id="accountService" class="com.itheima.service.impl.AccountServiceImpl"/>
+```
+
+第二种方式：spring管理静态工厂-使用静态工厂的方法创建对象
+
+```xml
+/**
+* 模拟一个静态工厂，创建业务层实现类
+*/
+public class StaticFactory {
+public static IAccountService createAccountService(){
+return new AccountServiceImpl();
+}
+}
+<!-- 此种方式是:
+使用StaticFactory类中的静态方法createAccountService创建对象，并存入spring容器
+id属性：指定bean的id，用于从容器中获取
+class属性：指定静态工厂的全限定类名
+factory-method属性：指定生产对象的静态方法
+-->
+<bean id="accountService"
+class="com.loserfromlazy.factory.StaticFactory"
+factory-method="createAccountService"></bean>
+
+```
+
+第三种方式：spring管理实例工厂-使用实例工厂的方法创建对象
+
+```xml
+/**
+* 模拟一个实例工厂，创建业务层实现类
+* 此工厂创建对象，必须现有工厂实例对象，再调用方法
+*/
+public class InstanceFactory {
+public IAccountService createAccountService(){
+return new AccountServiceImpl();
+}
+}
+<!-- 此种方式是：
+先把工厂的创建交给spring来管理。
+然后在使用工厂的bean来调用里面的方法
+factory-bean属性：用于指定实例工厂bean的id。
+factory-method属性：用于指定实例工厂中创建对象的方法。
+-->
+<bean id="instancFactory" class="com.loserfromlazy.factory.InstanceFactory"></bean>
+<bean id="accountService"
+factory-bean="instancFactory"
+factory-method="createAccountService"></bean>
+```
 
 
 
@@ -297,70 +369,13 @@ destroy-method：指定类中销毁方法名称。
 > 对象活着：只要对象在使用中，就一直活着。
 > 对象死亡：当对象长时间不用时，被java的垃圾回收器回收了。
 
-####  bean实例化的三种方法
-
-第一种方式：使用默认无参构造函数
-
-~~~xml
-<!--在默认情况下：
-它会根据默认无参构造函数来创建类对象。如果bean中没有默认无参构造函数，将会创建失败。-->
-<bean id="accountService" class="com.itheima.service.impl.AccountServiceImpl"/>
-~~~
-
-第二种方式：spring管理静态工厂-使用静态工厂的方法创建对象
-
-~~~xml
-/**
-* 模拟一个静态工厂，创建业务层实现类
-*/
-public class StaticFactory {
-public static IAccountService createAccountService(){
-return new AccountServiceImpl();
-}
-}
-<!-- 此种方式是:
-使用StaticFactory类中的静态方法createAccountService创建对象，并存入spring容器
-id属性：指定bean的id，用于从容器中获取
-class属性：指定静态工厂的全限定类名
-factory-method属性：指定生产对象的静态方法
--->
-<bean id="accountService"
-class="com.loserfromlazy.factory.StaticFactory"
-factory-method="createAccountService"></bean>
-
-~~~
-
-第三种方式：spring管理实例工厂-使用实例工厂的方法创建对象
-
-~~~xml
-/**
-* 模拟一个实例工厂，创建业务层实现类
-* 此工厂创建对象，必须现有工厂实例对象，再调用方法
-*/
-public class InstanceFactory {
-public IAccountService createAccountService(){
-return new AccountServiceImpl();
-}
-}
-<!-- 此种方式是：
-先把工厂的创建交给spring来管理。
-然后在使用工厂的bean来调用里面的方法
-factory-bean属性：用于指定实例工厂bean的id。
-factory-method属性：用于指定实例工厂中创建对象的方法。
--->
-<bean id="instancFactory" class="com.loserfromlazy.factory.InstanceFactory"></bean>
-<bean id="accountService"
-factory-bean="instancFactory"
-factory-method="createAccountService"></bean>
-~~~
-
 ## 2.5 依赖注入
 
 依赖注入：Dependency Injection。它是spring框架核心ioc的具体实现。
 我们的程序在编写时，通过控制反转，把对象的创建交给了spring，但是代码中不可能出现没有依赖的情况。
 ioc解耦只是降低他们的依赖关系，但不会消除。例如：我们的业务层仍会调用持久层的方法。那这种业务层和持久层的依赖关系，在使用spring之后，就让spring来维护了。简单的说，就是坐等框架把持久层对象传入业务层，而不用我们自己去获取。
 
-**构造函数注入**
+#### 2.5.1 构造函数注入
 
 eg：
 
@@ -403,7 +418,7 @@ ref:它能赋的值是其他bean类型，也就是说，必须得是在配置文
 <bean id="now" class="java.util.Date"></bean>
 ~~~
 
-**set方法注入**
+#### 2.5.2 set方法注入
 
 ~~~java
 public class AccountServiceImpl implements IAccountService {
@@ -572,15 +587,12 @@ value：指定bean的id。如果不指定value属性，默认bean的id是当前�
 **@Autowired**
 
 作用：
-自动按照类型注入。当使用注解注入属性时，set方法可以省略。它只能注入其他bean类型。当有多个
-类型匹配时，使用要注入的对象变量名称作为bean的id，在spring容器查找，找到了也可以注入成功。找不到
-就报错。
+自动按照类型注入。当使用注解注入属性时，set方法可以省略。它只能注入其他bean类型。当有多个类型匹配时，使用要注入的对象变量名称作为bean的id，在spring容器查找，找到了也可以注入成功。找不到就报错。
 
 **@Qualifier**
 
 作用：
-在自动按照类型注入的基础之上，再按照Bean 的id 注入。它在给字段注入时不能独立使用，必须和
-@Autowire一起使用；但是给方法参数注入时，可以独立使用。
+在自动按照类型注入的基础之上，再按照Bean 的id 注入。它在给字段注入时不能独立使用，必须和@Autowire一起使用；但是给方法参数注入时，可以独立使用。
 属性：
 value：指定bean的id。
 
@@ -1694,15 +1706,6 @@ public class AccountServiceImpl implements IAccountService {
 你可以在这里找到这个激动人心的TestContext 框架所带来的增强功能的完整列表。
 当然，Spring Framework 5.0 仍然支持我们的老朋友JUnit! 在我写这篇文章的时候，JUnit 5 还
 只是发展到了GA 版本。对于JUnit4，Spring Framework 在未来还是要支持一段时间的。
-
-
-
-
-
-
-
-
-
 
 
 
