@@ -417,31 +417,192 @@ GET /索引名/_search
 
 #### 4.2.9 查询所有数据
 
-#### 4.2.x 查询文档querystring查询
-
-> POST	localhost:9200/blog/article/_search
+> GET	localhost:9200/sku/_search
 
 ~~~json
 {
-    "query": {
-        "query_string": {
-            "default_field": "title",
-            "query": "搜索服务器"
+    "query":{
+        "match_all":{}
+    }
+}
+~~~
+
+查询索引库中所有记录
+
+#### 4.2.10 匹配查询
+
+> GET localhost:9200/sku/_search
+>
+> kibana中 GET	/sku/_search
+
+~~~json
+{
+    "query":{
+        "match":{
+            "name":"小米手机"//查询时会分词，可能查询时会包含小米或手机或小米手机
         }
     }
 }
 ~~~
 
-#### 4.2.x 查询文档term查询
+返回值会有“score”属性显示匹配度分值.
 
-> POST	localhost:9200/blog/article/_search
+下面将展示另一种写法：
+
+~~~json
+{
+    "query":{
+        "match":{
+            "name":{
+                "query":"小米手机",
+                "operator":"and"
+            }
+        }
+    }
+}
+~~~
+
+这种写法是精准查询，将操作改为and，这时必须包含小米和手机两个词才能被搜索出来。
+
+#### 4.2.11 多字段查询
+
+> GET 	localhost:9200/sku/_search
+
+与match类似，但是可以在多个字段中查询
+
+~~~json
+{
+    "query":{
+        "multi_match":{
+            "query":"小米",
+            "fields":["name","brandName","categoryName"]
+        }
+    }
+}
+~~~
+
+这时就会在这三个字段中进行查询了
+
+#### 4.2.12 词条匹配term
+
+term用于精确值匹配，这些精确值可能是数字、时间】布尔或为分词的字符串
+
+> GET 	localhost:9200/sku/_search
 
 ~~~json
 {
     "query": {
         "term": {
-            "title": "搜索"
+            "price": 1000
+            #"price":{
+            #	"value":1000
+            #}
+            #也可以这种写法
         }
+    }
+}
+~~~
+
+**多词条匹配terms**
+与term一样，但允许多个值匹配
+
+~~~json
+{
+    "query": {
+        "term": {
+            "price": [300000,200000]
+        }
+    }
+}
+~~~
+
+#### 4.2.13 布尔组合查询
+
+把各种查询通过`must` （与）`must_not` （非）`should`（或）的方式进行组合
+
+> GET	/sku/_search
+
+示例：查询名称包含手机且品牌为小米
+
+~~~json
+{
+    "query":{
+        "bool":{
+            "must":[
+                {"match":{"name":"手机"}},
+                {"term":{"brandName":"小米"}}
+            ]
+        }
+    }
+}
+~~~
+
+示例：查询名称包含手机或品牌为小米的
+
+~~~json
+{
+    "query":{
+        "bool":{
+            "should":[
+                {"match":{"name":"手机"}},
+                {"term":{"brandName":"小米"}}
+            ]
+        }
+    }
+}
+~~~
+
+#### 4.2.14 过滤查询
+
+过滤查询是针对搜索的结果进行过滤，过滤器主要判断文档是否匹配，不去计算和判断文档的匹配度得分，所以过滤器比查询性能高，且方便缓存
+
+~~~json
+{
+    "query":{
+        "bool":{
+            "filter":[
+                {"match":{"brandName":"小米"}}
+            ]
+        }
+    }
+}
+~~~
+
+#### 4.2.15 分组/聚合查询
+
+~~~json
+{
+    "aggs":{//聚合
+       "sku_categoey":{//分组结果集名称
+           "terms":{//分组查询类型
+               "field":"categoryName"//按分类来统计结果
+           }
+       },
+       "sku_brand":{//分组结果集名称
+           "terms":{//分组查询类型
+               "field":"brandName"//按品牌来统计结果
+           }
+       }
+    }
+}
+~~~
+
+如果不想查询记录指向查看分组统计结果，秩只需添加"size":0,因为size为0不会显示出来，即：
+
+~~~json
+{
+    "size":0,
+    "aggs":{//聚合
+       "sku_categoey":{//分组结果集名称
+           "terms":{//分组查询类型
+               "field":"categoryName"//按分类来统计结果
+           }
+       },
+       "sku_brand":{//分组结果集名称
+           "terms":{//分组查询类型
+               "field":"brandName"//按品牌来统计结果
+           }
+       }
     }
 }
 ~~~
@@ -1209,13 +1370,13 @@ public static void main(String[] args) throws IOException {
 
 ### 2 匹配查询
 
-SearchRequest:
+SearchRequest:查询请求对象
 
-SearchResponse:
+SearchResponse:查询响应对象
 
-SearchSourceBuilder:
+SearchSourceBuilder:查询源构建器
 
-MatchQueryBuilder:
+MatchQueryBuilder:匹配查询构建器
 
 ~~~java
 public static void main(String[] args) throws IOException {
@@ -1294,6 +1455,29 @@ Aggregations:分组结果封装
 Terms.Bucket:桶
 
 ~~~java
+//连接rest接口
+		HttpHost httpHost = new HttpHost("127.0.0.1",9200,"http");
+        RestClientBuilder restClientBuilder = RestClient.builder(httpHost);//rest构建器
+        RestHighLevelClient restHighLevelClient =new RestHighLevelClient(restClientBuilder);
+//封装查询请求
+		SearchRequest searchRequest = new SearchRequest("sku");
+		searchRequest.types("doc");
+		SearchSourceBuilder builder = new SearchSourceBuilder();
+		TermsAggregationBuilder termBuilder= AggregationBuilders.terms("sku_category").field("categoryName");
+		builder.aggregation(termBuilder);
+		builder.size(0);
+		searchRequest.source(builder);
+//获取查询结果
+		SearchResponse searchResponse = restHighLevelClient.search(searchRequest, 
+RequestOptions.DEFAULT);
+		Aggregations aggregations = searchResponse.getAggregations();
+		Map<String, Aggregation> asMap = aggregations.getAsMap();
+		Terms terms = (Terms) asMap.get("sku_category");
+		List<? extends Terms.Bucket> buckets = terms.getBuckets();
+		for(Terms.Bucket bucket:buckets){
+			System.out.println(bucket.getKeyAsString()+":"+  bucket.getDocCount()  
+		);
+		restHighLevelClient.close();
 
 ~~~
 
