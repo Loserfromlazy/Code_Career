@@ -891,6 +891,564 @@ axios.post('/user', {
   });
 ~~~
 
+## 六、路由vue-router
+
+vue-router就是vue官方提供的一个路由框架。使用 Vue.js ，我们已经可以通过组合组件来组成应用程序，当你要把 vue-router 添加进来，我们需要做的是，将组件(components)映射到路由(routes)，然后告诉 vue-router 在哪里渲染它们。
+
+### 6.1 快速入门
+
+**初始化工程**
+
+~~~sh
+#全局安装 vue-cli
+npm install -g vue-cli
+#创建一个基于webpack模板的新项目
+vue init webpack vue-router-demo
+#安装依赖
+cd vue-router-demo
+npm run dev
+~~~
+
+**路由定义**
+
+src/App.vue是我们的主界面，其中的`<router-view/>`标签用于显示各组件视图内容
+
+src/router/index.js是定义路由的脚本  path是路径， name是名称 ，component是跳转的组件  。
+
+（1）我们现在定义两个页面组件，存放在src/components下
+
+list.vue
+
+~~~html
+<template>
+	<div>
+        这是一个列表
+    </div>
+</template>
+~~~
+
+about.vue
+
+~~~html
+<template>
+	<div>
+        关于我们
+    </div>
+</template>
+~~~
+
+（2）定义路由
+
+修改src/router/index.js
+
+```js
+import Vue from 'vue'
+import Router from 'vue-router'
+import HelloWorld from '@/components/HelloWorld'
+import list from '@/components/list'
+import about from '@/components/about'
+
+Vue.use(Router)
+
+export default new Router({
+  routes: [
+    {
+      path: '/',
+      name: 'HelloWorld',
+      component: HelloWorld
+    },
+    {
+      path: '/list',
+      name: 'List',
+      component: list
+    },
+    {
+      path: '/about',
+      name: 'About',
+      component: about
+    }
+  ]
+})
+```
+
+（3）放置跳转链接
+
+修改src/app.vue ,添加链接 
+
+```html
+    <router-link to="/" >首页</router-link>
+    <router-link to="/list">列表</router-link>
+    <router-link to="/about">关于</router-link>
+```
+
+通过router-link标签实现路由的跳转
+
+router-link标签属性如下：
+
+| 属性    | 类型               | 含义                                                         |
+| ------- | ------------------ | ------------------------------------------------------------ |
+| to      | string \| Location | 表示目标路由的链接。当被点击后，内部会立刻把 `to` 的值传到 `router.push()`，所以这个值可以是一个字符串或者是描述目标位置的对象。 |
+| replace | boolean            | 设置 `replace` 属性的话，当点击时，会调用 `router.replace()` 而不是 `router.push()`，于是导航后不会留下 history 记录。 |
+| append  | boolean            | 设置 `append` 属性后，则在当前（相对）路径前添加基路径。例如，我们从 `/a` 导航到一个相对路径 `b`，如果没有配置 `append`，则路径为 `/b`，如果配了，则为 `/a/b` |
+
+### 6.2 深入了解
+
+**动态路由**
+
+我们经常会遇到这样的需求，有一个新闻列表，点击某一条进入新闻详细页，我们通常是传递新闻的ID给详细页，详细页根据ID进行处理。这时我们就会用到动态路由
+
+一个『路径参数』使用冒号 `:` 标记。当匹配到一个路由时，参数值会被设置到 `this.$route.params`
+
+在src/components下创建item.vue
+
+```html
+<template>
+  <div>
+    详细页 {{ $route.params.id }}
+  </div>
+</template>
+```
+
+修改src/router/index.js，引入item组件
+
+```js
+import item from '@/components/item'
+```
+
+添加路由设置
+
+```js
+    {
+      path: '/item/:id',
+      name: 'Item',
+      component: item
+    }
+```
+
+修改src/components/list.vue,  增加链接
+
+```html
+<template>
+  <div>
+    这是一个列表
+    <router-link to="/item/1">新闻1</router-link>
+    <router-link to="/item/2">新闻2</router-link>
+    <router-link to="/item/3">新闻3</router-link>
+  </div>
+</template>
+```
+
+**嵌套路由**
+
+实际生活中的应用界面，通常由多层嵌套的组件组合而成。同样地，URL 中各段动态路径也按某种结构对应嵌套的各层组件，例如：
+
+```
+/about/address                        /about/linkman
++------------------+                  +-----------------+
+| About            |                  | About           |
+| +--------------+ |                  | +-------------+ |
+| | address      | |  +------------>  | | linkman     | |
+| |              | |                  | |             | |
+| +--------------+ |                  | +-------------+ |
++------------------+                  +-----------------+
+```
+
+（1）在src/components下创建address.vue
+
+```html
+<template>
+  <div>
+    地址：金燕龙
+  </div>
+</template>
+```
+
+创建linkman.vue
+
+```html
+<template>
+  <div>
+    联系人：小二黑
+  </div>
+</template>
+```
+
+（2）修改src/router/index.js
+
+引入linkman和address
+
+```js
+import linkman from '@/components/linkman'
+import address from '@/components/address'
+```
+
+配置嵌套路由:
+
+```js
+{
+      path: '/about',
+      name: 'About',
+      component: about,
+      children: [
+        {path: 'linkman', component: linkman},
+        {path: 'address', component: address}
+      ]
+    }
+```
+
+（3）修改src/components/about.vue
+
+```html
+<template>
+  <div>
+    关于我们
+    <router-link to="/about/address" >地址</router-link>
+    <router-link to="/about/linkman" >联系人</router-link>
+    <router-view/>
+  </div>
+</template>
+```
+
+## 七、Vuex
+
+### 7.1 简介
+
+官方的解释： Vuex 是一个专为 Vue.js 应用程序开发的**状态管理模式**。它采用集中式存储管理应用的所有组件的状态，并以相应的规则保证状态以一种可预测的方式发生变化。
+
+快速理解：每个组件都有它自己数据属性，封装在data()中，每个组件之间data是完全隔离的，是私有的。如果我们需要各个组件都能访问到数据，或是需要各个组件之间能互相交换数据，这就需要一个单独存储的区域存放公共属性。这就是状态管理所要解决的问题。
+
+### 7.2 快速入门
+
+#### 7.2.1 工程搭建
+
+**工程搭建**
+
+~~~sh
+# 创建一个基于 webpack 模板的新项目
+vue init webpack vuexdemo
+# 安装依赖
+cd vuexdemo
+cnpm install --save vuex
+npm run dev
+~~~
+
+#### 7.2.2 读取状态值
+
+每一个Vuex应用的核心就是store（仓库）。store基本上就是一个容器，它包含着你的应用中大部分状态。
+
+实现步骤
+
+（1）在src下创建store，store下创建index.js
+
+```js
+import Vue from 'vue'
+import Vuex from 'vuex'
+Vue.use(Vuex)
+const store = new Vuex.Store({
+    state: {
+        count: 0
+    }
+})
+export default store
+```
+
+（2）修改main.js，引入和装载store
+
+```js
+import Vue from 'vue'
+import App from './App'
+import router from './router'
+import store from './store'
+Vue.config.productionTip = false
+new Vue({
+  el: '#app',
+  router,
+  store,
+  components: { App },
+  template: '<App/>'
+})
+```
+
+（3）修改components\HelloWorld.vue
+
+```html
+<template>
+  <div>   
+    {{$store.state.count}}
+    <button @click="showCount">测试</button>
+  </div>
+</template>
+<script>
+export default {
+  methods:{
+    showCount(){
+      console.log(this.$store.state.count)
+    }
+  }
+}
+</script>
+```
+
+#### 7.2.3 改变状态值
+
+你不能直接改变 store 中的状态。改变 store 中的状态的唯一途径就是显式地**提交 (commit) mutation**。这样使得我们可以方便地跟踪每一个状态的变化，从而让我们能够实现一些工具帮助我们更好地了解我们的应用。
+
+（1）修改store/index.js ,增加mutation定义
+
+```js
+import Vue from 'vue'
+import Vuex from 'vuex'
+Vue.use(Vuex)
+const store=new Vuex.Store({
+    state: {
+        count: 0
+    },
+    mutations: {
+       increment(state) {
+          state.count++
+       } 
+    }
+})
+export default store
+```
+
+（2）修改components\HelloWorld.vue ，调用mutation
+
+```html
+<template>
+  <div>
+    {{$store.state.count}}  
+    <button @click="addCount">测试</button>
+  </div>
+</template>
+<script>
+export default {
+  methods:{
+    addCount(){
+      this.$store.commit('increment')
+    }
+  }
+}
+</script>
+```
+
+测试： 运行工程，点击测试按钮，我们会看到控制台和页面输出递增的数字
+
+#### 7.2.4 状态值共享测试
+
+如果是另外一个页面，能否读取到刚才我在HelloWorld中操作的状态值呢？我们接下来就做一个测试
+
+（1）在components下创建show.vue
+
+```html
+<template>
+    <div>
+       show: {{$store.state.count}}
+    </div>
+</template>
+```
+
+（2）修改路由设置  router/index.js
+
+```js
+import Vue from 'vue'
+import Router from 'vue-router'
+import HelloWorld from '@/components/HelloWorld'
+import Show from '@/components/Show'
+Vue.use(Router)
+export default new Router({
+  routes: [
+    {
+      path: '/',
+      name: 'HelloWorld',
+      component: HelloWorld
+    },
+    {
+      path: '/show',
+      name: 'Show',
+      component: Show
+    }
+  ]
+})
+```
+
+  测试： 在HelloWorld页面点击按钮使状态值增长，然后再进入show页面查看状态值
+
+#### 7.2.5 提交载荷
+
+所谓载荷（payload）就是 向  store.commit  传入额外的参数。
+
+（1）修改store下的index.js
+
+```js
+    ......
+    mutations: {
+        increment (state,x) {
+            state.count += x
+        }
+    }
+    ......
+```
+
+（2）修改HelloWorld.vue
+
+```js
+    ......
+    addCount(){
+      this.$store.commit('increment',10)
+      console.log(this.$store.state.count)
+    }
+    ......
+```
+
+#### 7.2.6 Action
+
+Action 类似于 mutation，不同在于：
+
+- Action 提交的是 mutation，而不是直接变更状态。
+- Action 可以包含任意异步操作。
+
+我们现在使用 Action 来封装increment
+
+#### 7.2.7 派生属性Getter
+
+有时候我们需要从 store 中的 state 中派生出一些状态，例如我们在上例代码的基础上，我们增加一个叫 remark的属性，如果count属性值小于50则remark为加油，大于等于50小于100则remark为你真棒，大于100则remark的值为你是大神.  这时我们就需要用到getter为我们解决。
+
+（1）修改store/index.js  ,增加getters定义
+
+```js
+const store = new Vuex.Store({
+    ......
+    getters: {
+        remark(state){
+            if(state.count<50){
+                return '加油'
+            }else if( state.count<100){
+                return '你真棒' 
+            }else{
+                return '你是大神'
+            }            
+        }
+    }
+    .......
+})
+```
+
+Getter 接受 state 作为其第一个参数，也可以接受其他 getter 作为第二个参数
+
+（2）修改HelloWorld.vue  显示派生属性的值
+
+```
+ {{$store.getters.remark}}
+```
+
+### 7.3 模块化
+
+#### 7.3.1 Module
+
+由于使用单一状态树，应用的所有状态会集中到一个比较大的对象。当应用变得非常复杂时，store 对象就有可能变得相当臃肿。
+
+为了解决以上问题，Vuex 允许我们将 store 分割成**模块（module）**。每个模块拥有自己的 state、mutation、action、getter、甚至是嵌套子模块——从上至下进行同样方式的分割 .参见以下代码模型
+
+~~~js
+const moduleA = {
+  state: { ... },
+  mutations: { ... },
+  actions: { ... },
+  getters: { ... }
+}
+
+const moduleB = {
+  state: { ... },
+  mutations: { ... },
+  actions: { ... }
+}
+
+const store = new Vuex.Store({
+  modules: {
+    a: moduleA,
+    b: moduleB
+  }
+})
+
+store.state.a // -> moduleA 的状态
+store.state.b // -> moduleB 的状态
+~~~
+
+我们现在就对工程按模块化进行改造
+
+（1）修改store/index.js
+
+```js
+import Vue from 'vue'
+import Vuex from 'vuex'
+Vue.use(Vuex)
+const moduleA ={
+    state: {
+        count: 0
+    },
+    getters: {
+        remark(state){
+            if(state.count<50){
+                return '加油'
+            }else if( state.count<100){
+                return '你真棒' 
+            }else{
+                return '你是大神'
+            }            
+        }
+    },
+    mutations: {
+        increment (state,x) {
+            state.count += x
+        }
+    },
+    actions: {
+        increment (context){
+            context.commit('increment',10)
+        } 
+    }
+}
+const store = new Vuex.Store({
+    modules: {
+        a:moduleA
+    }
+})
+export default store
+```
+
+（2）修改HelloWorld.vue和show.vue  
+
+```html
+{{$store.state.a.count}}
+```
+
+#### 7.3.2标准工程结构
+
+如果所有的状态都写在一个js中，这个js必定会很臃肿，所以Vuex建议你按以下代码结构来构建工程
+
+```
+├── index.html
+├── main.js
+├── api
+│   └── ... # 抽取出API请求
+├── components
+│   ├── App.vue
+│   └── ...
+└── store
+    ├── index.js          # 我们组装模块并导出 store 的地方
+    ├── getters.js        
+    └── modules
+        ├── a.js   # A模块
+        └── b.js   # B模块
+```
+
+
+
+
+
+
+
 
 
 
