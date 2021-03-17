@@ -235,30 +235,29 @@ persistence.xml
 ## 2.5 实现保存操作
 
 ~~~java
-	@Test
-	public void test() {
-		/**
-		 * 创建实体管理类工厂，借助Persistence的静态方法获取
-		 * 		其中传递的参数为持久化单元名称，需要jpa配置文件中指定
-		 */
-		EntityManagerFactory factory = Persistence.createEntityManagerFactory("myJpa");
-		//创建实体管理类
-		EntityManager em = factory.createEntityManager();
-		//获取事务对象
-		EntityTransaction tx = em.getTransaction();
-		//开启事务
-		tx.begin();
-		Customer c = new Customer();
-		c.setCustName("aaa");
-		//保存操作
-		em.persist(c);
-		//提交事务
-		tx.commit();
-		//释放资源
-		em.close();
-		factory.close();
-	}
-
+@Test
+public void test() {
+    /**
+	* 创建实体管理类工厂，借助Persistence的静态方法获取
+	* 其中传递的参数为持久化单元名称，需要jpa配置文件中指定
+	*/
+    EntityManagerFactory factory = Persistence.createEntityManagerFactory("myJpa");
+    //创建实体管理类
+    EntityManager em = factory.createEntityManager();
+    //获取事务对象
+    EntityTransaction tx = em.getTransaction();
+    //开启事务
+    tx.begin();
+    Customer c = new Customer();
+    c.setCustName("aaa");
+    //保存操作
+    em.persist(c);
+    //提交事务
+    tx.commit();
+    //释放资源
+    em.close();
+    factory.close();
+}
 ~~~
 
 # 三、JPA中的主键生成策略
@@ -374,7 +373,7 @@ rollback：回滚事务
 ## 4.5 抽取JPAUtil工具类
 
 ~~~java
-package cn.itcast.dao;
+package loserfromlazy;
 
 import javax.persistence.EntityManager;
 import javax.persistence.EntityManagerFactory;
@@ -865,7 +864,7 @@ Spring Data JPA是Spring提供的一套对JPA操作更加高级的封装，是�
 pring Data JPA是spring提供的一款对于数据访问层（Dao层）的框架，使用Spring Data JPA，只需要按照框架的规范提供dao接口，不需要实现类就可以完成数据库的增删改查、分页查询等方法的定义，极大的简化了我们的开发过程。
 
 ~~~java
-package cn.itcast.dao;
+package loserfromlazy;
 
 import java.util.List;
 
@@ -938,65 +937,207 @@ public class CustomerDaoTest {
 }
 ~~~
 
+# 七、Spring Data JPA的查询方式
 
+## 7.1 接口中的方法进行查询
 
+~~~java
+JpaRepository的源码：
+public interface JpaRepository<T, ID> extends PagingAndSortingRepository<T, ID>, QueryByExampleExecutor<T> {
+    List<T> findAll();
 
+    List<T> findAll(Sort var1);
 
+    List<T> findAllById(Iterable<ID> var1);
 
+    <S extends T> List<S> saveAll(Iterable<S> var1);
 
+    void flush();
 
+    <S extends T> S saveAndFlush(S var1);
 
+    void deleteInBatch(Iterable<T> var1);
 
+    void deleteAllInBatch();
 
+    T getOne(ID var1);
 
+    <S extends T> List<S> findAll(Example<S> var1);
 
+    <S extends T> List<S> findAll(Example<S> var1, Sort var2);
+}
+JpaSpecificationExecutor的源码
+public interface JpaSpecificationExecutor<T> {
+    Optional<T> findOne(@Nullable Specification<T> var1);
 
+    List<T> findAll(@Nullable Specification<T> var1);
 
+    Page<T> findAll(@Nullable Specification<T> var1, Pageable var2);
 
+    List<T> findAll(@Nullable Specification<T> var1, Sort var2);
 
+    long count(@Nullable Specification<T> var1);
+}
+~~~
 
+## 7.2 JPQL的方式进行查询
 
+使用Spring Data JPA提供的查询方法已经可以解决大部分的应用场景，但是对于某些业务来说，我们还需要灵活的构造查询条件，这时就可以使用@Query注解，结合JPQL的语句方式完成查询
 
+~~~java
+public interface CustomerDao extends JpaRepository<Customer, Long>,JpaSpecificationExecutor<Customer> {    
+    //@Query 使用jpql的方式查询。
+    @Query(value="from Customer")
+    public List<Customer> findAllCustomer();
+    
+    //@Query 使用jpql的方式查询。?1代表参数的占位符，其中1对应方法中的参数索引
+    @Query(value="from Customer where custName = ?1")
+    public Customer findCustomer(String custName);
+}
+~~~
 
+也可以通过使用 @Query 来执行一个更新操作，为此，我们需要在使用 @Query 的同时，用 @Modifying 来将该操作标识为修改查询，这样框架最终会生成一个更新的操作，而非查询
 
+~~~java
+@Query(value="update Customer set custName = ?1 where custId = ?2")
+@Modifying
+public void updateCustomer(String custName,Long custId);
 
+~~~
 
+## 7.3 使用SQL语句进行查询
 
+~~~java
+/**
+* nativeQuery : 使用本地sql的方式查询
+*/
+@Query(value="select * from cst_customer",nativeQuery=true)
+public void findSql();
+~~~
 
+## 7.4 方法命名规则查询
 
+顾名思义，方法命名规则查询就是根据方法的名字，就能创建查询。只需要按照Spring Data JPA提供的方法命名规则定义方法的名称，就可以完成查询工作。Spring Data JPA在程序执行的时候会根据方法名称进行解析，并自动生成查询语句进行查询
 
+按照Spring Data JPA 定义的规则，查询方法以findBy开头，涉及条件查询时，条件的属性用条件关键字连接，要注意的是：条件属性首字母需大写。框架在进行方法名解析时，会先把方法名多余的前缀截取掉，然后对剩下部分进行解析。
 
+~~~java
+//方法命名方式查询（根据客户名称查询客户）
+public Customer findByCustName(String custName);
+~~~
 
+| keyword           | sample                                       | jqpl                                        |
+| ----------------- | -------------------------------------------- | ------------------------------------------- |
+| And               | findByLastnameAndFirstname                   | ...where x.lastname =?1 and x.firstname =?2 |
+| Or                | findByLastnameOrFirstname                    | ...where x.lastname =?1 or x.firstname =?2  |
+| Is,Equal          | findByFirstnameIs<br />findByFirstnameEquals | ...where x.firstname =?1                    |
+| Between           | findByStartDateBetween                       | ... where x.startDate between ?1 and ?2     |
+| LessThan          | findByAgeLessThan                            | … where x.age < ?1                          |
+| GreaterThan       | findByAgeGreaterThan                         | … where x.age > ?1                          |
+| LessThanEqual     | findByAgeLessThanEqual                       | … where x.age <= ?1                         |
+| GreaterThanEqual  | findByAgeGreaterThanEqual                    | … where x.age >= ?1                         |
+| IsNull            | findByAgeIsNull                              | …  where x.age is null                      |
+| IsNotNull,NotNull | indByAge(Is)NotNull                          | … where x.age not null                      |
+| Like              | findByFirstnameLike                          | …  where x.firstname like ?1                |
+| OrderBy           | findByAgeOrderByLastnameDesc                 | … where x.age = ?1 order by x.lastname desc |
 
+以上为常用命名规则
 
+# 八、Specifications动态查询
 
+有时我们在查询某个实体的时候，给定的条件是不固定的，这时就需要动态构建相应的查询语句，在Spring Data JPA中可以通过JpaSpecificationExecutor接口查询。相比JPQL,其优势是类型安全,更加的面向对象。
 
+~~~java
+import java.util.List;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 
+/**
+ *	JpaSpecificationExecutor中定义的方法
+ **/
+ public interface JpaSpecificationExecutor<T> {
+   	//根据条件查询一个对象
+ 	T findOne(Specification<T> spec);	
+   	//根据条件查询集合
+ 	List<T> findAll(Specification<T> spec);
+   	//根据条件分页查询
+ 	Page<T> findAll(Specification<T> spec, Pageable pageable);
+   	//排序查询查询
+ 	List<T> findAll(Specification<T> spec, Sort sort);
+   	//统计查询
+ 	long count(Specification<T> spec);
+}
+~~~
 
+对于JpaSpecificationExecutor，这个接口基本是围绕着Specification接口来定义的。我们可以简单的理解为，Specification构造的就是查询条件。
 
+## 8.1 使用Specifications完成条件查询
 
+~~~java
+	//依赖注入customerDao
+	@Autowired
+	private CustomerDao customerDao;	
+	@Test
+	public void testSpecifications() {
+      	//使用匿名内部类的方式，创建一个Specification的实现类，并实现toPredicate方法
+		Specification <Customer> spec = new Specification<Customer>() {
+			public Predicate toPredicate(Root<Customer> root, CriteriaQuery<?> query, CriteriaBuilder cb) {
+				//cb:构建查询，添加查询方式   like：模糊匹配
+				//root：从实体Customer对象中按照custName属性进行查询
+				return cb.like(root.get("custName").as(String.class), "张%");
+			}
+		};
+		Customer customer = customerDao.findOne(spec);
+		System.out.println(customer);
+	}
+~~~
 
+## 8.2 基于Specifications的分页查询
 
+~~~java
+    @Test
+	public void testPage() {
+		//构造查询条件
+		Specification<Customer> spec = new Specification<Customer>() {
+			public Predicate toPredicate(Root<Customer> root, CriteriaQuery<?> query, CriteriaBuilder cb) {
+				return cb.like(root.get("custName").as(String.class), "传智%");
+			}
+		};
+		
+		/**
+		 * 构造分页参数
+		 * 		Pageable : 接口
+		 * 			PageRequest实现了Pageable接口，调用构造方法的形式构造
+		 * 				第一个参数：页码（从0开始）
+		 * 				第二个参数：每页查询条数
+		 */
+		Pageable pageable = new PageRequest(0, 5);
+		
+		/**
+		 * 分页查询，封装为Spring Data Jpa 内部的page bean
+		 * 		此重载的findAll方法为分页方法需要两个参数
+		 * 			第一个参数：查询条件Specification
+		 * 			第二个参数：分页参数
+		 */
+		Page<Customer> page = customerDao.findAll(spec,pageable);
+		
+	}
+~~~
 
+## 8.3 方法对应关系
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+| 方法名称                 | sql                  |
+| ------------------------ | -------------------- |
+| equal                    | filed =value         |
+| gt(greaterThan)          | filed > value        |
+| lt(lessThan)             | filed<value          |
+| ge(greaterThanOrEqualTo) | filed >= value       |
+| le（ lessThanOrEqualTo） | filed  <= value      |
+| notEqule                 | filed  != value      |
+| like                     | filed like value     |
+| notlike                  | filed not like value |
 
 
