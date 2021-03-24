@@ -1002,7 +1002,6 @@ public interface CustomerDao extends JpaRepository<Customer, Long>,JpaSpecificat
 @Query(value="update Customer set custName = ?1 where custId = ?2")
 @Modifying
 public void updateCustomer(String custName,Long custId);
-
 ~~~
 
 ## 7.3 使用SQL语句进行查询
