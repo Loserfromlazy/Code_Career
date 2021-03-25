@@ -140,7 +140,7 @@ db.集合名称.insert(数据)
 eg：
 
 ~~~
-db.col.insert({content:"xxxxxxx"},userid:"1001",nickname:"张三",visits:NumberInt(900))
+db.col.insert({content:"xxxxxxx",userid:"1001",nickname:"张三",visits:NumberInt(900)})
 ~~~
 
 **查询文档**
@@ -209,21 +209,209 @@ db.col.remove({})
 
 ## 统计条数
 
+统计条数使用count()方法。
+
+~~~
+db.col.count()
+~~~
+
+按条件统计则
+
+~~~
+db.spit.count({userid:"1013"})
+~~~
+
 ## 模糊查询
+
+mongoDB的模糊查询是通过正则表达式实现的
+
+~~~
+/模糊查询字符串/
+~~~
+
+例如查询吐槽内容包括“流量”的所有文档
+
+~~~
+db.spit.find({content:/流量/})
+~~~
+
+或者吐槽以加班开头的
+
+~~~
+db.spit.find({content:/^加班/})
+~~~
 
 ## 大于 小于 不等于
 
+<,>,<=,>=都是很常用的
+
+~~~
+db.col.find({"filed":{&gt:value}}) //大于filed>value
+db.col.find({"filed":{&lt:value}}) //小于filed<value
+db.col.find({"filed":{&gte:value}}) //大于等于filed>=value
+db.col.find({"filed":{&lte:value}}) //小于等于filed<=value
+db.col.find({"filed":{&ne:value}}) //不等于filed!=value
+~~~
+
+eg：查询吐槽浏览量大于1000的记录
+
+~~~
+db.spit.find({visits:{$gt:1000}})
+~~~
+
 ## 包含与不包含
+
+包含使用$in
+
+例如：查询吐槽集合中userid字段包含1010和1011的文档
+
+~~~
+db.spit.find({userid:{$in:{"1010","1011"}}})
+~~~
+
+不包含使用$nin
+
+例如：查询吐槽集合中userid字段不包含1010和1011的文档
+
+~~~
+db.spit.find({userid:{$nin:{"1010","1011"}}})
+~~~
 
 ## 条件连接
 
+查询时如果需要同时满足两个以上条件，需使用$and操作符进行关联
+
+~~~
+$and:[{},{},{}]
+~~~
+
+eg：查询吐槽集合中visits大于等于1000并且小于2000的文档
+
+~~~
+db.spit.find({$and[{visits:{$gte:1000}},{visits:{$lt:2000}}]})
+~~~
+
+或者关系使用or操作符
+
+~~~
+$or[{},{}]
+~~~
+
+eg:查询吐槽集合中userid为1010或浏览量小于2000的文档
+
+~~~
+db.spit.find({$or:[{userid:"1010"},{visits:{$lt:2000}}]})
+~~~
+
 ## 列值增长
+
+如果想实现对某列值在原有值的基础上进行增加或减少可使用$inc来实现
+
+~~~
+db.spit.update({_id:"2"},{$inc:{visits:NumberInt(1)}})
+~~~
 
 # 三、Java操作MongoDB
 
 ## 3.1 mongoDB-driver
 
-## 3.2 SpringDataMongoDB
+mongodb-driver是mongo官方推出的java连接mongodb的驱动包，相当于jdbc驱动。
+
+### 查询全部记录
+
+导入依赖
+
+~~~xml
+<dependency>
+	<groupId>org.mongodb</groupId>
+    <artifactId>mongodb-driver</artifactId>
+    <version>3.6.3</version>
+</dependency>
+~~~
+
+测试类
+
+~~~java
+public class MongoDemo{
+    public static void main(String[] args){
+        MongoClient client = new MongoClient("192.168.184.134");//创建连接
+        MongoDataBase spitdb = client.getDataBase("spitdb");//打开数据库
+        FindIterable<Document> dcuments = spit.find();//查询记录获取文档集合
+        for(Document document : documents){
+            System.out.pringln("内容"+docuemnt.getString("content"));
+            System.out.pringln("用户ID"+docuemnt.getString("userid"));
+            System.out.pringln("浏览器"+docuemnt.getInteger("visits"));
+        }
+        client.close();//关闭连接
+    }
+}
+~~~
+
+### 条件查询
+
+BasicDBObject对象：表示一个具体的记录，BasicDBObject实现了DBObject，是keyvalue的数据结构，用起来和HashMap是基本一致的。
+
+查询userid为1010的记录
+
+~~~java
+public class MongoDemo{
+    public static void main(String[] args){
+        MongoClient client = new MongoClient("192.168.184.134");//创建连接
+        MongoDataBase spitdb = client.getDataBase("spitdb");//打开数据库
+        MongoCollection<Document> spit =spitdb.getCollection("spit");//获取集合
+        BasicDBObject bson = new BasicDBObject("userid","1010");//构建查询条件
+        FindIterable<Document> dcuments = spit.find(bson);//查询记录获取文档集合
+        for(Document document : documents){
+            System.out.pringln("内容"+docuemnt.getString("content"));
+            System.out.pringln("用户ID"+docuemnt.getString("userid"));
+            System.out.pringln("浏览器"+docuemnt.getInteger("visits"));
+        }
+        client.close();//关闭连接
+    }
+}
+~~~
+
+查询浏览量大于1000的记录
+
+~~~java
+public class MongoDemo{
+    public static void main(String[] args){
+        MongoClient client = new MongoClient("192.168.184.134");//创建连接
+        MongoDataBase spitdb = client.getDataBase("spitdb");//打开数据库
+        MongoCollection<Document> spit =spitdb.getCollection("spit");//获取集合
+        BasicDBObject bson = new BasicDBObject("$gt","1000");//构建查询条件
+        FindIterable<Document> dcuments = spit.find(bson);//查询记录获取文档集合
+        for(Document document : documents){
+            System.out.pringln("内容"+docuemnt.getString("content"));
+            System.out.pringln("用户ID"+docuemnt.getString("userid"));
+            System.out.pringln("浏览器"+docuemnt.getInteger("visits"));
+        }
+        client.close();//关闭连接
+    }
+}
+~~~
+
+### 插入数据
+
+~~~java
+public class MongoDemo{
+    public static void main(String[] args){
+        MongoClient client = new MongoClient("192.168.184.134");//创建连接
+        MongoDataBase spitdb = client.getDataBase("spitdb");//打开数据库
+        MongoCollection<Document> spit =spitdb.getCollection("spit");//获取集合
+        Map<String,Object> map = new HashMap();
+        map.put("content","我要吐槽");
+        map.put("userid","1000");
+        map.put("visits",123);
+        map.put("publictime",new Date);
+        Document document = new Document(map);
+        spit.insertOne(document);//插入数据
+        client.close();//关闭连接
+    }
+}
+~~~
+
+
 
 
 
