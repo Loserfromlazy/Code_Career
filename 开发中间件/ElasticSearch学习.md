@@ -1481,7 +1481,118 @@ RequestOptions.DEFAULT);
 
 ~~~
 
-## 八. Spring Data ElasticSearch
+## 八. ElasticSearch与Mysql数据同步
+
+### 8.1 Logstash
+
+Logstash是一款轻量级的日志搜集处理框架，可以方便的把分散的、多样化的日志搜集起来，并进行自定义的处理，然后传输到指定的位置，比如某个服务器或文件。
+
+#### 8.1.1 Logstash安装与测试
+
+解压进入bin目录
+
+~~~sh
+logstash -e 'imput {stdin{}}output{stdout{}}'
+~~~
+
+stdin表示输入流
+
+stdout表示输出流
+
+命令行参数：
+
+-e执行
+
+--config或-f配置文件，后跟参数类型可以是一个字符串的配置或者全路径文件名或全路径（如：/etc/logstash.d/,logstash会自动读取/etc/logstash.d/目录下所有的*.conf文件，然后在内存中拼成一个完整的大配置文件再去执行）
+
+### 8.2 Mysql数据导入Elasticsearch
+
+在logstash安装目录下创建mysqletc文件夹（名称任意）
+
+文件夹下创建mysql.conf，内容如下：
+
+~~~
+input {
+  # 多张表的同步只需要设置多个jdbc的模块就行了
+  jdbc {
+      # mysql 数据库链接,shop为数据库名
+      jdbc_connection_string => "jdbc:mysql://localhost:3306/spider?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC"
+      # 用户名和密码
+      jdbc_user => "root"
+      jdbc_password => "root"
+
+      # 驱动
+      jdbc_driver_library => "D:/es/logstash-7.3.2/mysql/mysql-connector-java-5.1.6-bin.jar"
+
+      # 驱动类名
+      jdbc_driver_class => "com.mysql.jdbc.Driver"
+      jdbc_validate_connection => "true"
+
+      #是否分页
+      jdbc_paging_enabled => "true"
+      jdbc_page_size => "1000"
+      #时区
+      jdbc_default_timezone => "Asia/Shanghai"
+
+      #直接执行sql语句
+      statement => "select * from news where id >=:sql_last_value order by id asc"
+      # 执行的sql 文件路径+名称
+      # statement_filepath => "/hw/elasticsearch/logstash-6.2.4/bin/test.sql"
+
+      #设置监听间隔  各字段含义（由左至右）分、时、天、月、年，全部为*默认含义为每分钟都更新
+      schedule => "* * * * *"
+      #每隔10分钟执行一次
+      #schedule => "*/10 * * * *"
+      #是否记录上次执行结果, 如果为真,将会把上次执行到的 tracking_column 字段的值记录下来,保存到last_run_metadata_path
+      record_last_run => true
+      #记录最新的同步的offset信息
+      last_run_metadata_path => "D:/es/logstash-7.3.2/logs/last_id.txt"
+
+      use_column_value => true
+      #递增字段的类型，numeric 表示数值类型, timestamp 表示时间戳类型
+      tracking_column_type => "numeric"
+      tracking_column => "id"
+      
+      clean_run => false
+
+      # 索引类型
+      #type => "jdbc"
+    }
+
+}
+
+
+output {
+  elasticsearch {
+        #es的ip和端口
+        hosts => ["http://localhost:9200"]
+        #ES索引名称（自己定义的）
+        index => "spider"
+        #文档类型
+        document_type => "_doc"
+        #设置数据的id为数据库中的字段
+        document_id => "%{id}"
+    }
+    stdout {
+        codec => json_lines
+    }
+}
+————————————————
+版权声明：本文为CSDN博主「乔治大哥」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
+原文链接：https://blog.csdn.net/qq_41946557/article/details/104275587
+~~~
+
+将mysql驱动的jar包拷贝到mysqletc下
+
+命令行执行
+
+~~~sh
+logstash -f ../mysqletc/mysql.conf
+~~~
+
+
+
+
 
 
 
