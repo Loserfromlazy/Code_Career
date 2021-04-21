@@ -718,6 +718,8 @@ NIO的通道是从输入流对象里通过getChannel方法获取的，该通道�
 
 ## 三、网络IO
 
+### 3.1 概述
+
 上一部分文件IO用到的FileChannel并不支持非阻塞IO，NIO主要还是为了网络IO。java nio 的网络通道是非阻塞IO的实现，基于事件驱动。
 
 在Java中编写Socket服务器，通常有以下几种模式：
@@ -728,7 +730,7 @@ NIO的通道是从输入流对象里通过getChannel方法获取的，该通道�
 
 Java的NIO为非阻塞式Socket通信提供了如下几个特殊类。
 
-**Selector**：能够检测多个注册的通道上是否有时间发生，如果有事件发生，便获取事件然后对每个进行相应的处理。这样就可以只用一个单线程去管理多个通道，也就是管理多个连接。这样使得只有在连接真正有读写事件发生时，才会调用函数来进行读写，就大大减少了系统开销，并且不必为每个连接都创建一个线程，不用维护多个线程，并且避免了多线程之间的上下文切换导致的开销。
+**Selector**：能够检测多个注册的通道上是否有事件发生，如果有事件发生，便获取事件然后对每个进行相应的处理。这样就可以只用一个单线程去管理多个通道，也就是管理多个连接。这样使得只有在连接真正有读写事件发生时，才会调用函数来进行读写，就大大减少了系统开销，并且不必为每个连接都创建一个线程，不用维护多个线程，并且避免了多线程之间的上下文切换导致的开销。
 
 该类的常用方法：
 
@@ -759,16 +761,133 @@ public final boolean isWritable()//是否可以写
 **ServerSocketChannel**：用来在服务器端监听新的客户端Socket连接，常用方法如下：
 
 ~~~java
+public static ServerSocketChannel open()//得到一个ServerSocketChannel通道
+public final ServerSocketChannel bind()//设置服务器端口号
+public final SelectableChannel configureBlocking(bollean block)//设置阻塞或非阻塞模式，取值false表示采用非阻塞模式
+public SocketChannel accept()//接受一个链接并返回这个连接的通道对象
+public fianl SelectionKey register(Selector sel,int ops)//注册一个选择器并设置监听事件
+~~~
+
+**SocketChannel**:网络IO通道，具体负责进行读写操作。NIO总是把缓冲区的数据写入通道，或者把通道里的数据读到缓冲区，常用方法如下：
+
+~~~java
+public static SocketChannel open()//得到一个SocketChannel通道
+public final SelectableChannel configureBlocking(bollean block)//设置阻塞或者非阻塞模式，取值false表示采用非阻塞模式
+public boolean connect(SocketAddress remote)//连接服务器
+public boolean finishConnect()//如果上面的方法连接失败，则通过改方法完成连接操作
+public int write(ByteBuffer src)//往通道里写数据
+public int read(ByteBuffer src)//从通道里读数据
+public final SelectionKey register(Selector sel,int ops,Object att)//注册一个选择器并设置监听事件，最后一个参数可以设置共享数据
+public final void close()//关闭通道
+~~~
+
+### 3.2 案例
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/nio1.png)
+
+**入门案例——非阻塞实现服务器端和客户端之间的数据通信**
+
+NIOServer.java
+
+~~~java
+public class NioServer {
+
+    public static void main(String[] args) throws IOException {
+        //1.得到一个ServerSocketChannel对象
+        ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+        //2.得到一个Selector对象
+        Selector selector = Selector.open();
+        //3.绑定一个端口号
+        serverSocketChannel.bind(new InetSocketAddress(9999));
+        //4.设置非阻塞方式
+        serverSocketChannel.configureBlocking(false);
+        //5. 把ServerSocketChannel对象注册给Selector对象
+        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+        //6. 开始
+        while(true){
+            // 6.1 监控客户端
+            if (selector.select(2000)==0){
+                System.out.println("Server:没有客户端搭理我，我干别的活");
+                continue;
+            }
+            //6.2 得到SelectionKey，判断通道里的事件
+            Iterator <SelectionKey> keyiterator = selector.selectedKeys().iterator();
+            while (keyiterator.hasNext()){
+                SelectionKey key = keyiterator.next();
+                if (key.isAcceptable()){//客户端连接请求事件
+                    System.out.println("OP_ACCEPT");
+                    SocketChannel socketChannel = serverSocketChannel.accept();
+                    socketChannel.configureBlocking(false);
+                    socketChannel.register(selector,SelectionKey.OP_READ, ByteBuffer.allocate(1024));
+                }
+                if (key.isReadable()) {//读取客户端事件
+                    SocketChannel channel = (SocketChannel) key.channel();
+                    ByteBuffer buffer = (ByteBuffer) key.attachment();
+                    channel.read(buffer);
+                    System.out.println("客户端发来数据："+new String(buffer.array()));
+                }
+                //6.3 从集合中移除当前key防止重复处理
+                keyiterator.remove();
+            }
+        }
+    }
+}
+~~~
+
+NIOClient.java
+
+~~~java
+public class NioClient {
+    public static void main(String[] args) throws IOException {
+        //1.得到一个网络通道
+        SocketChannel channel =SocketChannel.open();
+        //2.设置非阻塞方式
+        channel.configureBlocking(false);
+        //3. 提供服务器端的IP地址和端口号
+        InetSocketAddress address = new InetSocketAddress("127.0.0.1",9998);
+        //4. 连接服务器端
+        if (!channel.connect(address)){
+            while (!channel.finishConnect()){//nio非阻塞的优势
+                System.out.println("Client: 链接服务器的同时，干别的事");
+            }
+        }
+        //5. 得到一个缓冲区并存入数据
+        String msg = "hello Server";
+        ByteBuffer writebuffer = ByteBuffer.wrap(msg.getBytes());
+        //6. 发送数据
+        channel.write(writebuffer);
+        System.in.read();
+    }
+}
+~~~
+
+**网络聊天案例**
+
+ChatServer.java
+
+~~~java
 
 ~~~
 
+ChatClient.java
 
+~~~java
 
+~~~
 
+TestChat.java
 
+~~~java
 
+~~~
 
+### 3.3 IO对比总结
 
+IO通常分为几种，同步阻塞的BIO、同步非阻塞的NIO，异步非阻塞的AIO
+
+- BIO适用于连接数目较小且固定的结构，这种方式对服务器资源要求较高，并发局限于应用中，JDK1.4以前的唯一选择，但程序直观简单易理解
+- NIO适用于连接数目较多且比较短（轻操作）的架构，比如聊天服务器，并发局限于应用中，编程比较复杂
+- AIO适用于连接数较多且连接比较长的架构，比如相册服务器，充分调用OS参与并发操作，编程比较复杂，JDK1.7开始支持
 
 # Netty学习
 
