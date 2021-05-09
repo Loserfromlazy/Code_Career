@@ -555,17 +555,243 @@ public void testJsoupSelector() throws Exception{
 
  **加入依赖**
 
+~~~xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<modelVersion>4.0.0</modelVersion>
+
+<groupId>cn.xxx</groupId>
+<artifactId>crawler-webmagic</artifactId>
+<version>1.0-SNAPSHOT</version>
+
+<dependencies>
+<!--WebMagic-->
+<dependency>
+<groupId>us.codecraft</groupId>
+<artifactId>webmagic-core</artifactId>
+<version>0.7.4</version>
+</dependency>
+<dependency>
+<groupId>us.codecraft</groupId>
+<artifactId>webmagic-extension</artifactId>
+<version>0.7.4</version>
+</dependency>
+</dependencies>
+
+</project>
+
+~~~
+
 **配置文件**
 
-**Java类**                                                                                                                                                                                                                                                        
+WebMagic使用slf4j-log4j12作为slf4j的实现。
+
+添加log4j.properties配置文件
+
+```properties
+log4j.rootLogger=INFO,A1
+
+log4j.appender.A1=org.apache.log4j.ConsoleAppender
+log4j.appender.A1.layout=org.apache.log4j.PatternLayout
+log4j.appender.A1.layout.ConversionPattern=%-d{yyyy-MM-dd HH:mm:ss,SSS} [%t] [%c]-[%p] %m%n
+```
+
+**Java类**                                                                                                                                                                                                                           
+
+```java
+public class JobProcessor implements PageProcessor {
+
+    public void process(Page page) {
+        page.putField("author", page.getHtml().css("div.mt>h1").all());
+        }
+        private Site site = Site.me();
+        public Site getSite() {
+        return site;
+    }
+
+	public static void main(String[] args) {
+            Spider.create(new JobProcessor())
+    //初始访问url地址
+    .addUrl("https://www.jd.com/moreSubject.aspx")
+    .run();
+    }
+}
+```
 
 ## 4.3 WebMagic功能
 
 ### 4.3.1 实现PageProcessor
 
+#### 抽取元素Selectable
+
+WebMagic主要使用了三种抽取技术：XPath、正则表达式和CSS选择器。另外，对于JSON格式的内容，可使用JsonPath进行解析。
+
+1. XPath
+
+   以上是获取属性class=mt的div标签，里面的h1标签的内容
+
+   ```java
+   page.getHtml().xpath("//div[@class=mt]/h1/text()")
+   ```
+
+2. CSS选择器
+
+   CSS选择器是与XPath类似的语言。在之前已经学习了Jsoup的选择器，它比XPath写起来要简单一些，但是如果写复杂一点的抽取规则，就相对要麻烦一点。
+
+   div.mt>h1表示class为mt的div标签下的直接子元素h1标签
+
+   ```java
+   page.getHtml().css("div.mt>h1").toString()
+   ```
+
+    
+
+   可是使用:nth-child(n)选择第几个元素，如下选择第一个元素
+
+   ```java
+   page.getHtml().css("div#news_div > ul > li:nth-child(1) a").toString()
+   ```
+
+   注意：需要使用>，就是直接子元素才可以选择第几个元素
+
+3. 正则表达式则是一种通用的文本抽取语言。在这里一般用于获取url地址。
+
+#### 抽取元素API
+
+Selectable相关的抽取元素链式API是WebMagic的一个核心功能。使用Selectable接口，可以直接完成页面元素的链式抽取，也无需去关心抽取的细节。
+
+ 在刚才的例子中可以看到，page.getHtml()返回的是一个Html对象，它实现了Selectable接口。这个接口包含的方法分为两类：抽取部分和获取结果部分。
+
+| 方法                           | 说明                        | 示例                              |
+| ------------------------------ | --------------------------- | --------------------------------- |
+| xpath(String xpath)            | 使用xpath选择               | html.xpath("div[@class='title']") |
+| $(String selector)             | 使用Css选择器选择           | html.$("div.title")               |
+| $(String selector,String attr) | 使用Css选择器选择           | html.$("div.title","text")        |
+| css(String selector)           | 功能同$(),使用css选择器选择 | html.css("div.title")             |
+| links()                        | 选择所有链接                | html.links()                      |
+| regex(String regex)            | 使用正则表达式抽取          | html.regex("\\(.\\*?)\\")         |
+
+这部分抽取API返回的都是一个`Selectable`接口，意思是说，是支持链式调用的.
+
+```java
+//先获取class为news_div的div
+//再获取里面的所有包含文明的元素
+List<String> list = page.getHtml()
+        .css("div#news_div")
+        .regex(".*文明.*").all();
+```
+
+#### 抽取结果API
+
+当链式调用结束时，我们一般都想要拿到一个字符串类型的结果。这时候就需要用到获取结果的API了。
+
+我们知道，一条抽取规则，无论是XPath、CSS选择器或者正则表达式，总有可能抽取到多条元素。WebMagic对这些进行了统一，可以通过不同的API获取到一个或者多个元素。
+
+| 方法       | 说明                             | 示例                               |
+| ---------- | -------------------------------- | ---------------------------------- |
+| get()      | 返回一条String类型的结果         | String link=html.links().get()     |
+| toString() | 同get(),返回一条String类型的结果 | String link= html.links.toString() |
+| all()      | 返回所有抽取的结果               | List links=html.links().all()      |
+
+当有多条数据的时候，使用get()和toString()都是获取第一个url地址。
+
+```java
+String str = page.getHtml()
+        .css("div#news_div")
+        .links().regex(".*[0-3]$").toString();
+
+String get = page.getHtml()
+        .css("div#news_div")
+        .links().regex(".*[0-3]$").get();
+```
+
+#### 获取链接
+
+有了处理页面的逻辑，我们的爬虫就接近完工了，但是现在还有一个问题：一个站点的页面是很多的，一开始我们不可能全部列举出来，于是如何发现后续的链接，是一个爬虫不可缺少的一部分.
+
+下面的例子就是获取https://www.jd.com/moreSubject.aspx这个页面中所有符合[https://www.jd.com/news.\\w+?.*](https://www.jd.com/news./w+?.*)正则表达式的url地址并将这些链接加入到待抓取的队列中去。
+
+```java
+public void process(Page page) {
+    page.addTargetRequests(page.getHtml().links()
+            .regex("(https://www.jd.com/news.\\w+?.*)").all());
+System.out.println(page.getHtml().css("div.mt>h1").all());
+}
+
+public static void main(String[] args) {
+    Spider.create(new JobProcessor())
+            .addUrl("https://www.jd.com/moreSubject.aspx")
+            .run();
+}
+```
+
 ### 4.3.2 使用Pipeline保存结果
 
+WebMagic用于保存结果的组件叫做`Pipeline`。我们现在通过“控制台输出结果”这件事也是通过一个内置的Pipeline完成的，它叫做`ConsolePipeline`。
+
+ 那么，我现在想要把结果用保存到文件中，怎么做呢？只将Pipeline的实现换成"FilePipeline"就可以了。
+
+```java
+public static void main(String[] args) {
+    Spider.create(new JobProcessor())
+//初始访问url地址
+.addUrl("https://www.jd.com/moreSubject.aspx")
+  .addPipeline(new FilePipeline("D:/webmagic/"))
+            .thread(5)//设置线程数
+.run();
+}
+```
+
 ### 4.3.3 爬虫的配置启动和终止
+
+#### Spider
+
+Spider是爬虫启动的入口。在启动爬虫之前，我们需要使用一个PageProcessor创建一个Spider对象，然后使用run()进行启动。
+
+同时Spider的其他组件（Downloader、Scheduler、Pipeline）都可以通过set方法来进行设置。
+
+| **方法**                  | **说明**                                         | **示例**                                                     |
+| ------------------------- | ------------------------------------------------ | ------------------------------------------------------------ |
+| create(PageProcessor)     | 创建Spider                                       | Spider.create(new  GithubRepoProcessor())                    |
+| addUrl(String…)           | 添加初始的URL                                    | spider .addUrl("http://webmagic.io/docs/")                   |
+| thread(n)                 | 开启n个线程                                      | spider.thread(5)                                             |
+| run()                     | 启动，会阻塞当前线程执行                         | spider.run()                                                 |
+| start()/runAsync()        | 异步启动，当前线程继续执行                       | spider.start()                                               |
+| stop()                    | 停止爬虫                                         | spider.stop()                                                |
+| addPipeline(Pipeline)     | 添加一个Pipeline，一个Spider可以有多个Pipeline   | spider .addPipeline(new  ConsolePipeline())                  |
+| setScheduler(Scheduler)   | 设置Scheduler，一个Spider只能有个一个Scheduler   | spider.setScheduler(new  RedisScheduler())                   |
+| setDownloader(Downloader) | 设置Downloader，一个Spider只能有个一个Downloader | spider .setDownloader(  new SeleniumDownloader())            |
+| get(String)               | 同步调用，并直接取得结果                         | ResultItems result = spider  .get("http://webmagic.io/docs/") |
+| getAll(String…)           | 同步调用，并直接取得一堆结果                     | List<ResultItems>  results = spider   .getAll("http://webmagic.io/docs/", "http://webmagic.io/xxx") |
+
+#### 爬虫配置site
+
+Site.me()可以对爬虫进行一些配置配置，包括编码、抓取间隔、超时时间、重试次数等。在这里我们先简单设置一下：重试次数为3次，抓取间隔为一秒。
+
+```java
+private Site site = Site.me()
+        .setCharset("UTF-8")//编码
+.setSleepTime(1)//抓取间隔时间
+.setTimeOut(1000*10)//超时时间
+.setRetrySleepTime(3000)//重试时间
+.setRetryTimes(3);//重试次数
+```
+
+站点本身的一些配置信息，例如编码、HTTP头、超时时间、重试策略等、代理等，都可以通过设置Site对象来进行配置。
+
+| **方法**                 | **说明**                                  | **示例**                                                     |
+| ------------------------ | ----------------------------------------- | ------------------------------------------------------------ |
+| setCharset(String)       | 设置编码                                  | site.setCharset("utf-8")                                     |
+| setUserAgent(String)     | 设置UserAgent                             | site.setUserAgent("Spider")                                  |
+| setTimeOut(int)          | 设置超时时间，  单位是毫秒                | site.setTimeOut(3000)                                        |
+| setRetryTimes(int)       | 设置重试次数                              | site.setRetryTimes(3)                                        |
+| setCycleRetryTimes(int)  | 设置循环重试次数                          | site.setCycleRetryTimes(3)                                   |
+| addCookie(String,String) | 添加一条cookie                            | site.addCookie("dotcomt_user","code4craft")                  |
+| setDomain(String)        | 设置域名，需设置域名后，addCookie才可生效 | site.setDomain("github.com")                                 |
+| addHeader(String,String) | 添加一条addHeader                         | site.addHeader("Referer","[https://github.com](https://github.com/)") |
+| setHttpProxy(HttpHost)   | 设置Http代理                              | site.setHttpProxy(new  HttpHost("127.0.0.1",8080))           |
 
 ## 4.4 爬虫分类
 
@@ -604,8 +830,6 @@ Web 页面按存在方式可以分为表层网页（Surface Web）和深层网�
 **Deep Web 是那些大部分内容不能通过静态链接获取的、隐藏在搜索表单后的，只有用户提交一些关键词才能获得的 Web 页面。**
 
 
-
-# 五、Nutch
 
 
 
