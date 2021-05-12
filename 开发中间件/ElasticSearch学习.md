@@ -1577,9 +1577,7 @@ output {
         codec => json_lines
     }
 }
-————————————————
-版权声明：本文为CSDN博主「乔治大哥」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
-原文链接：https://blog.csdn.net/qq_41946557/article/details/104275587
+
 ~~~
 
 将mysql驱动的jar包拷贝到mysqletc下
