@@ -744,6 +744,47 @@ public static void main(String[] args) {
 }
 ```
 
+Pipeline的接口定义如下：
+
+```java
+public interface Pipeline {
+
+// ResultItems保存了抽取结果，它是一个Map结构，
+// 在page.putField(key,value)中保存的数据，
+//可以通过ResultItems.get(key)获取
+public void process(ResultItems resultItems, Task task);
+}
+```
+
+可以看到，Pipeline其实就是将PageProcessor抽取的结果，继续进行了处理的，其实在Pipeline中完成的功能，你基本上也可以直接在PageProcessor实现，那么为什么会有Pipeline？有几个原因：
+
+ 1.为了模块分离
+
+“页面抽取”和“后处理、持久化”是爬虫的两个阶段，将其分离开来，一个是代码结构比较清晰，另一个是以后也可能将其处理过程分开，分开在独立的线程以至于不同的机器执行。
+
+ 2.Pipeline的功能比较固定，更容易做成通用组件
+
+每个页面的抽取方式千变万化，但是后续处理方式则比较固定，例如保存到文件、保存到数据库这种操作，这些对所有页面都是通用的。
+
+ 在WebMagic里，一个Spider可以有多个Pipeline，使用Spider.addPipeline()即可增加一个Pipeline。这些Pipeline都会得到处理，例如可以使用
+
+```java
+spider.addPipeline(new ConsolePipeline()).addPipeline(new FilePipeline())
+```
+
+实现输出结果到控制台，并且保存到文件的目标。
+
+WebMagic中就已经提供了控制台输出、保存到文件、保存为JSON格式的文件几种通用的Pipeline。
+
+| **类**                    | **说明**                         | **备注**                       |
+| ------------------------- | -------------------------------- | ------------------------------ |
+| ConsolePipeline           | 输出结果到控制台                 | 抽取结果需要实现toString方法   |
+| FilePipeline              | 保存结果到文件                   | 抽取结果需要实现toString方法   |
+| JsonFilePipeline          | JSON格式保存结果到文件           |                                |
+| ConsolePageModelPipeline  | (注解模式)输出结果到控制台       |                                |
+| FilePageModelPipeline     | (注解模式)保存结果到文件         |                                |
+| JsonFilePageModelPipeline | (注解模式)JSON格式保存结果到文件 | 想持久化的字段需要有getter方法 |
+
 ### 4.3.3 爬虫的配置启动和终止
 
 #### Spider
@@ -793,6 +834,87 @@ private Site site = Site.me()
 | addHeader(String,String) | 添加一条addHeader                         | site.addHeader("Referer","[https://github.com](https://github.com/)") |
 | setHttpProxy(HttpHost)   | 设置Http代理                              | site.setHttpProxy(new  HttpHost("127.0.0.1",8080))           |
 
+### 4.3.4 Scheduler组件
+
+Scheduler是WebMagic中进行URL管理的组件。一般来说，Scheduler包括两个作用：
+
+- 对待抓取的URL队列进行管理。
+- 对已抓取的URL进行去重。
+
+WebMagic内置了几个常用的Scheduler。如果你只是在本地执行规模比较小的爬虫，那么基本无需定制Scheduler。
+
+| **类**                    | **说明**                                                     | **备注**                                                     |
+| ------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| DuplicateRemovedScheduler | 抽象基类，提供一些模板方法                                   | 继承它可以实现自己的功能                                     |
+| QueueScheduler            | 使用内存队列保存待抓取URL                                    |                                                              |
+| PriorityScheduler         | 使用带有优先级的内存队列保存待抓取URL                        | 耗费内存较QueueScheduler更大，但是当设置了request.priority之后，只能使用PriorityScheduler才可使优先级生效 |
+| FileCacheQueueScheduler   | 使用文件保存抓取URL，可以在关闭程序并下次启动时，从之前抓取到的URL继续抓取 | 需指定路径，会建立.urls.txt和.cursor.txt两个文件             |
+| RedisScheduler            | 使用Redis保存抓取队列，可进行多台机器同时合作抓取            | 需要安装并启动redis                                          |
+
+去重部分被单独抽象成了一个接口：DuplicateRemover，从而可以为同一个Scheduler选择不同的去重方式，以适应不同的需要，目前提供了两种去重方式。
+
+| **类**                      | **说明**                                                  |
+| --------------------------- | --------------------------------------------------------- |
+| HashSetDuplicateRemover     | 使用HashSet来进行去重，占用内存较大                       |
+| BloomFilterDuplicateRemover | 使用BloomFilter来进行去重，占用内存较小，但是可能漏抓页面 |
+
+RedisScheduler是使用Redis的set进行去重，其他的Scheduler默认都使用HashSetDuplicateRemover来进行去重。
+
+如果要使用BloomFilter，必须要加入以下依赖：
+
+```xml
+<!--WebMagic对布隆过滤器的支持-->
+<dependency>
+<groupId>com.google.guava</groupId>
+<artifactId>guava</artifactId>
+<version>16.0</version>
+</dependency>
+```
+
+```java
+public static void main(String[] args) {
+    Spider.create(new JobProcessor())
+//初始访问url地址
+.addUrl("https://www.jd.com/moreSubject.aspx")
+            .addPipeline(new FilePipeline("D:/webmagic/"))
+            .setScheduler(new QueueScheduler()
+                    .setDuplicateRemover(new BloomFilterDuplicateRemover(10000000)))//参数设置需要对多少条数据去重
+            .thread(1)//设置线程数
+.run();
+}
+```
+
+修改public void process(Page page)方法，添加一下代码
+
+```java
+//每次加入相同的url，测试去重
+page.addTargetRequest("https://www.jd.com/news.html?id=36480");
+```
+
+#### 三种去重方式
+
+- HashSet
+
+使用java中的HashSet不能重复的特点去重。优点是容易理解。使用方便。
+
+缺点：占用内存大，性能较低。
+
+- Redis去重
+
+使用Redis的set进行去重。优点是速度快（Redis本身速度就很快），而且去重不会占用爬虫服务器的资源，可以处理更大数据量的数据爬取。
+
+缺点：需要准备Redis服务器，增加开发和使用成本。
+
+- 布隆过滤器（BloomFilter）
+
+使用布隆过滤器也可以实现去重。优点是占用的内存要比使用HashSet要小的多，也适合大量数据的去重操作。
+
+缺点：有误判的可能。没有重复可能会判定重复，但是重复数据一定会判定重复。
+
+> 布隆过滤器 (Bloom Filter)是由Burton Howard Bloom于1970年提出，它是一种space efficient的概率型数据结构，用于判断一个元素是否在集合中。在垃圾邮件过滤的黑白名单方法、爬虫(Crawler)的网址判重模块中等等经常被用到。
+>
+> 哈希表也能用于判断元素是否在集合中，但是布隆过滤器只需要哈希表的1/8或1/4的空间复杂度就能完成同样的问题。布隆过滤器可以插入元素，但不可以删除已有元素。其中的元素越多，误报率越大，但是漏报是不可能的。
+
 ## 4.4 爬虫分类
 
 网络爬虫按照系统结构和实现技术，大致可以分为以下几种类型：通用网络爬虫、聚焦网络爬虫、增量式网络爬虫、深层网络爬虫。实际的网络爬虫系统通常是几种爬虫技术相结合实现的
@@ -829,23 +951,114 @@ Web 页面按存在方式可以分为表层网页（Surface Web）和深层网�
 
 **Deep Web 是那些大部分内容不能通过静态链接获取的、隐藏在搜索表单后的，只有用户提交一些关键词才能获得的 Web 页面。**
 
+# 五、网页去重
+
+在4.3.4中介绍了对url的去重，避免同样的url下载多次。其实不光url需要去重，我们对下载的内容也需要去重。
+
+## 5.1 去重方案
+
+**指纹码对比**
+
+最常见的去重方案是生成文档的指纹门。例如对一篇文章进行MD5加密生成一个字符串，我们可以认为这是文章的指纹码，再和其他的文章指纹码对比，一致则说明文章重复。但是这种方式是完全一致则是重复的，如果文章只是多了几个标点符号，那仍旧被认为是重复的，这种方式并不合理。
+
+ **BloomFilter**
+
+这种方式就是我们之前对url进行去重的方式，使用在这里的话，也是对文章进行计算得到一个数，再进行对比，缺点和方法1是一样的，如果只有一点点不一样，也会认为不重复，这种方式不合理。
+
+ **KMP算法**
+
+KMP算法是一种改进的字符串匹配算法。KMP算法的关键是利用匹配失败后的信息，尽量减少模式串与主串的匹配次数以达到快速匹配的目的。能够找到两个文章有哪些是一样的，哪些不一样。
+
+这种方式能够解决前面两个方式的“只要一点不一样就是不重复”的问题。但是它的时空复杂度太高了，不适合大数据量的重复比对。
+
+ 还有一些其他的去重方式：最长公共子串、后缀数组、字典树、DFA等等，但是这些方式的空复杂度并不适合数据量较大的工业应用场景。我们需要找到一款性能高速度快，能够进行相似度对比的去重方案
+
+Google 的 simhash 算法产生的签名，可以满足要求。
+
+## 5.2 SimHash
+
+这里仅做介绍
+
+> simhash是由 Charikar 在2002年提出来的，为了便于理解尽量不使用数学公式，分为这几步：
+>
+> **1、分词**，把需要判断文本分词形成这个文章的特征单词。
+>
+> **2、hash**，通过hash算法把每个词变成hash值，比如“美国”通过hash算法计算为 100101,“51区”通过hash算法计算为 101011。这样我们的字符串就变成了一串串数字。
+>
+> **3、加权**，通过 2步骤的hash生成结果，需要按照单词的权重形成加权数字串，“美国”的hash值为“100101”，通过加权计算为“4 -4 -4 4 -4 4”
+>
+> “51区”计算为“ 5 -5 5 -5 5 5”。
+>
+> **4、合并**，把上面各个单词算出来的序列值累加，变成只有一个序列串。“美国”的“4 -4 -4 4 -4 4”，“51区”的“ 5 -5 5 -5 5 5”把每一位进行累加，“4+5 -4+-5 -4+5 4+-5 -4+5 4+5”  ->  “9 -9 1 -1 1 9”
+>
+> **5、降维**，把算出来的“9 -9 1 -1 1 9”变成 0 1 串，形成最终的simhash签名。
+>
+> 我们把库里的文本都转换为simhash签名，并转换为long类型存储，空间大大减少。现在我们虽然解决了空间，但是如何计算两个simhash的相似度呢？
+>
+>  我们通过海明距离（Hamming distance）就可以计算出两个simhash到底相似不相似。两个simhash对应二进制（01串）取值不同的数量称为这两个simhash的海明距离。举例如下： 10101 和 00110 从第一位开始依次有第一位、第四、第五位不同，则海明距离为3。对于二进制字符串的a和b，海明距离为等于在a XOR b运算结果中1的个数（普遍算法）。
+
+# 六、代理
+
+有些网站不允许爬虫进行数据爬取，因为会加大服务器的压力。其中一种最有效的方式是通过ip+时间进行鉴别，因为正常人不可能短时间开启太多的页面，发起太多的请求。
+
+我们使用的WebMagic可以很方便的设置爬取数据的时间。但是这样会大大降低我们爬取数据的效率，如果不小心ip被禁了，会让我们无法爬去数据，那么我们就有必要使用代理服务器来爬取数据.
+
+## 6.1 代理服务器
+
+代理（英语：Proxy），也称网络代理，是一种特殊的网络服务，允许一个网络终端（一般为客户端）通过这个服务与另一个网络终端（一般为服务器）进行非直接的连接。
+
+提供代理服务的电脑系统或其它类型的网络终端称为代理服务器（英文：Proxy Server）。一个完整的代理请求过程为：客户端首先与代理服务器创建连接，接着根据代理服务器所使用的代理协议，请求对目标服务器创建连接、或者获得目标服务器的指定资源。
+
+## 6.2 使用代理
+
+WebMagic使用的代理APIProxyProvider。因为相对于Site的“配置”，ProxyProvider定位更多是一个“组件”，所以代理不再从Site设置，而是由HttpClientDownloader设置。
+
+| **API**                                                      | **说明** |
+| ------------------------------------------------------------ | -------- |
+| HttpClientDownloader.setProxyProvider(ProxyProvider  proxyProvider) | 设置代理 |
+
+ProxyProvider有一个默认实现：SimpleProxyProvider。它是一个基于简单Round-Robin的、没有失败检查的ProxyProvider。可以配置任意个候选代理，每次会按顺序挑选一个代理使用。它适合用在自己搭建的比较稳定的代理的场景。
+
+如果需要根据实际使用情况对代理服务器进行管理（例如校验是否可用，定期清理、添加代理服务器等），只需要自己实现APIProxyProvider即可。
+
+```java
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import us.codecraft.webmagic.Page;
+import us.codecraft.webmagic.Site;
+import us.codecraft.webmagic.Spider;
+import us.codecraft.webmagic.downloader.HttpClientDownloader;
+import us.codecraft.webmagic.processor.PageProcessor;
+import us.codecraft.webmagic.proxy.Proxy;
+import us.codecraft.webmagic.proxy.SimpleProxyProvider;
+
+@Component
+public class ProxyTest implements PageProcessor {
+        
+        @Scheduled(fixedDelay = 10000)
+        public void testProxy() {
+            HttpClientDownloader httpClientDownloader = new HttpClientDownloader();
+            httpClientDownloader.setProxyProvider(SimpleProxyProvider.from(new Proxy("39.137.77.68",80)));
+            
+            Spider.create(new ProxyTest())
+                    .addUrl("xxx")//设置请求地址
+                    .setDownloader(httpClientDownloader)
+                    .run();
+        }
+        
+        @Override
+        public void process(Page page) {
+                //打印获取到的结果以测试代理服务器是否生效
+                System.out.println(page.getHtml());
+        }
+        
+        private Site site = new Site();
+        @Override
+        public Site getSite() {
+        return site;
+        }
+}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+```
 
