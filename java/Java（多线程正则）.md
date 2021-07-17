@@ -144,9 +144,7 @@ public class test implements Callable<Integer> {
 
 ### 创建线程三种方式对比
 
-采用实现Runnable、Callable接口的方式创建多线程——
-
-线程类只是实现了Runnable接口或Callable接口，还可以继承其他类。
+采用实现Runnable、Callable接口的方式创建多线程——线程类只是实现了Runnable接口或Callable接口，还可以继承其他类。
 
 在这种方式下，多个线程可以共享同一个target对象，所以非常适合多个相同线程来处理同一份资源的情况，从而可以将CPU、代码和数据分开，形成清晰的模型，较好地体现了面向对象的思想。
 
@@ -714,7 +712,8 @@ public class Account{
                     e.printStackTrace();
                 }
                 //修改余额
-                account.setBalance(account.getBalance()-drawAmount);
+                balance-=drawAmount;
+                //account.setBalance(account.getBalance()-drawAmount);
                 System.out.println("\t余额为："+account.getBalance());    
             }
             else{
@@ -1673,10 +1672,6 @@ tryAcquire()除了重入条件（当前线程为获取了写锁的线程）之�
 1. sleep是属于Thread类中的，而wait方法是属于Object类中的
 2. sleep方法线程不会释放对象锁
 3. 调用wait方法时，线程会放弃对象锁，进入等待锁定池，只有针对此对象调用notify方法后本线程才进入对象锁定池准备获取对象所进入运行状态
-
-
-
-
 
 # 正则表达式
 
