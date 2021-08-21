@@ -2,21 +2,124 @@
 
 Mybatis是持久层框架类似于Hibernate的orm持久层框架
 
-### 1.JDBC访问数据库存在的问题
+## 一.自定义持久层框架
 
-频繁创建和打开、关闭数据链接，太消耗资源
+### 1.1 分析JDBC问题
 
-Sql语句存在硬编码，不利于维护
+~~~java
+public static void main(String[] args) {
+        Connection connection = null;
+        PreparedStatement preparedStatement = null;
+        ResultSet resultSet =null;
+        try{
+            //加载数据库驱动
+            Class.forName("com.mysql.cj.jdbc.Driver");
+            //通过驱动管理类获取数据库连接
+            connection= DriverManager.getConnection("jdbc:mysql://127.0.0.1:3306/vuetest?useUnicode=true&characterEncoding=UTF8&useSSL=false&serverTimezone=Asia/Shanghai","root","manager");
+            //定义sql语句，？表示占位符
+            String sql = "select * from user where username =?";
+            //获取预处理statement
+            preparedStatement = connection.prepareStatement(sql);
+            //设置参数，第一个参数为sql语句中参数的序号，第二个参数设置为参数值
+            preparedStatement.setString(1,"张老师");
+            //发出sql执行请求，查询出结果集
+            resultSet = preparedStatement.executeQuery();
+            while (resultSet.next()){
+                int id = resultSet.getInt("id");
+                String username =resultSet.getString("username");
+                System.out.println("id:"+id+" username: "+username);
+            }
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            if (resultSet != null){
+                try {
+                    resultSet.close();
+                }catch (SQLException e){
+                    e.printStackTrace();
+                }
+            }
+            if (preparedStatement != null){
+                try {
+                    preparedStatement.close();
+                }catch (SQLException e){
+                    e.printStackTrace();
+                }
+            }
+            if (connection != null){
+                try {
+                    connection.close();
+                }catch (SQLException e){
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+~~~
 
-Sql参数设置硬编码，不利于维护
+1. 数据库配置信息存在硬编码问题，频繁创建和打开、关闭数据链接，太消耗资源
+2. Sql语句存在硬编码，不利于维护,实际使用中sql变化较大，sql变动需要更改java代码
+3. Sql参数设置硬编码（主要是使用prepareStatement向占有位符号传参数存在硬编码），因为sql语句的where条件不一定，所以修改sql还需要修改代码，不利于维护
+4. 结果集获取与遍历复杂，存在硬编码，sql变化导致解析代码发生变化，不利于维护，如果将数据库记录封装成一个pojo对象解析比较方便。
 
-结果集获取与遍历复杂，存在硬编码，不利于维护，期望查询后返回一个java对象
+### 1.2 问题解决思路
 
-### 2.Mybatis介绍
+1. 使用数据库连接池初始化连接资源
+2. 使用配置文件解决硬编码问题
+3. 使用反射、内省等底层技术，自动将实体与表进行属性域字段的自动映射。
+
+### 1.3 自定义框架设计
+
+**使用端**：（项目）引入自定义持久层框架的jar包
+
+- 提供两部分配置信息：数据库配置信息、sql配置信息：包括sql语句、参数类型、返回值类型
+- 使用配置文件来提供这两部分配置信息
+  - sqlMapConfig.xml：存放数据库配置信息,存放mapper.xml的全路径
+  - mapper.xml：存放sql配置信息
+
+**框架端**：（工程，自定义持久层框架本身）本质就是对JDBC代码进行封装
+
+1. 加载配置文件：根据配置文件路径，加载配置文件成字节输入流，存储在内存中
+
+   创建Resource类 方法:InputStream getResourceAsSteam(String path)
+   
+2. 创建两个JavaBean：（容器对象）：存放对配置文件解析出来的内容
+
+   Configuration：核心配置类，存放sqlMapConfig.xml解析出来的内容
+
+   MapperStatement：映射配置类，存放mapper.xml解析出来的内容
+
+3. 解析配置文件： dom4j
+
+   创建类：SqlSessionFactoryBuild 方法： build(InputStream in){
+
+   第一：使用dom4j解析配置文件，将解析出来的内容封装到容器对象中
+
+   第二：创建SqlSessionFactory对象：生产sqlSession会话对象（工厂模式）}\
+   
+4. 创建SqlSessionFactory接口以及实现类DefaultSqlSessionFactory
+
+   第一：openSessioin():生产sqlSession
+
+5. 创建SqlSession接口以及实现类DefaultSession
+
+   定义对数据库的curd操作：selectList()、selectOne()、update()、delete()
+
+6. 创建Executor接口及实现类SimpleExecutor实现类
+
+   query(Configuration,MapperStatement,Object... params):执行JDBC代码
+
+### 1.4 自定义框架实现
+
+
+
+### 1.5 自定义框架优化
+
+## 2.Mybatis介绍
 
 前身是apache下的开源项目，2010有aspache software foundation 迁移到了google code ，并且改名为Mybatis，2013年迁移到github。
 
-### 3.Mybatis入门
+## 3.Mybatis入门
 
 工程搭建
 
@@ -288,7 +391,7 @@ Mybatis架构图
 
 ![img](https://img2018.cnblogs.com/blog/1559799/201812/1559799-20181220102045987-1587141593.png)
 
-### 4.Mybatis Dao 开发方式
+## 4.Mybatis Dao 开发方式
 
 Dao需求
 
@@ -298,7 +401,7 @@ Dao需求
 >
 > 添加用户
 
-#### 4.1原始Dao开发方法
+### 4.1原始Dao开发方法
 
 SqlSession的使用范围
 
@@ -360,7 +463,7 @@ public class UserDaoTest{
 }
 ~~~
 
-#### 4.2接口动态代理开发方法
+### 4.2接口动态代理开发方法
 
 1.动态代理开发规则
 
@@ -399,7 +502,7 @@ public class UserMapperTest{
 }
 ~~~
 
-#### 4.3注解开发
+### 4.3注解开发
 
 注解开发不易于维护一般适用于简单的项目
 
@@ -453,9 +556,9 @@ public void delete(){
 
 PS：执行dml语句（CURD）一定到提交事务session.commit();
 
-### 5.SqlMapConfig.xml
+## 5.SqlMapConfig.xml
 
-#### 5.1配置内容
+### 5.1 配置内容
 
 SqlMapConfig.xml中配置的内容和顺序如下：
 
@@ -481,7 +584,7 @@ SqlMapConfig.xml中配置的内容和顺序如下：
 >
 > mappers（映射器）
 
-#### 5.2properties（属性）
+### 5.2 properties（属性）
 
 ```xml
 <!-- 先加载内部标签，在加载外部文件，若外部文件与内部名称相同时，会将外部的值替换掉内部的值 -->
@@ -491,7 +594,7 @@ SqlMapConfig.xml中配置的内容和顺序如下：
 </properties>
 ```
 
-#### 5.3typeAliases
+### 5.3 typeAliases
 
 Mybatis支持的别名
 
@@ -550,7 +653,7 @@ Mybatis支持的别名
 </typeAliases>
 ```
 
-#### 5.4mappers
+### 5.4 mappers
 
 ```xml
 <mapper>
@@ -570,11 +673,9 @@ Mybatis支持的别名
 </mapper>
 ```
 
-## 二
+## 6.输入映射和输出映射
 
-### 1.输入映射和输出映射
-
-#### 1.1parameterType(输入类型)
+### 6.1 parameterType(输入类型)
 
 传递简单类型
 
@@ -607,18 +708,18 @@ Mybatis支持的别名
 > public class QueryVo {
 > 	
 > 	private User user;
-> 	
+> 						
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 	
+> 						
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
 >
 > }
 
-#### 1.2resultType(输出类型)
+### 6.2 resultType(输出类型)
 
 输出简单类型
 
@@ -636,7 +737,7 @@ Mybatis支持的别名
 
 输出pojo列表
 
-#### 1.3resultMap
+### 6.3 resultMap
 
 > resulrType可以指定将查询结果映射为pojo，但需要pojo的属性名和sql查询的列名一致方可映射成功。
 >
@@ -666,7 +767,7 @@ Mybatis支持的别名
 >
 > 
 
-### 2.动态sql
+## 7.动态sql
 
 通过mybatis的各种标签方法实现动态拼接sql
 
@@ -674,7 +775,7 @@ Mybatis支持的别名
 
 select id ,username,sex,address  from usertable where sex='男'  and username like '%张%'
 
-#### 2.1 if标签
+### 7.1 if标签
 
 ```xml
 <select id="getUserByPojo" parameterType="User" resultType="User">
@@ -685,7 +786,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 	</select>
 ```
 
-#### 2.2 Where标签
+### 7.2 Where标签
 
 ```xml
 <select id="getUserByPojo" parameterType="User" resultType="User">
@@ -698,7 +799,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 	</select>
 ```
 
-#### 2.3 sql片段
+### 7.3 sql片段
 
 ```xml
 <sql id="user_sql">
@@ -716,7 +817,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 </select>
 ```
 
-#### 2.4 foreach标签
+### 7.4 foreach标签
 
 ```xml
 <select id="getUserByIds" parameterType="QueryVo" resultType="User">
@@ -739,9 +840,9 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 	</select>
 ```
 
-### 3.关联查询
+## 8.关联查询
 
-#### 3.1商品订单数据模型
+### 8.1 商品订单数据模型
 
 > 订单表									用户表
 >
@@ -749,7 +850,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 >
 > 一对多：
 
-#### 3.2一对一查询
+### 8.2 一对一查询
 
 resultType（必须有数据库关系一样的pojo类）
 
@@ -791,7 +892,7 @@ OrderMapper.xml
 	</select>
 ```
 
-#### 3.3一对多查询
+### 8.3 一对多查询
 
 sql语句
 
@@ -819,9 +920,9 @@ sql语句
 	</select>
 ```
 
-### 4.Mybatis整合Spring
+## 9.Mybatis整合Spring
 
-#### 4.1整合思路
+### 9.1 整合思路
 
 > 1.SqlSessionFactory对象应放到spring容器中作为单例存在
 >
@@ -831,7 +932,7 @@ sql语句
 >
 > 4.数据库的连接以及数据库连接池事务管理都交给spring来完成
 
-#### 4.2整合步骤
+### 9.2 整合步骤
 
 1.创建一个java工程
 
@@ -899,7 +1000,7 @@ sql语句
 
 6.复制log4j.properties配置文件到工程
 
-#### 4.3 开发步骤
+### 9.3 开发步骤
 
 编写pojo类
 
@@ -938,13 +1039,13 @@ public interface BaseDictMapper {
 
 其他层如service或controller请自己补充
 
-### 5.Mybatis逆向工程
+## 10.Mybatis逆向工程
 
 下载逆向工程https://github.com/mybatis/generator/releases/tag/mybatis-generator-1.3.2
 
 向Eclipse中导入此项目
 
-#### 使用步骤-代码方式
+### 使用步骤-代码方式
 
 导入jar包:
 
@@ -1074,7 +1175,7 @@ public class GeneratorSqlmap {
 
 **Mybatis自动生成的po及mapper.java文件不是内容而是直接覆盖没有此问题。**
 
-#### 使用步骤-maven
+### 使用步骤-maven
 
 pom.xml
 
@@ -1150,4 +1251,4 @@ pom.xml
 
 generatorConfig.xml配置文件
 
-运行java代码
+运行java代码  
