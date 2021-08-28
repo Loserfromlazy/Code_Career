@@ -87,7 +87,7 @@ public static void main(String[] args) {
 
    Configuration：核心配置类，存放sqlMapConfig.xml解析出来的内容
 
-   MapperStatement：映射配置类，存放mapper.xml解析出来的内容
+   MappedStatement：映射配置类，存放mapped.xml解析出来的内容
 
 3. 解析配置文件： dom4j
 
@@ -708,11 +708,11 @@ Mybatis支持的别名
 > public class QueryVo {
 > 	
 > 	private User user;
-> 						
+> 							
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 						
+> 							
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
