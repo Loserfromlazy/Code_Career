@@ -87,7 +87,7 @@ public static void main(String[] args) {
 
    Configuration：核心配置类，存放sqlMapConfig.xml解析出来的内容
 
-   MapperStatement：映射配置类，存放mapper.xml解析出来的内容
+   MappedStatement：映射配置类，存放mapped.xml解析出来的内容
 
 3. 解析配置文件： dom4j
 
@@ -95,7 +95,7 @@ public static void main(String[] args) {
 
    第一：使用dom4j解析配置文件，将解析出来的内容封装到容器对象中
 
-   第二：创建SqlSessionFactory对象：生产sqlSession会话对象（工厂模式）}\
+   第二：创建SqlSessionFactory对象：生产sqlSession会话对象（工厂模式）}
    
 4. 创建SqlSessionFactory接口以及实现类DefaultSqlSessionFactory
 
@@ -111,7 +111,19 @@ public static void main(String[] args) {
 
 ### 1.4 自定义框架实现
 
+1. 加载配置文件
 
+   ~~~java
+   ~~~
+
+2. 创建两个JavaBean：存放对配置文件解析出来的内容
+
+   ~~~java
+   ~~~
+
+   
+
+3. 解析配置文件
 
 ### 1.5 自定义框架优化
 
@@ -708,11 +720,11 @@ Mybatis支持的别名
 > public class QueryVo {
 > 	
 > 	private User user;
-> 						
+> 							
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 						
+> 							
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
