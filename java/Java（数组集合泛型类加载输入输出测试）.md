@@ -2351,6 +2351,13 @@ setXxx(Object obj , Xxx val)：将obj对象的该Field设置成val值。此处�
 
 使用这两个方法可以随意地访问指定对象的所有属性，包括private访问控制的属性。
 
+~~~
+Field [] getFields() 返回所有公共成员变量对象的数组
+Field [] getDeclaredFields() 返回所有成员变量对象的数组
+Field getField(String name) 返回单个公共成员变量对象
+Field getDeclaredField(String name)返回单个成员变量对象
+~~~
+
 ~~~java
 public class test {
     public static void main(String[] args) throws Exception{
