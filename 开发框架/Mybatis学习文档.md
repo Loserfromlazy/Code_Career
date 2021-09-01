@@ -1,4 +1,5 @@
 # Mybatis学习文档
+更新于2021/09/01 22：32
 Mybatis是持久层框架类似于Hibernate的orm持久层框架
 
 ## 一.自定义持久层框架
@@ -75,8 +76,8 @@ public static void main(String[] args) {
 
 - 提供两部分配置信息：数据库配置信息、sql配置信息：包括sql语句、参数类型、返回值类型
 - 使用配置文件来提供这两部分配置信息
-  - sqlMapConfig.xml：存放数据库配置信息,存放mapper.xml的全路径
-  - mapper.xml：存放sql配置信息
+   - sqlMapConfig.xml：存放数据库配置信息,存放mapper.xml的全路径
+   - mapper.xml：存放sql配置信息
 
 **框架端**：（工程，自定义持久层框架本身）本质就是对JDBC代码进行封装
 
@@ -663,11 +664,11 @@ SqlMapConfig.xml中配置的内容和顺序如下：
 >
 > environments（环境集合属性对象）
 >
-> 	environment（环境子属性对象）
-> 	
-> 		transactionManager（事务管理）
-> 	
-> 		dataSource（数据源）
+> ​	environment（环境子属性对象）
+>
+> ​		transactionManager（事务管理）
+>
+> ​		dataSource（数据源）
 >
 > mappers（映射器）
 
@@ -816,7 +817,7 @@ Mybatis支持的别名
 >
 > ```xml
 > <select id="queryUserCount" resultType="int">
-> Select count(*)from `user`
+>  Select count(*)from `user`
 > </select>
 > ```
 
@@ -852,7 +853,7 @@ Mybatis支持的别名
 > 	</select>
 > ```
 >
-> 
+>
 
 ## 六.动态sql
 
@@ -943,9 +944,9 @@ resultType（必须有数据库关系一样的pojo类）
 
 > 1.建立OrderUser pojo类继承Order类
 >
-> 2.SQL语句：select o.id ,o.user_id,o.number,o.createtime,o.note,u.username,u.address 
+> 2.SQL语句：select o.id ,o.user_id,o.number,o.createtime,o.note,u.username,u.address
 >
-> 					from ordertable o left join usertable u on o.user_id=u.id
+> ​					from ordertable o left join usertable u on o.user_id=u.id
 >
 > 3.编写OrderMapper.xml
 >
