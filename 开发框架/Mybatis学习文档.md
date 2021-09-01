@@ -1,5 +1,4 @@
 # Mybatis学习文档
-
 Mybatis是持久层框架类似于Hibernate的orm持久层框架
 
 ## 一.自定义持久层框架
@@ -84,7 +83,7 @@ public static void main(String[] args) {
 1. 加载配置文件：根据配置文件路径，加载配置文件成字节输入流，存储在内存中
 
    创建Resource类 方法:InputStream getResourceAsSteam(String path)
-   
+
 2. 创建两个JavaBean：（容器对象）：存放对配置文件解析出来的内容
 
    Configuration：核心配置类，存放sqlMapConfig.xml解析出来的内容
@@ -98,7 +97,7 @@ public static void main(String[] args) {
    第一：使用dom4j解析配置文件，将解析出来的内容封装到容器对象中
 
    第二：创建SqlSessionFactory对象：生产sqlSession会话对象（工厂模式）}
-   
+
 4. 创建SqlSessionFactory接口以及实现类DefaultSqlSessionFactory
 
    第一：openSessioin():生产sqlSession
@@ -556,10 +555,10 @@ public class UserDaoTest{
 1.动态代理开发规则
 
 > 动态代理开发规则：
->   	1.namespace必须是接口的全路径名
->   	2.接口的方法名必须与Sql id一致
->   	3.接口的入参必须与parameterType类型一致
->   	4.接口的返回值必须与resultType类型一致
+> 	1.namespace必须是接口的全路径名
+> 	2.接口的方法名必须与Sql id一致
+> 	3.接口的入参必须与parameterType类型一致
+> 	4.接口的返回值必须与resultType类型一致
 
 2.动态代理开发步骤
 
@@ -664,11 +663,11 @@ SqlMapConfig.xml中配置的内容和顺序如下：
 >
 > environments（环境集合属性对象）
 >
-> ​	environment（环境子属性对象）
->
-> ​		transactionManager（事务管理）
->
-> ​		dataSource（数据源）
+> 	environment（环境子属性对象）
+> 	
+> 		transactionManager（事务管理）
+> 	
+> 		dataSource（数据源）
 >
 > mappers（映射器）
 
@@ -794,13 +793,13 @@ Mybatis支持的别名
 > QueryVo.java:
 >
 > public class QueryVo {
-> 	
+>
 > 	private User user;
-> 								
+> 	
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 								
+> 	
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
@@ -817,7 +816,7 @@ Mybatis支持的别名
 >
 > ```xml
 > <select id="queryUserCount" resultType="int">
->     Select count(*)from `user`
+> Select count(*)from `user`
 > </select>
 > ```
 
@@ -946,7 +945,7 @@ resultType（必须有数据库关系一样的pojo类）
 >
 > 2.SQL语句：select o.id ,o.user_id,o.number,o.createtime,o.note,u.username,u.address 
 >
-> ​					from ordertable o left join usertable u on o.user_id=u.id
+> 					from ordertable o left join usertable u on o.user_id=u.id
 >
 > 3.编写OrderMapper.xml
 >
