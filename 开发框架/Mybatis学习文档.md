@@ -111,21 +111,93 @@ public static void main(String[] args) {
 
 ### 1.4 自定义框架实现
 
-1. 加载配置文件
+具体代码见我的[GitHub](https://github.com/Loserfromlazy/My_Orm)
 
-   ~~~java
-   ~~~
-
-2. 创建两个JavaBean：存放对配置文件解析出来的内容
-
-   ~~~java
-   ~~~
-
-   
-
-3. 解析配置文件
+测试使用代码见README.md
 
 ### 1.5 自定义框架优化
+
+在业务中使用代码如下：
+
+~~~java
+public interface UserDao {
+
+    //查询所有用户
+    List<User> findAll() throws PropertyVetoException, DocumentException, SQLException, IntrospectionException, NoSuchFieldException, ClassNotFoundException, InvocationTargetException, IllegalAccessException, InstantiationException;
+    //根据条件进行用户查询
+    User findByCondition(User user) throws PropertyVetoException, DocumentException, SQLException, IntrospectionException, NoSuchFieldException, ClassNotFoundException, InvocationTargetException, IllegalAccessException, InstantiationException;
+}
+
+~~~
+
+~~~java
+public class UserDaoImpl implements UserDao {
+
+    @Override
+    public List<User> findAll() throws PropertyVetoException, DocumentException, SQLException, IntrospectionException, NoSuchFieldException, ClassNotFoundException, InvocationTargetException, IllegalAccessException, InstantiationException {
+        InputStream resourceAsStream = Resources.getResourceAsStream("sqlMapConfig.xml");
+        SqlSessionFactory sqlSessionFactory = new SqlSessionFactoryBuilder().build(resourceAsStream);
+        SqlSession sqlSession = sqlSessionFactory.openSqlSession();
+        List<User> selectList = sqlSession.selectList("user.selectList");
+        return selectList;
+    }
+
+    @Override
+    public User findByCondition(User user) throws PropertyVetoException, DocumentException, SQLException, IntrospectionException, NoSuchFieldException, ClassNotFoundException, InvocationTargetException, IllegalAccessException, InstantiationException {
+        InputStream resourceAsStream = Resources.getResourceAsStream("sqlMapConfig.xml");
+        SqlSessionFactory sqlSessionFactory = new SqlSessionFactoryBuilder().build(resourceAsStream);
+        SqlSession sqlSession = sqlSessionFactory.openSqlSession();
+        User userSelect = sqlSession.selectOne("user.selectOne",user);
+        return userSelect;
+    }
+}
+~~~
+
+以上代码的问题分析
+
+1. Dao层使用自定义持久层框架，存在代码重复，整个操作过程模板重复（加载配置文件、创建sqlSessionFactory\生产sqlSession）
+2. statementId在Dao层存在硬编码问题
+
+解决思路：使用代理模式生成Dao层代理实现类。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/spring/mybatis1.png)
+
+对invoke方法的编写：invoke方法：o：当前代理对象的引用，method：当前被调用方法的引用，objects：传递的参数
+
+~~~java
+/**
+     * 为dao接口实现代理实现类
+     * @param mapperClass
+     * @param <T>
+     * @return
+     */
+    @Override
+    public <T> T getMapper(Class<?> mapperClass) {
+        //使用JDK动态代理为dao生成代理对象，并返回
+        Object proxyInstance = Proxy.newProxyInstance(DefaultSqlSession.class.getClassLoader(), new Class[]{mapperClass}, new InvocationHandler() {
+            @Override
+            public Object invoke(Object o, Method method, Object[] objects) throws Throwable {
+                //底层执行jdbc方法 根据不同情况来调用selectList后者selectOne
+                //准备参数 1.statementId：sql语句唯一标识
+                String methodName = method.getName();//方法名 eg:findAll
+                String className = method.getDeclaringClass().getName();//接口全限定名
+                String statementId = className+"."+methodName;
+                //参数 2.params :objects
+                //获取被调用方法的返回值类型
+                Type genericReturnType = method.getGenericReturnType();
+                //判断是否进行了泛型类型参数化 即返回值是否有泛型
+                if (genericReturnType instanceof ParameterizedType){
+                    List<Object> objectList = selectList(statementId, objects);
+                    return objectList;
+                }else {
+                    Object objectOne = selectOne(statementId, objects);
+                    return objectOne;
+                }
+            }
+        });
+        return (T) proxyInstance;
+    }
+~~~
 
 ## 2.Mybatis介绍
 
@@ -720,11 +792,11 @@ Mybatis支持的别名
 > public class QueryVo {
 > 	
 > 	private User user;
-> 							
+> 								
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 							
+> 								
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
