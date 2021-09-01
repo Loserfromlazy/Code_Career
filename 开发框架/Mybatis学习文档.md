@@ -201,13 +201,11 @@ public class UserDaoImpl implements UserDao {
     }
 ~~~
 
-## 二.Mybatis介绍与入门
+## 2.Mybatis介绍
 
 前身是apache下的开源项目，2010有aspache software foundation 迁移到了google code ，并且改名为Mybatis，2013年迁移到github。
 
-mybatis是一款基于ORM的半自动轻量级持久层框架。可以自己优化核心sql，sql与java代码分开。
-
-### 2.1Mybatis入门
+## 3.Mybatis入门
 
 工程搭建
 
@@ -479,7 +477,7 @@ Mybatis架构图
 
 ![img](https://img2018.cnblogs.com/blog/1559799/201812/1559799-20181220102045987-1587141593.png)
 
-## 三.Mybatis Dao 开发方式
+## 4.Mybatis Dao 开发方式
 
 Dao需求
 
@@ -489,7 +487,7 @@ Dao需求
 >
 > 添加用户
 
-### 3.1原始Dao开发方法
+### 4.1原始Dao开发方法
 
 SqlSession的使用范围
 
@@ -551,7 +549,7 @@ public class UserDaoTest{
 }
 ~~~
 
-### 3.2接口动态代理开发方法
+### 4.2接口动态代理开发方法
 
 1.动态代理开发规则
 
@@ -590,7 +588,7 @@ public class UserMapperTest{
 }
 ~~~
 
-### 3.3注解开发
+### 4.3注解开发
 
 注解开发不易于维护一般适用于简单的项目
 
@@ -642,11 +640,11 @@ public void delete(){
 }
 ~~~
 
-PS：执行dml语句（CUD）一定到提交事务session.commit();
+PS：执行dml语句（CURD）一定到提交事务session.commit();
 
-## 四.SqlMapConfig.xml
+## 5.SqlMapConfig.xml
 
-### 4.1 配置内容
+### 5.1 配置内容
 
 SqlMapConfig.xml中配置的内容和顺序如下：
 
@@ -672,7 +670,7 @@ SqlMapConfig.xml中配置的内容和顺序如下：
 >
 > mappers（映射器）
 
-### 4.2 properties（属性）
+### 5.2 properties（属性）
 
 ```xml
 <!-- 先加载内部标签，在加载外部文件，若外部文件与内部名称相同时，会将外部的值替换掉内部的值 -->
@@ -682,7 +680,7 @@ SqlMapConfig.xml中配置的内容和顺序如下：
 </properties>
 ```
 
-### 4.3 typeAliases
+### 5.3 typeAliases
 
 Mybatis支持的别名
 
@@ -741,7 +739,7 @@ Mybatis支持的别名
 </typeAliases>
 ```
 
-### 4.4 mappers
+### 5.4 mappers
 
 ```xml
 <mapper>
@@ -761,9 +759,9 @@ Mybatis支持的别名
 </mapper>
 ```
 
-## 五.输入映射和输出映射
+## 6.输入映射和输出映射
 
-### 5.1 parameterType(输入类型)
+### 6.1 parameterType(输入类型)
 
 传递简单类型
 
@@ -796,18 +794,18 @@ Mybatis支持的别名
 > public class QueryVo {
 > 	
 > 	private User user;
-> 								
+> 							
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 								
+> 							
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
 >
 > }
 
-### 5.2 resultType(输出类型)
+### 6.2 resultType(输出类型)
 
 输出简单类型
 
@@ -825,7 +823,7 @@ Mybatis支持的别名
 
 输出pojo列表
 
-### 5.3 resultMap
+### 6.3 resultMap
 
 > resulrType可以指定将查询结果映射为pojo，但需要pojo的属性名和sql查询的列名一致方可映射成功。
 >
@@ -855,7 +853,7 @@ Mybatis支持的别名
 >
 > 
 
-## 六.动态sql
+## 7.动态sql
 
 通过mybatis的各种标签方法实现动态拼接sql
 
@@ -863,7 +861,7 @@ Mybatis支持的别名
 
 select id ,username,sex,address  from usertable where sex='男'  and username like '%张%'
 
-### 6.1 if标签
+### 7.1 if标签
 
 ```xml
 <select id="getUserByPojo" parameterType="User" resultType="User">
@@ -874,7 +872,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 	</select>
 ```
 
-### 6.2 Where标签
+### 7.2 Where标签
 
 ```xml
 <select id="getUserByPojo" parameterType="User" resultType="User">
@@ -887,7 +885,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 	</select>
 ```
 
-### 6.3 sql片段
+### 7.3 sql片段
 
 ```xml
 <sql id="user_sql">
@@ -905,7 +903,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 </select>
 ```
 
-### 6.4 foreach标签
+### 7.4 foreach标签
 
 ```xml
 <select id="getUserByIds" parameterType="QueryVo" resultType="User">
@@ -928,9 +926,9 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 	</select>
 ```
 
-## 七.关联查询
+## 8.关联查询
 
-### 7.1 商品订单数据模型
+### 8.1 商品订单数据模型
 
 > 订单表									用户表
 >
@@ -938,7 +936,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 >
 > 一对多：
 
-### 7.2 一对一查询
+### 8.2 一对一查询
 
 resultType（必须有数据库关系一样的pojo类）
 
@@ -980,7 +978,7 @@ OrderMapper.xml
 	</select>
 ```
 
-### 7.3 一对多查询
+### 8.3 一对多查询
 
 sql语句
 
@@ -1008,13 +1006,132 @@ sql语句
 	</select>
 ```
 
-## 八.Mybatis逆向工程
+## 9.Mybatis整合Spring
+
+### 9.1 整合思路
+
+> 1.SqlSessionFactory对象应放到spring容器中作为单例存在
+>
+> 2.传统Dao的开发方式，应该从spring容器中获得sqlsession对象
+>
+> 3.Mapper代理形式中，应该从spring容器中直接获得mapper的代理对象
+>
+> 4.数据库的连接以及数据库连接池事务管理都交给spring来完成
+
+### 9.2 整合步骤
+
+1.创建一个java工程
+
+2.导入jar包mybatis-spring-x.x.x.jar以及其他相关jar包
+
+3.mybatis的配置文件sqlMapConfig.xml
+
+~~~xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE configuration PUBLIC "-//mybatis.org//DTD Config 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-config.dtd">
+<configuration>
+</configuration>
+~~~
+
+4.编写Spring的配置文件
+
+​	1）数据库连接及连接池
+
+​	2）sqlsessionFactory对象配置搭配spring容器中
+
+​	3）编写Spring的配置文件
+
+~~~xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:context="http://www.springframework.org/schema/context" xmlns:p="http://www.springframework.org/schema/p"
+	xmlns:aop="http://www.springframework.org/schema/aop" xmlns:tx="http://www.springframework.org/schema/tx"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.0.xsd
+	http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-4.0.xsd
+	http://www.springframework.org/schema/aop http://www.springframework.org/schema/aop/spring-aop-4.0.xsd http://www.springframework.org/schema/tx http://www.springframework.org/schema/tx/spring-tx-4.0.xsd
+	http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util-4.0.xsd">
+
+	<!-- 配置 读取properties文件 jdbc.properties -->
+	<context:property-placeholder location="classpath:jdbc.properties"/>
+
+	<!-- 配置 数据源 -->
+	<bean id="dataSource" class="com.alibaba.druid.pool.DruidDataSource">
+		<property name="driverClassName" value="${jdbc.driver}"/>
+		<property name="url" value="${jdbc.url}"/>
+		<property name="username" value="${jdbc.username}"/>
+		<property name="password" value="${jdbc.password}"/>
+	</bean>
+
+	<!-- 配置SqlSessionFactory -->
+	<bean class="org.mybatis.spring.SqlSessionFactoryBean">
+		<!-- 设置MyBatis核心配置文件 -->
+		<property name="configLocation" value="classpath:mybatis/SqlMapConfig.xml"/>
+		<!-- 设置数据源 -->
+		<property name="dataSource" ref="dataSource"/>
+		<!-- 别名包扫描 -->
+		<property name="typeAliasesPackage" value="com.yhr.crm.pojo"/>
+	</bean>
+
+	<!-- 配置Mapper扫描 -->
+	<bean class="org.mybatis.spring.mapper.MapperScannerConfigurer">
+		<!-- 设置Mapper扫描包 -->
+		<property name="basePackage" value="com.yhr.crm.mapper"/>
+	</bean>
+</beans>
+~~~
+
+5.复制jdbc.properties配置文件到工程
+
+6.复制log4j.properties配置文件到工程
+
+### 9.3 开发步骤
+
+编写pojo类
+
+编写dao层	编写mapper接口
+
+~~~java
+public interface BaseDictMapper {
+	List<BaseDict> getBaseDictByCode(String code);
+}
+
+~~~
+
+编写dao层	编写mapper映射文件
+
+~~~xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+ PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+ "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yhr.crm.mapper.BaseDictMapper">
+	<select id="getBaseDictByCode" parameterType="string" resultType="basedict">
+		SELECT 	dict_id, 
+				dict_type_code, 
+				dict_type_name, 
+				dict_item_name, 
+				dict_item_code, 
+				dict_sort, 
+				dict_enable, 
+				dict_memo 
+		FROM 
+		crm.base_dict 
+		WHERE dict_type_code = #{code }
+	</select>
+</mapper>
+~~~
+
+其他层如service或controller请自己补充
+
+## 10.Mybatis逆向工程
 
 下载逆向工程https://github.com/mybatis/generator/releases/tag/mybatis-generator-1.3.2
 
 向Eclipse中导入此项目
 
-### 8.1 使用步骤-代码方式
+### 使用步骤-代码方式
 
 导入jar包:
 
@@ -1144,7 +1261,7 @@ public class GeneratorSqlmap {
 
 **Mybatis自动生成的po及mapper.java文件不是内容而是直接覆盖没有此问题。**
 
-### 8.2 使用步骤-maven
+### 使用步骤-maven
 
 pom.xml
 
