@@ -796,11 +796,11 @@ Mybatis支持的别名
 > public class QueryVo {
 >
 > 	private User user;
-> 	
+> 		
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 	
+> 		
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
@@ -936,7 +936,7 @@ select id ,username,sex,address  from usertable where sex='男'  and username li
 >
 > 一对一：一个订单只有一个用户创建
 >
-> 一对多：
+> 一对多：一个用户有多个订单
 
 ### 7.2 一对一查询
 
@@ -1008,13 +1008,87 @@ sql语句
 	</select>
 ```
 
-## 八.Mybatis逆向工程
+## 八、Mybatis缓存
+
+缓存是内存中的数据，常常来自对数据库结果的保存，使用缓存，我们可以避免频繁的与数据库进行交互，提高响应速度。
+
+mybatis提供了对缓存的支持，分为一级缓存和二级缓存：
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/spring/mybatis4.jpg)
+
+一级缓存是sqlSession级别的缓存，在操作数据库时需要构造sqlSession对象，在对象中有一个数据结构HashMap用于存储缓存数据。不同的sqlSession之间的缓存数据区域（HashMap）是互不影响的。
+
+一级缓存（HashMap）：key：statementId,params,boundSql,rowBounds组成；value：查询出的对象
+
+二级缓存是mapper级别的缓存，多个sqlSession去操作同一个Mapper的SQL语句，多个sqlSessioin可以公用二级缓存，二级缓存是跨session的。
+
+### 8.1 一级缓存
+
+1. 在一个sqlSession中，对Product表根据Id进行两次查询
+
+   ~~~java
+       @Test
+       public void test1(){
+           //根据sqlSessionFactory产生session
+           SqlSession sqlSession = sqlSessionFactory.openSession();
+           ProductMapper productMapper = sqlSession.getMapper(ProductMapper.class);
+           //首先去一级缓存中查询：有：返回；没有：查询数据库，同时将查询出来的结果存到一级缓存中
+           Product product1 = productMapper.getProduct(1L);
+           System.out.println(product1);
+           //第二次查询，由于是同一个sqlSession，会在缓存中查询结果
+           //如果有，则直接从缓存中取出来，不和数据库交互
+           Product product2 = productMapper.getProduct(1L);
+           System.out.println(product2);
+           System.out.println(product1==product2);//两次地址值一样
+           sqlSession.close();
+       }
+   ~~~
+
+   ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/spring/mybatis2.jpg)
+
+2. 同样对user表进行两次查询，只不过两次查询之间进行了一次Update操作
+
+   ~~~java
+   	@Test
+   	public void test2(){
+   		//根据sqlSessionFactory产生session
+   		SqlSession sqlSession = sqlSessionFactory.openSession();
+   		ProductMapper productMapper = sqlSession.getMapper(ProductMapper.class);
+   		//第一次查询，发出sql语句，将查询的结果放入缓存中
+   		Product product1 = productMapper.getProduct(1L);
+   		System.out.println(product1);
+   		//更新库存数量 更新操作提交事务
+           //做增删改操作，并进行事务提交，就是刷新一级缓存
+           //也可以使用sqlSession.clearCache();手动刷新缓存
+   		productMapper.decreaseProduct(1L,50);
+   		sqlSession.commit();
+   		//第二次查询，由于同一个sqlSession.commit,会清空缓存信息
+   		Product product2 = productMapper.getProduct(1L);
+   		System.out.println(product2);
+           System.out.println(product1==product2);//两次地址值不一样
+   		sqlSession.close();
+   	}
+   ~~~
+
+   ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/spring/mybatis3.jpg)
+
+3. 总结
+
+   1. 第一次发起查询用户id为1的用户信息，先去找缓存中是否有id为1的用户信息，如果没有，从数据库中查询用户信息，得到用户信息，将用户信息存储到一级缓存中。
+   2. 如果中间sqlSession去执行commit操作，则会清空sqkSession中的一级缓存，目的是让缓存中的数据是最新的避免脏读。
+   3. 第二此查询id为1的用户信息，去缓存中查询，有则直接提取数据，提高效率
+
+**一级缓存源码分析与原理探究**
+
+
+
+## 九.Mybatis逆向工程
 
 下载逆向工程https://github.com/mybatis/generator/releases/tag/mybatis-generator-1.3.2
 
 向Eclipse中导入此项目
 
-### 8.1 使用步骤-代码方式
+### 9.1 使用步骤-代码方式
 
 导入jar包:
 
@@ -1144,7 +1218,7 @@ public class GeneratorSqlmap {
 
 **Mybatis自动生成的po及mapper.java文件不是内容而是直接覆盖没有此问题。**
 
-### 8.2 使用步骤-maven
+### 9.2 使用步骤-maven
 
 pom.xml
 
