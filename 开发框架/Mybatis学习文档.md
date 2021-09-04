@@ -796,11 +796,11 @@ Mybatis支持的别名
 > public class QueryVo {
 >
 > 	private User user;
-> 		
+> 			
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 		
+> 			
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
@@ -1078,7 +1078,259 @@ mybatis提供了对缓存的支持，分为一级缓存和二级缓存：
    2. 如果中间sqlSession去执行commit操作，则会清空sqkSession中的一级缓存，目的是让缓存中的数据是最新的避免脏读。
    3. 第二此查询id为1的用户信息，去缓存中查询，有则直接提取数据，提高效率
 
-**一级缓存源码分析与原理探究**
+### 8.2 一级缓存源码分析与原理探究
+
+源码探究思路：**探究源码请自己尝试，不要只看本文档的过程**
+
+提到一级缓存就离不开SqlSession，进入SqlSession接口的源码（如下），可以看到只有clearCache与缓存有关系，那么就从此方法入手
+
+```java
+/**
+ * Clears local session cache.
+ */
+void clearCache();
+```
+
+分析源码时，要看此类是谁，父类和子类又是谁
+
+进入SqlSession接口的DefaultSqlSession的实现类中的clearCache()方法：
+
+~~~java
+  @Override
+  public void clearCache() {
+    executor.clearLocalCache();
+  }
+~~~
+
+点击clearLocalCache()进入Executor接口，进入Executor接口下clearLocalCache()方法的实现类BaseExecutor的此方法
+
+```java
+@Override
+public void clearLocalCache() {
+  if (!closed) {
+    localCache.clear();
+    localOutputParameterCache.clear();
+  }
+}
+```
+
+点击clear方法，进入到PerpetualCache类的clear()方法
+
+```java
+@Override
+public void clear() {
+  cache.clear();
+}
+```
+
+分析了一圈，会发现流程会走到PerpetualCache类的clear()方法，点击cache，会发现cache就是一个HashMap，源码如下：
+
+```java
+private Map<Object, Object> cache = new HashMap<>();
+```
+
+所以cache.clear()也就是map.clear();也就是说缓存其实就是本地的map对象，每一个SqlSession都会存放一个map对象的引用。
+
+那么创建缓存的地方应该在哪里？由刚才的流程以及自定义持久层框架，可以大概推断缓存应该在sql的执行器也就是executor中创建，在BaseExecutor中会发现一个createCacheKey方法（源码如下）：
+
+```java
+@Override
+public CacheKey createCacheKey(MappedStatement ms, Object parameterObject, RowBounds rowBounds, BoundSql boundSql) {
+  if (closed) {
+    throw new ExecutorException("Executor was closed.");
+  }
+  CacheKey cacheKey = new CacheKey();
+    //MappedStatement的id
+  cacheKey.update(ms.getId());
+    //offset是0
+  cacheKey.update(rowBounds.getOffset());
+    //limit是Integer.MAXVALUE
+  cacheKey.update(rowBounds.getLimit());
+    //具体的sql语句
+  cacheKey.update(boundSql.getSql());
+  List<ParameterMapping> parameterMappings = boundSql.getParameterMappings();
+  TypeHandlerRegistry typeHandlerRegistry = ms.getConfiguration().getTypeHandlerRegistry();
+  // mimic DefaultParameterHandler logic
+  for (ParameterMapping parameterMapping : parameterMappings) {
+    if (parameterMapping.getMode() != ParameterMode.OUT) {
+      Object value;
+      String propertyName = parameterMapping.getProperty();
+      if (boundSql.hasAdditionalParameter(propertyName)) {
+        value = boundSql.getAdditionalParameter(propertyName);
+      } else if (parameterObject == null) {
+        value = null;
+      } else if (typeHandlerRegistry.hasTypeHandler(parameterObject.getClass())) {
+        value = parameterObject;
+      } else {
+        MetaObject metaObject = configuration.newMetaObject(parameterObject);
+        value = metaObject.getValue(propertyName);
+      }
+        //更新了sql中的参数
+      cacheKey.update(value);
+    }
+  }
+  if (configuration.getEnvironment() != null) {
+    // issue #176
+    cacheKey.update(configuration.getEnvironment().getId());
+  }
+  return cacheKey;
+}
+```
+
+由上面源码可见，创建缓存key会经历一些列的update方法，这个方法是由CacheKey（源码如下）执行的，由下面这个源码可知，update方法最终会存到updateList中。
+
+```java
+/**
+ *    Copyright 2009-2019 the original author or authors.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
+ */
+package org.apache.ibatis.cache;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.StringJoiner;
+
+import org.apache.ibatis.reflection.ArrayUtil;
+
+/**
+ * @author Clinton Begin
+ */
+public class CacheKey implements Cloneable, Serializable {
+
+  private static final long serialVersionUID = 1146682552656046210L;
+
+  public static final CacheKey NULL_CACHE_KEY = new NullCacheKey();
+
+  private static final int DEFAULT_MULTIPLYER = 37;
+  private static final int DEFAULT_HASHCODE = 17;
+
+  private final int multiplier;
+  private int hashcode;
+  private long checksum;
+  private int count;
+  // 8/21/2017 - Sonarlint flags this as needing to be marked transient.  While true if content is not serializable, this is not always true and thus should not be marked transient.
+  private List<Object> updateList;
+
+  public CacheKey() {
+    this.hashcode = DEFAULT_HASHCODE;
+    this.multiplier = DEFAULT_MULTIPLYER;
+    this.count = 0;
+    this.updateList = new ArrayList<>();
+  }
+
+  public void update(Object object) {
+    int baseHashCode = object == null ? 1 : ArrayUtil.hashCode(object);
+
+    count++;
+    checksum += baseHashCode;
+    baseHashCode *= count;
+
+    hashcode = multiplier * hashcode + baseHashCode;
+
+    updateList.add(object);
+  }
+
+ //......略
+
+}
+```
+
+那么创建缓存后应该用在哪里，第一个想法便是查询，因为缓存可以提高效率，所以我们查看query方法的部分源码如下：
+
+```java
+@Override
+public <E> List<E> query(MappedStatement ms, Object parameter, RowBounds rowBounds, ResultHandler resultHandler) throws SQLException {
+  BoundSql boundSql = ms.getBoundSql(parameter);
+  CacheKey key = createCacheKey(ms, parameter, rowBounds, boundSql);
+  return query(ms, parameter, rowBounds, resultHandler, key, boundSql);
+}
+
+@SuppressWarnings("unchecked")
+@Override
+public <E> List<E> query(MappedStatement ms, Object parameter, RowBounds rowBounds, ResultHandler resultHandler, CacheKey key, BoundSql boundSql) throws SQLException {
+  ErrorContext.instance().resource(ms.getResource()).activity("executing a query").object(ms.getId());
+  if (closed) {
+    throw new ExecutorException("Executor was closed.");
+  }
+  if (queryStack == 0 && ms.isFlushCacheRequired()) {
+    clearLocalCache();
+  }
+  List<E> list;
+  try {
+    queryStack++;
+    list = resultHandler == null ? (List<E>) localCache.getObject(key) : null;
+    if (list != null) {
+      handleLocallyCachedOutputParameters(ms, key, parameter, boundSql);
+    } else {
+      list = queryFromDatabase(ms, parameter, rowBounds, resultHandler, key, boundSql);
+    }
+  } finally {
+    queryStack--;
+  }
+  if (queryStack == 0) {
+    for (DeferredLoad deferredLoad : deferredLoads) {
+      deferredLoad.load();
+    }
+    // issue #601
+    deferredLoads.clear();
+    if (configuration.getLocalCacheScope() == LocalCacheScope.STATEMENT) {
+      // issue #482
+      clearLocalCache();
+    }
+  }
+  return list;
+}
+```
+
+我们可以看上面源码的这一部分：
+
+```java
+try {
+  queryStack++;
+  list = resultHandler == null ? (List<E>) localCache.getObject(key) : null;
+  if (list != null) {
+    handleLocallyCachedOutputParameters(ms, key, parameter, boundSql);
+  } else {
+    list = queryFromDatabase(ms, parameter, rowBounds, resultHandler, key, boundSql);
+  }
+} finally {
+  queryStack--;
+}
+```
+
+如果查不到就从数据库中查，执行queryFromDatabase()方法（此方法源码请自行翻阅），并且执行`localCache.putObject(key, list);`语句存入缓存中。以上为一级缓存源码剖析。
+
+### 8.3 二级缓存
+
+⼆级缓存的原理和⼀级缓存原理⼀样，第⼀次查询，会将数据放⼊缓存中，然后第⼆次查询则会直接去缓存中取。但是⼀级缓存是基于sqlSession的，⽽⼆级缓存是基于mapper⽂件的namespace的，也就是说多个sqlSession可以共享⼀个mapper中的⼆级缓存区域，并且如果两个mapper的namespace 相同，即使是两个mapper,那么这两个mapper中执⾏sql查询到的数据也将存在相同的⼆级缓存区域中。
+
+**开启二级缓存**
+
+二级缓存需要手动开启，首先在sqlMapConfig加入
+
+~~~xml
+<settings>
+	<setting name="cacheEnabled" value="true"/>
+</settings>
+~~~
+
+其次在UserMapper.xml中开启缓存
+
+~~~xml
+<cache></cache>
+~~~
 
 
 
