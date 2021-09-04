@@ -56,24 +56,99 @@
 
 ### 2.使用GitBash管理
 
-创建仓库**$ git init**
+**git常用命令**
 
-添加文件 **$git add test.txt**
+~~~
+#git创建版本库
+git init
+#把文件往Git版本库里添加的时候，是分两步执行的：
+#第一步是用git add把文件添加进去，实际上就是把文件修改添加到暂存区；
+#第二步是用git commit提交更改，实际上就是把暂存区的所有内容提交到当前分支。
+#git添加文件到暂存区
+git add FileName
+#git提交
+git commit -m "message"
+#git查看历史版本
+git log
+git log --pretty=oneline#简洁查看
+#git回退版本 上一个版本就是HEAD^，上上一个版本就是HEAD^^，当然往上100个版本写100个^比较容易数不过来，所以写成HEAD~100
+git reset --hard HEAD^
+git reset --hard commit_id
+#git查看命令历史
+git reflog
+#查看git状态
+git status
+#丢弃工作区修改
+git checkout -- filename
+#丢弃暂存区修改
+git reset HEAD filename
+#文件删除操作到暂存区并提交
+git rm filename
+git commit -m "delete"
+#文件误删
+git checkout -- filename
+#git checkout其实是用版本库里的版本替换工作区的版本
+#关联远程仓库 origin是默认习惯命名
+git remote add origin git@server-name:path/repo-name.git
+#第一次推送master分支
+git push -u origin master
+#推送master分支
+git push origin master
+#从远程仓库克隆
+git clone git@github.自己的用户名/自己的仓库名.git
+#创建分支命令：没有参数时，git branch 会列出你在本地的分支。
+git branch (branchname)
+#切换分支命令:git checkout -b (branchname)命令来创建新分支并立即切换到该分支下
+git checkout (branchname)
+#合并分支命令:  
+git merge 
+#删除分支命令：
+git branch -d (branchname)
+#当Git无法自动合并分支时，就必须首先解决冲突。解决冲突后，再提交，合并完成。解决冲突就是把Git合并失败的文件手动编辑为我们希望的内容，再提交。
+#用git log --graph命令可以看到分支合并图。
+git log --graph
+#加上--no-ff参数就可以用普通模式合并，合并后的历史有分支，能看出来曾经做过合并，
+git merge --no-ff -m "message" branchname
+#Git还提供了一个stash功能，可以把当前工作现场“储藏”起来，等以后恢复现场后继续工作：
+git stash
+#用git stash list命令查看刚才的工作现场存到哪去了
+git stash list
+#恢复后，stash内容并不删除，后续需要自己删除git stash drop
+git stash apply
+#恢复的同时把stash内容也删了
+git stash pop
+#如果要丢弃一个没有被合并过的分支，可以通过-D强行删除
+git branch -D name
+#查看远程库的信息
+git remote (-v)
+#推送分支，就是把该分支上的所有本地提交推送到远程库。推送时，要指定本地分支
+git push origin master
+#如果要推送其他分支，比如dev，就改成：
+git push origin dev
+~~~
 
-将暂存区更新到仓库**$git commit –m ‘日志信息 ’**
+**git的分支管理策略**
 
-删除操作**$git rm file** 如果删除之前修改过并且已经放到暂存区域的话，则必须要用强制删除选项 **-f**
+> 在实际开发中，我们应该按照几个基本原则进行分支管理：
+>
+> 首先，`master`分支应该是非常稳定的，也就是仅用来发布新版本，平时不能在上面干活；
+>
+> 那在哪干活呢？干活都在`dev`分支上，也就是说，`dev`分支是不稳定的，到某个时候，比如1.0版本发布时，再把`dev`分支合并到`master`上，在`master`分支发布1.0版本；
+>
+> 你和你的小伙伴们每个人都在`dev`分支上干活，每个人都有自己的分支，时不时地往`dev`分支上合并就可以了。
 
-查看项目的当前状态**$git status** 加了 **-s** 参数，以获得简短的结果输出。如果没加该参数会详细输出内容
+![](C:\Users\yhr\Pictures\Saved Pictures\2021-08-17 002.png)
 
-显示已写入缓存与已修改但尚未写入缓存的改动的区别**$git diff** :
-
-> - 尚未缓存的改动：**git diff**
-> - 查看已缓存的改动： **git diff --cached**
-> - 查看已缓存的与未缓存的所有改动：**git diff HEAD**
-> - 显示摘要而非整个 diff：**git diff --stat**
-
-用于取消已缓存的内容**$git reset HEAD**
+> 多人协作的工作模式通常是这样：
+>
+> 1. 首先，可以试图用`git push origin <branch-name>`推送自己的修改；
+> 2. 如果推送失败，则因为远程分支比你的本地更新，需要先用`git pull`试图合并；
+> 3. 如果合并有冲突，则解决冲突，并在本地提交；
+> 4. 没有冲突或者解决掉冲突后，再用`git push origin <branch-name>`推送就能成功！
+>
+> 如果`git pull`提示`no tracking information`，则说明本地分支和远程分支的链接关系没有创建，用命令`git branch --set-upstream-to <branch-name> origin/<branch-name>`。
+>
+> 这就是多人协作的工作模式，一旦熟悉了，就非常简单。
 
 ### 3.工作区和暂存区
 
@@ -343,7 +418,6 @@ checkout
 
 Eclipse从LUNA版本开始默认支持了GIT客户端，可以在导航菜单中`windows --> preferences`搜索git查看git相关配置。
 Eclipse中对于git的操作基本都在右键菜单Team中。
-
 
 
 
