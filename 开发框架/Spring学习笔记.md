@@ -688,8 +688,6 @@ public class SpELTest {
 }
 ~~~
 
-## 3.2 语法
-
 # 四. Spring中的配置文件
 
 Spring配置文件是用于指导Spring工厂进行Bean生产、依赖关系注入（装配）及Bean实例分发的"图纸"。
@@ -1706,7 +1704,6 @@ public class AccountServiceImpl implements IAccountService {
 你可以在这里找到这个激动人心的TestContext 框架所带来的增强功能的完整列表。
 当然，Spring Framework 5.0 仍然支持我们的老朋友JUnit! 在我写这篇文章的时候，JUnit 5 还
 只是发展到了GA 版本。对于JUnit4，Spring Framework 在未来还是要支持一段时间的。
-
 
 
 
