@@ -93,7 +93,7 @@ docker ps               查看正在运行的容器
 docker ps -a            查看所有容器
 docker run 参数          创建并启动容器
 #参数说明
--i 保持容器运行。通常与-t使用，加入it两个参数后，容器创建后自动进入，退出容器后，容器自动关闭
+-i 保持容器运行。通常与-t使用，加入it两个 参数后，容器创建后自动进入，退出容器后，容器自动关闭
 -t 为容器重新分配一个为输入终端
 -d 以守护模式运行，创建一个容器在后台运行，使用docker exec进入容器，退出后容器不会关闭
 -it一般称为交互式容器，-id一般称为守护式容器
@@ -102,6 +102,7 @@ docker exec xx           进入容器
 docker rm xx             删除容器#需要容器停止状态
 docker start xx          启动容器
 docker inspect xx        查看容器信息
+docker stop xx -t        停止容器 -t10s内没停止则进行强制停止
 ~~~
 
 ## 三、Docker容器的数据卷
@@ -151,7 +152,7 @@ docker run -it --name=c2 --volume-from c3 centos:7 /bin/bash
 
 ## 四、docker应用部署
 
-### 一、部署MySQL
+### 1 部署MySQL
 
 1. 搜索mysql镜像
 
@@ -185,13 +186,23 @@ mysql:5.6
 ```
 
 - 参数说明：
-  - **-p 3307:3306**：将容器的 3306 端口映射到宿主机的 3307 端口。
-  - **-v $PWD/conf:/etc/mysql/conf.d**：将主机当前目录下的 conf/my.cnf 挂载到容器的 /etc/mysql/my.cnf。配置目录
-  - **-v $PWD/logs:/logs**：将主机当前目录下的 logs 目录挂载到容器的 /logs。日志目录
-  - **-v $PWD/data:/var/lib/mysql** ：将主机当前目录下的data目录挂载到容器的 /var/lib/mysql 。数据目录
-  - **-e MYSQL_ROOT_PASSWORD=123456：**初始化 root 用户的密码。
-
-
+  > - **-p 3307:3306**：将容器的 3306 端口映射到宿主机的 3307 端口。
+  >
+  > - **-v $PWD/conf:/etc/mysql/conf.d**：将主机当前目录下的 conf/my.cnf 挂载到容器的 /etc/mysql/my.cnf。配置目录
+  >
+  > - **-v $PWD/logs:/logs**：将主机当前目录下的 logs 目录挂载到容器的 /logs。日志目录
+  >
+  > - **-v $PWD/data:/var/lib/mysql** ：将主机当前目录下的data目录挂载到容器的 /var/lib/mysql 。数据目录
+  >
+  > - **-e MYSQL_ROOT_PASSWORD=123456：**初始化 root 用户的密码。
+  >
+  > - -v : 挂载宿主机目录和 docker容器中的目录，前面是宿主机目录，后面是容器内部目录
+  >
+  >   -d : 后台运行容器
+  >
+  >   -p 映射容器端口号和宿主机端口号
+  >
+  >   -e 环境参数，MYSQL_ROOT_PASSWORD设置root用户的密码
 
 4. 进入容器，操作mysql
 
@@ -204,7 +215,7 @@ docker exec –it c_mysql /bin/bash
 ![1573636765632](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/docker/1573636765632.png)
 
 
-### 二、部署Tomcat
+### 2 部署Tomcat
 
 1. 搜索tomcat镜像
 
@@ -246,7 +257,7 @@ tomcat
 ![1573649804623](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/docker/1573649804623.png)
 
 
-### 三、部署Nginx
+### 3 部署Nginx
 
 1. 搜索nginx镜像
 
@@ -330,7 +341,7 @@ nginx
 
 ![1573652396669](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/docker/1573650577429.png)
 
-### 四、部署Redis
+### 4 部署Redis
 
 1. 搜索redis镜像
 
@@ -356,27 +367,116 @@ docker run -id --name=c_redis -p 6379:6379 redis:5.0
 ./redis-cli.exe -h 192.168.149.135 -p 6379
 ```
 
+## 五、Dockerfile
 
+Dockerfile 是一个用来构建镜像的文本文件，文本内容包含了一条条构建镜像所需的指令和说明。
 
+### 5.1 docker镜像原理
 
+操作系统组成部分：
 
+进程调度子系统，进程通信子系统，内存管理子系统，设备管理子系统，文件管理子系统，网络通信子系统，作业控制子系统
 
+Linux文件系统有bootfs和rootfs两部分组成
 
+> bootfs：包含bootloader（引导加载程序）和 kernel（内核）
+> rootfs： root文件系统，包含的就是典型 Linux 系统中的/dev，/proc，/bin，/etc等标准目录和文件
+> 不同的linux发行版，bootfs基本一样，而rootfs不同，如ubuntu，centos等
 
+dokcer镜像是由特殊的文件系统叠加而成，最底层是bootfs，并使用宿主机的bootfs
 
+第二层是root文件系统rootfs基础镜像，成为baseimage
 
+然后在往上可以叠加其他镜像文件，统一文件系统技术能够将不同层整合成一个文件系统，为这些层提供了一个统一的视角，这样就隐藏了多层的存在，在用户看来只有一个文件系统。一个镜像可以放在另一个镜像上面，位于下面的镜像成为父镜像，最底层的镜像称为基础镜像。
 
+当一个镜像启动容器时，docker会在最顶层加载一个读写文件系统作为容器
 
+### 5.2 docker镜像制作
 
+1. 容器转换成镜像
 
+   ~~~
+   docker commit 容器id 镜像名称:版本号
+   docker save -o 压缩文件名称 镜像名称:版本号
+   docker load -i 压缩文件名称
+   ~~~
 
+2. dockerfile
 
+dockerfile：
 
+是一个文本文件，包含了一条条指令，每一条指令构建一层镜像，最终构建出一个新的镜像。
 
+对于开发人员，可以为开发团队提供一个完全一致的开发环境
 
+对于测试人员：可以直接拿开发时所构建的镜像或者通过Dockerfile文件构建一个新的镜像开始工作了
+对于运维人员：在部署时，可以实现应用的无缝移植
 
+dockerfile常用字段：
 
+| 关键字      | 作用                     | 备注                                                         |
+| ----------- | ------------------------ | ------------------------------------------------------------ |
+| FROM        | 指定父镜像               | 指定dockerfile基于那个image构建                              |
+| MAINTAINER  | 作者信息                 | 用来标明这个dockerfile谁写的                                 |
+| LABEL       | 标签                     | 用来标明dockerfile的标签 可以使用Label代替Maintainer 最终都是在docker image基本信息中可以查看 |
+| RUN         | 执行命令                 | 执行一段命令 默认是/bin/sh 格式: RUN command 或者 RUN ["command" , "param1","param2"] |
+| CMD         | 容器启动命令             | 提供启动容器时候的默认命令 和ENTRYPOINT配合使用.格式 CMD command param1 param2 或者 CMD ["command" , "param1","param2"] |
+| ENTRYPOINT  | 入口                     | 一般在制作一些执行就关闭的容器中会使用                       |
+| COPY        | 复制文件                 | build的时候复制文件到image中                                 |
+| ADD         | 添加文件                 | build的时候添加文件到image中 不仅仅局限于当前build上下文 可以来源于远程服务 |
+| ENV         | 环境变量                 | 指定build时候的环境变量 可以在启动的容器的时候 通过-e覆盖 格式ENV name=value |
+| ARG         | 构建参数                 | 构建参数 只在构建的时候使用的参数 如果有ENV 那么ENV的相同名字的值始终覆盖arg的参数 |
+| VOLUME      | 定义外部可以挂载的数据卷 | 指定build的image那些目录可以启动的时候挂载到文件系统中 启动容器的时候使用 -v 绑定 格式 VOLUME ["目录"] |
+| EXPOSE      | 暴露端口                 | 定义容器运行的时候监听的端口 启动容器的使用-p来绑定暴露端口 格式: EXPOSE 8080 或者 EXPOSE 8080/udp |
+| WORKDIR     | 工作目录                 | 指定容器内部的工作目录 如果没有创建则自动创建 如果指定/ 使用的是绝对地址 如果不是/开头那么是在上一条workdir的路径的相对路径 |
+| USER        | 指定执行用户             | 指定build或者启动的时候 用户 在RUN CMD ENTRYPONT执行的时候的用户 |
+| HEALTHCHECK | 健康检查                 | 指定监测当前容器的健康监测的命令 基本上没用 因为很多时候 应用本身有健康监测机制 |
+| ONBUILD     | 触发器                   | 当存在ONBUILD关键字的镜像作为基础镜像的时候 当执行FROM完成之后 会执行 ONBUILD的命令 但是不影响当前镜像 用处也不怎么大 |
+| STOPSIGNAL  | 发送信号量到宿主机       | 该STOPSIGNAL指令设置将发送到容器的系统调用信号以退出。       |
+| SHELL       | 指定执行脚本的shell      | 指定RUN CMD ENTRYPOINT 执行命令的时候 使用的shell            |
 
+### 5.3 案例
+
+自定义centos7镜像需求：
+
+1.默认登录路径为/usr
+
+2.可以使用vim
+
+~~~dockerfile
+FROM centos:7
+MAINTAINER Loserfromlazy <loserfromlazy@163.com>
+RUN yun install -y vim
+WORKDIR /usr
+CMD /bin/bash
+~~~
+
+`docker  build -f dockerfile的文件路径 -t 镜像名:版本`
+
+定义dockerfile发布springboot项目
+
+~~~dockerfile
+FROM java:8
+MAINTAINER Loserfromlazy <loserfromlazy@163.com>
+ADD springboot.jar app.jar
+CMD java -jar app.jar
+~~~
+
+`docker build -f  dockerfile的文件路径 -t 镜像名:版本`
+
+## 六、Docker服务编排
+
+Docker Compose
+
+### 6.1 Compose 简介
+
+Compose 是用于定义和运行多容器 Docker 应用程序的工具。通过 Compose，您可以使用 YML 文件来配置应用程序需要的所有服务。然后，使用一个命令，就可以从 YML 文件配置中创建并启动所有服务。
+
+Compose 使用的三个步骤：
+
+- 使用 Dockerfile 定义应用程序的环境。
+- 使用 docker-compose.yml 定义构成应用程序的服务，这样它们可以在隔离环境中一起运行。
+- 最后，执行 docker-compose up 命令来启动并运行整个应用程序。
 
 
 
