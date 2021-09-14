@@ -299,8 +299,9 @@ spring:
   application:
     name: nacos-restful-provider
   cloud:
-    discovery:
-      server-addr: 127.0.0.1:8848
+    nacos:
+      discovery:
+        server-addr: localhost:8848 #配置nacos地址
 ~~~
 
 启动nacos，启动springboot服务，观察nacos服务列表注册成功
@@ -363,7 +364,7 @@ Ribbon是一个客户端负载均衡服务器，他的责任是从一组实例�
 
 Ribbon核心组件IRule是负载均衡策略接口
 
-## 五、配置中心Nacos
+## 五、配置中心Nacos  //todo
 
 ### 5.1 理解配置中心
 
