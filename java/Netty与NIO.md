@@ -716,6 +716,8 @@ NIO的通道是从输入流对象里通过getChannel方法获取的，该通道�
     }
 ~~~
 
+
+
 ## 三、网络IO
 
 ### 3.1 概述
@@ -1137,21 +1139,126 @@ public class NettyClient {
 }
 ```
 
+### 1.5 编码与解码Protobuf
 
+在编写网络应用程序的事后需要注意codec（编解码器），因为数据在网络中传输时是二进制字节码数据，而我们的目标数据不是字节码数据，因此发送数据时需要编码接收数据时需要解码。codec组成部分有两个：decoder（解码器）和encoder（编码器）。encoder把业务数据转换成字节码数据，decoder把字节码数据转换成业务数据。
 
+java的序列化技术也可以作为codec使用，但有很多缺点：
 
+1. 无法跨语言
+2. 序列化后体积过大，是二进制的5倍
+3. 性能低
 
+netty自身也有一些codec：编码器：StringDecoder、ObjectDecoder...解码器：StringEncoder、ObjectEncoder...
 
+Netty 本身自带的 ObjectDecoder 和 ObjectEncoder 可以用来实现 POJO 对象或各种业务对象的编码和解码，但其内部使用的仍是 Java 序列化技术。因此对于 POJO 对象或各种业务对象要实现编码和解码使用Google的Protobuf。
 
+Protobuf时Google的开源项目，支持跨平台多语言，高性能和高可靠性等特点。
 
+**使用方法：**
 
+1 导入依赖
 
+~~~xml
+<dependency>
+    <groupId>com.google.protobuf</groupId>
+    <artifactId>protobuf-java</artifactId>
+    <version>3.11.4</version>
+</dependency>
+~~~
 
+2 编写proto文件
 
+```protobuf
+syntax="proto3";//设置版本号，3为大版本号即3.11.4中的3
+option java_outer_classname = "BookMessage";//设置生成的Java类名
+message Book{
+  int32 id =1;//设置类中的属性，等号后是序号不是属性值
+  string name =2;
+}
+```
 
+3 去官网下载同版本的protoc.exe
 
+在命令行窗口中使用
 
+进入到protoc.exe所在的目录，将proto文件也放在该目录下，使用如下命令
 
+~~~shell
+protoc --java_out=. Book.proto
+~~~
 
+将生成的.java文件拷贝到项目中打开（直接用即可，不要编辑）在netty中使用
 
+4 在netty中使用
+
+在入门案例中进行修改：
+
+NettyClient.java
+
+```java
+ch.pipeline().addLast("encoder",new ProtobufEncoder());
+ch.pipeline().addLast(new NettyClientHandler());
+System.out.println("========Client is ready=========");
+```
+
+NettyClientHandler.java
+
+```java
+@Override
+public void channelActive(ChannelHandlerContext ctx) throws Exception {
+    BookMessage.Book book =BookMessage.Book.newBuilder().setId(1).setName("这是一本好书").build();
+    System.out.println("Client:"+ctx);
+    ctx.writeAndFlush(book);
+}
+```
+
+NettyServer.java
+
+```java
+ch.pipeline().addLast("decoder",new ProtobufDecoder(BookMessage.Book.getDefaultInstance()));
+ch.pipeline().addLast(new NettyServerHandler());
+System.out.println("========Server is Ready========");
+```
+
+NettyServerHandler.java
+
+```java
+//读取数据事件
+@Override
+public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+    System.out.println("Server:"+ctx);
+    BookMessage.Book book = (BookMessage.Book) msg;
+    System.out.println("客户端发来的消息："+book.getName());
+}
+```
+
+## 二、自定义RPC
+
+### 2.1 概述
+
+RPC即远程过程调用，是一种通过网络从远程计算机程序上请求服务，而不需要了解底层网络实现的技术。常见的RPC框架Dubbo、grpc等。
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/rpc.png)
+
+1. 服务消费方以本地调用方式调用服务
+2. client stub 接收到调用后负责将方法、参数等封装成能够进行网络传输的消息体
+3. client stub 将消息编码后发送到服务端
+4. server stub 收到消息后进行解码
+5. server stub根据解码结果调用本地服务
+6. 本地服务执行并将结果返回给server stub
+7. server stub将返回结果编码并发送到服务消费方
+8. client stub接收到消息并进行解码
+9. 服务消费方得到结果
+
+### 2.2 设计
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/rpc2.png)
+
+- Client：两个接口+一个包含main方法的测试类
+- Client Stub：一个客户端代理类+一个客户端业务处理类
+- Server：两个接口+两个实现类
+- Server Stub：一个网络处理服务器+一个服务器处理业务类
+
+### 2.3 实现
 
