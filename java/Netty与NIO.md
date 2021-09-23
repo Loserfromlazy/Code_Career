@@ -861,26 +861,6 @@ public class NioClient {
 }
 ~~~
 
-**网络聊天案例**
-
-ChatServer.java
-
-~~~java
-
-~~~
-
-ChatClient.java
-
-~~~java
-
-~~~
-
-TestChat.java
-
-~~~java
-
-~~~
-
 ### 3.3 IO对比总结
 
 IO通常分为几种，同步阻塞的BIO、同步非阻塞的NIO，异步非阻塞的AIO
@@ -951,11 +931,9 @@ NIO是对BIO的改进，基于Reactor模型。我们知道，一个socket连接�
 
 #### 1.3.1 单线程模型
 
-用户发起IO请求到Reactor线程
+用户发起IO请求到Reactor线程，Ractor线程将用户的IO请求放入到通道，然后再进行后续处理，处理完成后，Reactor线程重新获得控制权，继续其他客户端的处理
 
-Ractor线程将用户的IO请求放入到通道，然后再进行后续处理
-
-处理完成后，Reactor线程重新获得控制权，继续其他客户端的处理
+服务器端用一个线程通过多路复用搞定所有的IO操作，包括读写连接
 
 > 这种模型一个时间点只有一个任务在执行，这个任务执行完了，再去执行下一个任务。
 >
@@ -973,6 +951,8 @@ Ractor线程将用户的IO请求放入到通道，然后再进行后续处理
 
 Reactor多线程模型是由一组NIO线程来处理IO操作（之前是单个线程），所以在请求处理上会比上一中模型效率更高，可以处理更多的客户端请求。
 
+服务器端采用一个线程专门处理客户端连接请求，采用一个线程池负责 IO 操作。在绝大多数场景下，该模型都能满足使用。
+
 > *这种模式使用多个线程执行多个任务，任务可以同时执行*
 >
 > 但是如果并发仍然很大，Reactor仍然无法处理大量的客户端请求
@@ -987,19 +967,173 @@ Reactor多线程模型是由一组NIO线程来处理IO操作（之前是单个�
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/netty7.png)
 
+~~~mermaid
+flowchart TB
+ServerSocketChannel3 --注册-->selector3
+    ServerSocketChannel4 --注册-->selector4
+    subgraph WorkerGroup
+    	subgraph NioEventLoop3
+    		selector3-->轮询监听的IO事件3
+    			subgraph Thread3
+    				轮询监听的IO事件3 -->处理监听事件3
+    				处理监听事件3 -->处理任务队列3
+    				处理任务队列3 -->轮询监听的IO事件3
+    			end
+    	end
+    	subgraph NioEventLoop4
+    		selector4-->轮询监听的IO事件4
+    			subgraph Thread4
+    				轮询监听的IO事件4 -->处理监听事件4
+    				处理监听事件4 -->处理任务队列4
+    				处理任务队列4-->轮询监听的IO事件4
+    			end
+    	end
+    end
+    ServerSocketChannel1--注册-->selector1
+    ServerSocketChannel2--注册-->selector2
+    subgraph BOSSGROUP
+    	subgraph NioEventLoop1
+    		selector1-->轮询监听的IO事件1
+    			subgraph Thread1
+    				轮询监听的IO事件1 -->处理监听事件1
+    				处理监听事件1 -->处理任务队列1
+    				处理任务队列1 -->轮询监听的IO事件1
+    			end
+    	end
+    	subgraph NioEventLoop2
+    		selector2-->轮询监听的IO事件2
+    			subgraph Thread2
+    				轮询监听的IO事件2 -->处理监听事件2
+    				处理监听事件2 -->处理任务队列2
+    				处理任务队列2-->轮询监听的IO事件2
+    			end
+    	end
+    end
+~~~
 
+类似于上面的线程池模型，Netty 抽象出两组线程池，BossGroup 专门负责接收客户端连接，WorkerGroup 专门负责网络读写操作。NioEventLoop 表示一个不断循环执行处理任务的线程，每个 NioEventLoop 都有一个 selector，用于监听绑定在其上的 socket 网络通道。NioEventLoop 内部采用串行化设计，从消息的读取->解码->处理->编码->发送，始终由 IO 线程 NioEventLoop 负责
 
+一个NioEventLoopGroup包含多个NioEventLoop
 
+每个NioEventLoop包含一个Selector，一个taskQueue
 
+每个NioEventLoop的Selector上可以注册多个NioChannel
 
+每一个NioChannel都会绑定唯一的NioEventLoop上
 
+每个NioChannel都绑定一个自己的ChannelPipeline
 
+### 1.4 入门案例
 
+服务器端业务处理类
 
+```java
+public class NettyServerHandler extends ChannelInboundHandlerAdapter {
+    //读取数据事件
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        System.out.println("Server:"+ctx);
+        ByteBuf buf = (ByteBuf) msg;
+        System.out.println("客户端发来的消息："+buf.toString(CharsetUtil.UTF_8));
+    }
+    //数据读取完毕事件
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        ctx.writeAndFlush(Unpooled.copiedBuffer("就是没钱",CharsetUtil.UTF_8));
+    }
+    //异常发生事件
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        cause.printStackTrace();
+        ctx.close();
+    }
+}
+```
 
+服务器类
 
+```java
+public class NettyServer {
+    public static void main(String[] args) throws InterruptedException {
+        //1.创建线程组
+        EventLoopGroup bossGroup = new NioEventLoopGroup();
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        //2.创建服务器端启动助手来配置参数
+        ServerBootstrap bootstrap = new ServerBootstrap();
+        bootstrap.group(bossGroup,workerGroup)//设置线程组
+                .channel(NioServerSocketChannel.class)//使用NioServerSocketChannel作为服务器端通道实现
+                .option(ChannelOption.SO_BACKLOG,128)//设置线程队列中等待连接的个数
+                .childOption(ChannelOption.SO_KEEPALIVE,true)//保持活动连接状态
+                .childHandler(new ChannelInitializer<SocketChannel>() {//创建一个通道初始化对象
+                    //往Pipeline链中添加自定义业务处理handler
+                    @Override
+                    protected void initChannel(SocketChannel ch) throws Exception {
+                        ch.pipeline().addLast(new NettyServerHandler());
+                        System.out.println("========Server is Ready========");
+                    }
+                });
+        //3.启动服务器端并绑定端口，等待客户端连接（非阻塞）
+        ChannelFuture channelFuture = bootstrap.bind(9999).sync();
+        System.out.println("========Server is Start========");
+        //4.关闭通道，关闭线程池
+        channelFuture.channel().closeFuture().sync();
+        bossGroup.shutdownGracefully();
+        workerGroup.shutdownGracefully();
+    }
 
+}
+```
 
+客户端业务处理类
+
+```java
+public class NettyClientHandler extends ChannelInboundHandlerAdapter {
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("Client:"+ctx);
+        ctx.writeAndFlush(Unpooled.copiedBuffer("老板，还钱",CharsetUtil.UTF_8));
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        ByteBuf in = (ByteBuf) msg;
+        System.out.println("服务器端发来的消息："+in.toString(CharsetUtil.UTF_8));
+    }
+
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        ctx.flush();
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        ctx.close();
+    }
+}
+```
+
+客户端类
+
+```java
+public class NettyClient {
+    public static void main(String[] args) throws InterruptedException {
+        //创建一个EventLoopGroup线程组
+        EventLoopGroup group =new NioEventLoopGroup();
+        //创建客户端启动助手
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.group(group).channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) throws Exception {
+                        ch.pipeline().addLast(new NettyClientHandler());
+                        System.out.println("========Client is ready=========");
+                    }
+                });
+        ChannelFuture channelFuture = bootstrap.connect("127.0.0.1",9999).sync();
+        channelFuture.channel().closeFuture().sync();
+    }
+}
+```
 
 
 
