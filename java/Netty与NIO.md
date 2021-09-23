@@ -967,6 +967,8 @@ Reactor多线程模型是由一组NIO线程来处理IO操作（之前是单个�
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/netty7.png)
 
+如果你的github不显示下面的流程图，可以通过下载插件来解决此问题[chrome插件](https://chrome.google.com/webstore/detail/github-%2B-mermaid/goiiopgdnkogdbjmncgedmgpoajilohe/related)(其他浏览器请下载对应的插件)
+
 ~~~mermaid
 graph TB
 ServerSocketChannel3 --注册-->selector3
