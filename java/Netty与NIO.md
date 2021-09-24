@@ -1266,3 +1266,193 @@ RPC即远程过程调用，是一种通过网络从远程计算机程序上请�
 
 被调用的接口和实现类
 
+```java
+public interface HelloNetty{
+    String hello();
+}
+public class HelloNettyImpl implements HelloNetty{
+    @Override
+    public String hello() {
+        return "hello netty";
+    }
+}
+public interface HelloRPC {
+    String hello(String name);
+}
+public class HelloRPCImpl implements HelloRPC{
+    @Override
+    public String hello(String name) {
+        return "hello,"+name;
+    }
+}
+```
+
+服务端业务处理类
+
+```java
+public class InvokeHandler extends ChannelInboundHandlerAdapter {
+
+    private String getImplClassName(ClassInfo classInfo) throws Exception {
+        String interfacePath = "com.learn.rpcserver";
+        int lastDot = classInfo.getClassName().lastIndexOf(".");
+        String interfaceName = classInfo.getClassName().substring(lastDot);
+        Class superClass = Class.forName(interfacePath + interfaceName);
+        Reflections reflections = new Reflections();
+        //得到某接口下所有的实现类
+        Set<Class> ImplClassSet = reflections.getSubTypesOf(superClass);
+        if (ImplClassSet.size()==0){
+            System.out.println("未找到实现类");
+            return null;
+        }else if (ImplClassSet.size()>1){
+            System.out.println("找到多个实现类");
+            return null;
+        }else {
+            Class[] classes = ImplClassSet.toArray(new Class[0]);
+            return classes[0].getName();
+        }
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        ClassInfo classInfo = (ClassInfo) msg;
+        Object calzz = Class.forName(getImplClassName(classInfo)).newInstance();
+        Method method = calzz.getClass().getMethod(classInfo.getMethodName(), classInfo.getTypes());
+        Object result = method.invoke(calzz, classInfo.getObjects());
+        ctx.writeAndFlush(result);
+    }
+}
+```
+
+服务端
+
+```java
+public class NettyRPCServer {
+
+    private int port;
+
+    public NettyRPCServer(int port) {
+        this.port = port;
+    }
+
+    public void start() throws InterruptedException {
+        EventLoopGroup bossGroup = new NioEventLoopGroup();
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        ServerBootstrap bootstrap = new ServerBootstrap();
+        bootstrap.group(bossGroup, workerGroup)
+                .channel(NioServerSocketChannel.class)
+                .option(ChannelOption.SO_BACKLOG, 128)
+                .childOption(ChannelOption.SO_KEEPALIVE, true)
+                .localAddress(port)
+                .childHandler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) throws Exception {
+                        ChannelPipeline pipeline = ch.pipeline();
+                        //编码器
+                        pipeline.addLast("encoder", new ObjectEncoder());
+                        //解码器
+                        pipeline.addLast("decoder", new ObjectDecoder(Integer.MAX_VALUE, ClassResolvers.cacheDisabled(null)));
+                        //服务器端业务处理类
+                        pipeline.addLast(new InvokeHandler());
+                    }
+                });
+        ChannelFuture future = bootstrap.bind(port).sync();
+        System.out.println("server is readey");
+        future.channel().closeFuture().sync();
+        bossGroup.shutdownGracefully();
+        workerGroup.shutdownGracefully();
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        new NettyRPCServer(9999).start();
+    }
+}
+```
+
+数据传输类
+
+```java
+public class ClassInfo implements Serializable {
+    private static final long serialVersionUID =1L;
+    private String className;//类名
+    private String methodName;//方法名
+    private Class<?>[] types;//参数类型
+    private Object[] objects;//参数列表
+    //get and set
+}
+```
+
+客户端代理类
+
+```java
+public class NettyRPCProxy {
+
+    public static Object create(Class target){
+        return Proxy.newProxyInstance(target.getClassLoader(), new Class[]{target}, new InvocationHandler() {
+            @Override
+            public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                //封装classinfo
+                ClassInfo classInfo = new ClassInfo();
+                classInfo.setClassName(target.getName());
+                classInfo.setMethodName(method.getName());
+                classInfo.setObjects(args);
+                classInfo.setTypes(method.getParameterTypes());
+                //开始用netty发送数据
+                EventLoopGroup group = new NioEventLoopGroup();
+                ResultHandler resultHandler = new ResultHandler();
+                Bootstrap bootstrap =new Bootstrap();
+                bootstrap.group(group)
+                        .channel(NioSocketChannel.class)
+                        .handler(new ChannelInitializer<SocketChannel>() {
+                            @Override
+                            protected void initChannel(SocketChannel ch) throws Exception {
+                                ChannelPipeline pipeline = ch.pipeline();
+                                //编码器
+                                pipeline.addLast("encoder",new ObjectEncoder());
+                                //解码器
+                                pipeline.addLast("decoder",new ObjectDecoder(Integer.MAX_VALUE, ClassResolvers.cacheDisabled(null)));
+                                pipeline.addLast("handler",resultHandler);
+                            }
+                        });
+                ChannelFuture future = bootstrap.connect("127.0.0.1", 9999).sync();
+                future.channel().writeAndFlush(classInfo).sync();
+                future.channel().closeFuture().sync();
+                group.shutdownGracefully();
+                return resultHandler.getResponse();
+            }
+        });
+    }
+}
+```
+
+客户端服务处理
+
+```java
+public class ResultHandler extends ChannelInboundHandlerAdapter {
+    private Object response;
+
+    public Object getResponse() {
+        return response;
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        response = msg;
+        ctx.close();
+    }
+}
+```
+
+客户端测试
+
+```java
+public class TestNettyRpc {
+    public static void main(String[] args) {
+        //第一次远程调用
+        HelloNetty helloNetty = (HelloNetty) NettyRPCProxy.create(HelloNetty.class);
+        System.out.println(helloNetty.hello());
+        //第二次远程调用
+        HelloRPC helloRPC = (HelloRPC) NettyRPCProxy.create(HelloRPC.class);
+        System.out.println(helloRPC.hello("hahahahaha"));
+    }
+}
+```
