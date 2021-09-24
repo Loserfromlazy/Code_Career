@@ -46,8 +46,6 @@ STOMP即Simple (or Streaming) Text Orientated Messaging Protocol，简单(流)�
 
 stomp.js（Stomp Over WebSocket）是使用H5 Web Socket API实现的Stomp客户端，可以实现消息实时推送.
 
-## 
-
 
 
 
