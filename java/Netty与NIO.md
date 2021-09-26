@@ -969,51 +969,7 @@ Reactor多线程模型是由一组NIO线程来处理IO操作（之前是单个�
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/netty7.png)
 
-如果你的github不显示下面的流程图，可以通过下载插件来解决此问题[chrome插件](https://chrome.google.com/webstore/detail/github-%2B-mermaid/goiiopgdnkogdbjmncgedmgpoajilohe/related)(其他浏览器请下载对应的插件)
-
-~~~mermaid
-graph TB
-ServerSocketChannel3 --注册-->selector3
-    ServerSocketChannel4 --注册-->selector4
-    subgraph WorkerGroup
-    	subgraph NioEventLoop3
-    		selector3-->轮询监听的IO事件3
-    			subgraph Thread3
-    				轮询监听的IO事件3 -->处理监听事件3
-    				处理监听事件3 -->处理任务队列3
-    				处理任务队列3 -->轮询监听的IO事件3
-    			end
-    	end
-    	subgraph NioEventLoop4
-    		selector4-->轮询监听的IO事件4
-    			subgraph Thread4
-    				轮询监听的IO事件4 -->处理监听事件4
-    				处理监听事件4 -->处理任务队列4
-    				处理任务队列4-->轮询监听的IO事件4
-    			end
-    	end
-    end
-    ServerSocketChannel1--注册-->selector1
-    ServerSocketChannel2--注册-->selector2
-    subgraph BOSSGROUP
-    	subgraph NioEventLoop1
-    		selector1-->轮询监听的IO事件1
-    			subgraph Thread1
-    				轮询监听的IO事件1 -->处理监听事件1
-    				处理监听事件1 -->处理任务队列1
-    				处理任务队列1 -->轮询监听的IO事件1
-    			end
-    	end
-    	subgraph NioEventLoop2
-    		selector2-->轮询监听的IO事件2
-    			subgraph Thread2
-    				轮询监听的IO事件2 -->处理监听事件2
-    				处理监听事件2 -->处理任务队列2
-    				处理任务队列2-->轮询监听的IO事件2
-    			end
-    	end
-    end
-~~~
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/netty8.png)
 
 类似于上面的线程池模型，Netty 抽象出两组线程池，BossGroup 专门负责接收客户端连接，WorkerGroup 专门负责网络读写操作。NioEventLoop 表示一个不断循环执行处理任务的线程，每个 NioEventLoop 都有一个 selector，用于监听绑定在其上的 socket 网络通道。NioEventLoop 内部采用串行化设计，从消息的读取->解码->处理->编码->发送，始终由 IO 线程 NioEventLoop 负责
 
@@ -1026,6 +982,12 @@ ServerSocketChannel3 --注册-->selector3
 每一个NioChannel都会绑定唯一的NioEventLoop上
 
 每个NioChannel都绑定一个自己的ChannelPipeline
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/netty9.png)
+
+BossGroup 线程维护 Selector，只关注 Accecpt
+当接收到 Accept 事件，获取到对应的 SocketChannel，封装成 NIOScoketChannel 并注册到 Worker 线程（事件循环），并进行维护
+当 Worker 线程监听到 Selector 中通道发生自己感兴趣的事件后，就进行处理（就由 handler），注意 handler 已经加入到通道
 
 ### 1.4 入门案例
 
@@ -1060,6 +1022,13 @@ public class NettyServerHandler extends ChannelInboundHandlerAdapter {
 public class NettyServer {
     public static void main(String[] args) throws InterruptedException {
         //1.创建线程组
+        //创建BossGroup 和 WorkerGroup
+        //说明
+        //1. 创建两个线程组 bossGroup 和 workerGroup
+        //2. bossGroup 只是处理连接请求 , 真正的和客户端业务处理，会交给 workerGroup完成
+        //3. 两个都是无限循环
+        //4. bossGroup 和 workerGroup 含有的子线程(NioEventLoop)的个数
+        //   默认实际 cpu核数 * 2
         EventLoopGroup bossGroup = new NioEventLoopGroup();
         EventLoopGroup workerGroup = new NioEventLoopGroup();
         //2.创建服务器端启动助手来配置参数
@@ -1068,6 +1037,7 @@ public class NettyServer {
                 .channel(NioServerSocketChannel.class)//使用NioServerSocketChannel作为服务器端通道实现
                 .option(ChannelOption.SO_BACKLOG,128)//设置线程队列中等待连接的个数
                 .childOption(ChannelOption.SO_KEEPALIVE,true)//保持活动连接状态
+                 //handler对应 bossGroup , childHandler 对应 workerGroup
                 .childHandler(new ChannelInitializer<SocketChannel>() {//创建一个通道初始化对象
                     //往Pipeline链中添加自定义业务处理handler
                     @Override
@@ -1077,9 +1047,11 @@ public class NettyServer {
                     }
                 });
         //3.启动服务器端并绑定端口，等待客户端连接（非阻塞）
+        //绑定一个端口并且同步生成了一个 ChannelFuture 对象（也就是立马返回这样一个对象）
         ChannelFuture channelFuture = bootstrap.bind(9999).sync();
         System.out.println("========Server is Start========");
         //4.关闭通道，关闭线程池
+        //对关闭通道事件  进行监听
         channelFuture.channel().closeFuture().sync();
         bossGroup.shutdownGracefully();
         workerGroup.shutdownGracefully();
@@ -1122,8 +1094,10 @@ public class NettyClientHandler extends ChannelInboundHandlerAdapter {
 public class NettyClient {
     public static void main(String[] args) throws InterruptedException {
         //创建一个EventLoopGroup线程组
+        //客户端需要一个事件循环组
         EventLoopGroup group =new NioEventLoopGroup();
         //创建客户端启动助手
+        //注意客户端使用的不是 ServerBootstrap 而是 Bootstrap
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(group).channel(NioSocketChannel.class)
                 .handler(new ChannelInitializer<SocketChannel>() {
@@ -1233,11 +1207,59 @@ public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception 
 }
 ```
 
-## 二、自定义RPC
+## 二、核心组件
 
-### 2.1 概述
+### 2.1 BootStrap、ServerBootStrap
 
-RPC即远程过程调用，是一种通过网络从远程计算机程序上请求服务，而不需要了解底层网络实现的技术。常见的RPC框架Dubbo、grpc等。
+Bootstrap 意思是引导，一个 Netty应用通常由一个 Bootstrap开始，主要作用是配置整个 Netty 程序，串联各个组件，Netty中 Bootstrap类是客户端程序的启动引导类，ServerBootstrap 是服务端启动引导类。
+
+> 常见的方法有
+>
+> 1. `public ServerBootstrap group(EventLoopGroup parentGroup, EventLoopGroup childGroup)`，该方法用于服务器端，用来设置两个 EventLoop
+> 2. `public B group(EventLoopGroup group)`，该方法用于客户端，用来设置一个 EventLoop
+> 3. `public B channel(Class<? extends C> channelClass)`，该方法用来设置一个服务器端的通道实现
+> 4. `public <T> B option(ChannelOption<T> option, T value)`，用来给 ServerChannel 添加配置
+> 5. `public <T> ServerBootstrap childOption(ChannelOption<T> childOption, T value)`，用来给接收到的通道添加配置
+> 6. `public ServerBootstrap childHandler(ChannelHandler childHandler)`，该方法用来设置业务处理类（自定义的handler）
+> 7. `public ChannelFuture bind(int inetPort)`，该方法用于服务器端，用来设置占用的端口号
+> 8. `public ChannelFuture connect(String inetHost, int inetPort)`，该方法用于客户端，用来连接服务器端
+
+### 2.2 Future、ChannelFuture
+
+Netty中所有的 IO操作都是异步的，不能立刻得知消息是否被正确处理。但是可以过一会等它执行完成或者直接注册一个监听，具体的实现就是通过Future和 ChannelFutures，他们可以注册一个监听，当操作执行成功或失败时监听会自动触发注册的监听事件
+
+> 常见的方法有
+>
+> - `Channel channel()`，返回当前正在进行 `IO` 操作的通道
+> - `ChannelFuture sync()`，等待异步操作执行完毕
+
+### 2.3 Channel
+
+Netty 网络通信的组件，能够用于执行网络 I/O 操作。通过 Channel 可获得当前网络连接的通道的状态，通过 Channel 可获得网络连接的配置参数（例如接收缓冲区大小）
+
+Channel 提供异步的网络 I/O 操作(如建立连接，读写，绑定端口)，异步调用意味着任何 I/O 调用都将立即返回，并且不保证在调用结束时所请求的 I/O 操作已完成，调用立即返回一个 
+
+ChannelFuture 实例，通过注册监听器到 ChannelFuture 上，可以 I/O 操作成功、失败或取消时回调通知调用方。支持关联 I/O 操作与对应的处理程序
+
+不同协议、不同的阻塞类型的连接都有不同的 Channel 类型与之对应，常用的 Channel 类型：
+
+> NioSocketChannel，异步的客户端 TCP Socket 连接。
+> NioServerSocketChannel，异步的服务器端 TCP Socket 连接。
+> NioDatagramChannel，异步的 UDP 连接。
+> NioSctpChannel，异步的客户端 Sctp 连接。
+> NioSctpServerChannel，异步的 Sctp 服务器端连接，这些通道涵盖了 UDP 和 TCP 网络 IO 以及文件 IO。
+
+### 2.4 ChannelHandler 及其实现类
+
+ChannelHandler是一个接口，处理 I/O 事件或拦截 I/O操作，并将其转发到其 ChannelPipeline（业务处理链）中的下一个处理程序。ChannelHandler本身并没有提供很多方法，因为这个接口有许多方法需要实现，方便使用期间可以继承他的子类。
+
+
+
+## 三、自定义RPC
+
+### 3.1 概述
+
+RPC即远程过程调用，是一种通过网络从远程计算机程序上请求服务，而不需要了解底层网络实现的技术。常见的RPC框架Dubbo、grpc、SpringCloud等。
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/rpc.png)
 
@@ -1251,7 +1273,7 @@ RPC即远程过程调用，是一种通过网络从远程计算机程序上请�
 8. client stub接收到消息并进行解码
 9. 服务消费方得到结果
 
-### 2.2 设计
+### 3.2 设计
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/rpc2.png)
 
@@ -1262,7 +1284,7 @@ RPC即远程过程调用，是一种通过网络从远程计算机程序上请�
 
 服务调用方的接口必须跟服务提供方的接口保持一致（包路径可以不同），最终实现在TestNettyRPC中远程调用HelloRPCImpl、HelloNetty中放的方法。
 
-### 2.3 实现
+### 3.3 实现
 
 被调用的接口和实现类
 
