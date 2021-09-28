@@ -1251,7 +1251,84 @@ ChannelFuture 实例，通过注册监听器到 ChannelFuture 上，可以 I/O �
 
 ### 2.4 ChannelHandler 及其实现类
 
-ChannelHandler是一个接口，处理 I/O 事件或拦截 I/O操作，并将其转发到其 ChannelPipeline（业务处理链）中的下一个处理程序。ChannelHandler本身并没有提供很多方法，因为这个接口有许多方法需要实现，方便使用期间可以继承他的子类。
+ChannelHandler是一个接口，处理 I/O 事件或拦截 I/O操作，并将其转发到其 ChannelPipeline（业务处理链）中的下一个处理程序。ChannelHandler本身并没有提供很多方法，因为这个接口有许多方法需要实现，方便使用期间可以继承他的子类。类图如下：
+
+~~~mermaid
+ classDiagram
+     class ChannelHandler{
+        <<interface>>
+    }
+    ChannelHandler <|-- ChannelOutboundHandler
+    ChannelHandler <|-- ChannelInboundHandler
+    ChannelHandler <|-- ChannelHandlerAdapter
+    class ChannelOutboundHandler{
+    <<interface>>
+    }
+    class ChannelInboundHandler{
+    <<interface>>
+    }
+    class ChannelHandlerAdapter{
+    }
+    ChannelOutboundHandler <|--ChannelOutboundHandlerAdapter
+    ChannelHandlerAdapter <|--ChannelOutboundHandlerAdapter
+    ChannelHandlerAdapter <|--ChannelInboundHandlerAdapter
+    ChannelInboundHandler <|--ChannelInboundHandlerAdapter
+    class ChannelOutboundHandlerAdapter{
+    }
+    class ChannelInboundHandlerAdapter{
+    }
+~~~
+
+> 如果不能看到类图请自行下载GitHub+MerMaid浏览器插件，或者下载到本地使用md文本编辑器查看
+
+ChannelInboundHandler用于处理入站IO事件
+
+ChannelOutboundHandler用于处理出战IO操作
+
+ChannelInboundHandlerAdapter用于处理入站IO事件
+
+ChannelOutboundHandlerAdapter用于处理出战IO操作
+
+通常需要自定义一个Handler类去继承ChannelInboundHandlerAdapter，然后通过重写相应的方法来实现业务逻辑。一般需要重写以下方法：
+
+~~~java
+//通道就绪事件
+public void channelActive(ChannelHandlerContext ctx)throws Exception{
+    ctx.fireChannelActive();
+}
+//通道读取数据事件
+public void channelRead(ChannelHandlerContext ctx,Object msg)throws Exception{
+    ctx.fireChannelRead(msg);
+}
+//通道读取完毕事件
+public void channelReadComplete(ChannelHandlerContext ctx)throws Exception{
+    ctx.fireChannelReadComplete();
+}
+//通道发生异常事件
+public void exceptionCaught(ChannelHandlerContext ctx,Throwable cause)throws Exception{
+    ctx.fireChannelexceptionCaught(cause);
+}
+~~~
+
+### 2.5 Pipeline 和 ChannelPipeline
+
+ChannelPipeline是一个Handler的集合，它负责处理和拦截inbound或者outbound的事件和操作，相当于一个贯穿neyyt的链。（PS：也可以理解为ChannelPipeline` 是保存 `ChannelHandler` 的 `List）
+
+ChannelPipeline实现了一种高级形式的拦截过滤器模式，使用户可以完全控制事件的处理方式，以及 Channel中各个的 ChannelHandler如何相互交互。
+
+在 Netty中每个 Channel都有且仅有一个 ChannelPipeline与之对应，它们的组成关系如下：
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/netty10.png)
+
+- 一个Channel包含了一个ChannelPipeline，而ChanelPipeline中有维护者一个由ChannelHandlerContext组成的双向链表，并且每个ChannelHandlerContext中有关联着一个ChannelHandler
+- 入站时间和出站事件在一个双向链表中，入站事件会从链表head向后传递一个入站的handler，出站事件会从链表tail向前传递一个出站的handler，两种类型互不干扰。
+
+常用方法：
+
+~~~java
+ChannelPipeline addFirst(ChannelHandler... handlers)//把一个业务处理类（handler）添加到链中的第一个位置
+ ChannelPipeline addLast(ChannelHandler... handlers)//把一个业务处理类（handler）添加到链中的最后一个位置。
+~~~
 
 
 
