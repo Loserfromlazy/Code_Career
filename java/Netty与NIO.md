@@ -1330,6 +1330,43 @@ ChannelPipeline addFirst(ChannelHandler... handlers)//把一个业务处理类�
  ChannelPipeline addLast(ChannelHandler... handlers)//把一个业务处理类（handler）添加到链中的最后一个位置。
 ~~~
 
+### 2.6 ChannelHandlerContext
+
+保存Channel相关的所有的上下文信息，同时关联一个ChannelHandler。即 ChannelHandlerContext中包含一个具体的事件处理器 ChannelHandler，同时 ChannelHandlerContext中也绑定了对应的 pipeline和 Channel的信息，方便对 ChannelHandler 进行调用。常用方法：
+
+- `ChannelFuture close()`，关闭通道
+- `ChannelOutboundInvoker flush()`，刷新
+- `ChannelFuture writeAndFlush(Object msg)`，写数据
+
+### 2.7 ChannelOption
+
+Netty在创建Channel实例后，一般需要设置ChannelOption参数，参数如下：
+
+`ChannelOption.SO_BACKLOG`对应TPC/IP学习listen函数中的backlog参数，用来初始化服务器可连接队列大小，服务端处理客户端连接请求时顺序处理的，所以同一时间只能处理一个客户端连接，多个客户端来的时候，服务端将不能处理客户端连接请求放在队列中等待处理，backlog参数制定了队列的大小
+
+`ChannelOption.SO_KEEPALIVE`一直保持连接活动状态
+
+### 2.8 EventLoopGroup 和其实现类 NioEventLoopGroup
+
+EventLoopGroup 是一组 EventLoop的抽象，Netty为了更好的利用多核 CPU资源，一般会有多个 EventLoop同时工作，每个 EventLoop维护着一个 Selector实例。
+
+EventLoopGroup 提供 next 接口，可以从组里面按照一定规则获取其中一个 EventLoop 来处理任务。在 Netty 服务器端编程中，我们一般都需要提供两个 EventLoopGroup，例如：BossEventLoopGroup 和 WorkerEventLoopGroup。
+
+通常一个服务端口即一个 ServerSocketChannel 对应一个 Selector 和一个 EventLoop 线程。BossEventLoop 负责接收客户端的连接并将 SocketChannel 交给 WorkerEventLoopGroup 来进行 IO 处理，如下图所示：
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/netty11.png)
+
+BossEventLoopGroup通常是一个单线程的EventLoop。EventLoop维护着一个注册了ServerSocketChannel的Selector实例BossEventLoop不断轮询Selector将连接时间分离出来。
+
+通常是OP_ACCEPT事件，然后将接收到的SocketChannel交给WorkerEventLoopGroup
+
+WorkerEventLoopGroup将会由next选择其中一个EventLoop来将这个SocketChannel注册到其维护的Selector并对其后续的IO事件进行处理。
+
+常用方法：
+
+`public NioEventLoopGroup()`，构造方法
+`public Future<?> shutdownGracefully()`，断开连接，关闭线程
+
 
 
 ## 三、自定义RPC
@@ -1555,3 +1592,4 @@ public class TestNettyRpc {
     }
 }
 ```
+
