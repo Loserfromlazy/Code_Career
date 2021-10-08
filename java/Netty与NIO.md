@@ -1367,8 +1367,6 @@ WorkerEventLoopGroup将会由next选择其中一个EventLoop来将这个SocketCh
 `public NioEventLoopGroup()`，构造方法
 `public Future<?> shutdownGracefully()`，断开连接，关闭线程
 
-
-
 ## 三、自定义RPC
 
 ### 3.1 概述
