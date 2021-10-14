@@ -150,6 +150,8 @@ or more simply:
 
   - 封装了得到代理类Class对象、构造函数等细节，直接返回了代理对象
 
+![dongtaidaili](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/dongtaidaili.png)
+
 下面进行动态代理的改变，接口和被代理类不变
 
 ```java
