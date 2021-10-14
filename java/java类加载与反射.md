@@ -188,7 +188,7 @@ JVM的类加载机制主要有如下3种。
 
 JVM中这4种类加载器的层次结构:
 
-![文件无法预览。](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/001.png?Expires=1587000985&OSSAccessKeyId=TMP.3Kk1591ybAo5yAmodqB3V4KtRNw5fsU3HXT8mQcFDf3FbSuShR7FZe75XtjoiykAiEWAk28VTJzyjpqcmVqCtWnyr8Tm2g&Signature=1dfv7rqAG4keiQie6xV7dGfexg4%3D)
+![img](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/2937711-a0cfabf31ece41c5.png)
 
 类加载器加载Class大致要经过如下8个步骤。
 
