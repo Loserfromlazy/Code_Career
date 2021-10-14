@@ -1,4 +1,4 @@
-# Java基于TCP协议的编程
+Java基于TCP协议的编程
 
 TCP/IP通信协议是一种可靠的网络协议，它在通信的两端各建立一个Socket，从而在通信的两端之间形成网络虚拟链路。一旦建立了虚拟的网络链路，两端的程序就可以通过虚拟链路进行通信。Java对基于TCP协议的网络通信提供了良好的封装，Java使用Socket对象来代表两端的通信端口，并通过Socket产生IO流来进行网络通信。
 
@@ -1330,7 +1330,7 @@ channel 的主要方法
 * write() 方法将数据写入
 * writeAndFlush() 方法将数据写入并刷出
 
-### 2.3 ChannelFuture
+#### 2.2.1 ChannelFuture
 
 这是之前的客户端代码
 
@@ -1417,7 +1417,7 @@ channelFuture.addListener(future -> {
 
 ChannelFutureListener 会在连接建立时被调用（其中 operationComplete 方法），因此执行到 2 时，连接肯定建立了，打印 `[id: 0x749124ba, L:/127.0.0.1:57351 - R:/127.0.0.1:8080]`
 
-### 2.4 CloseFuture
+#### 2.2.2 CloseFuture
 
 使用方法：
 
@@ -1489,7 +1489,7 @@ public class CloseFutureClient {
 * 异步并没有缩短响应时间，反而有所增加，异步提升的是吞吐量
 * 合理进行任务拆分，也是利用异步的关键
 
-### 2.5 Future & Promise
+### 2.4 Future & Promise
 
 在异步处理时，经常用到这两个接口
 
@@ -1605,7 +1605,7 @@ public class TestNettyPromise {
 }
 ```
 
-### 2.6 Handler & Pipeline
+### 2.5 Handler & Pipeline
 
 ChannelHandler 用来处理 Channel 上的各种事件，分为入站、出站两种。所有 ChannelHandler 被连成一串，就是 Pipeline
 
@@ -1614,98 +1614,575 @@ ChannelHandler 用来处理 Channel 上的各种事件，分为入站、出站�
 
 > 打个比喻，每个 Channel 是一个产品的加工车间，Pipeline 是车间中的流水线，ChannelHandler 就是流水线上的各道工序，而后面要讲的 ByteBuf 是原材料，经过很多工序的加工：先经过一道道入站工序，再经过一道道出站工序最终变成产品
 
-### 2.7 ByteBuf
+**pipeline中handler的执行顺序：**
+
+有以下服务器端代码，启动服务器端后让客户端发送一条消息
+
+```java
+@Slf4j
+public class Server {
+    public static void main(String[] args) {
+        new ServerBootstrap()
+                .group(new NioEventLoopGroup())
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    protected void initChannel(NioSocketChannel ch) {
+                        //添加处理器 head --> h1 -> h2 -> h3 ->h4 -> h5 -> h6 -->tail
+                        ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                log.debug("1");
+                                ByteBuf buf = (ByteBuf) msg;
+                                String name = buf.toString(Charset.defaultCharset());
+                                ctx.fireChannelRead(name); // 1
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                log.debug("2");
+                                Student student = new Student();
+                                student.setName(msg.toString());
+                                ctx.fireChannelRead(student); // 2
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                log.debug("3,结果是{},class:{}",msg,msg.getClass());
+                                ctx.channel().writeAndFlush(ctx.alloc().buffer().writeBytes("server...".getBytes())); // 3
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg,
+                                              ChannelPromise promise) {
+                                log.debug("4");
+                                ctx.write(msg, promise); // 4
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg,
+                                              ChannelPromise promise) {
+                                log.debug("5");
+                                ctx.write(msg, promise); // 5
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg,
+                                              ChannelPromise promise) {
+                                log.debug("6");
+                                ctx.write(msg, promise); // 6
+                            }
+                        });
+                    }
+                })
+                .bind(8080);
+    }
+}
+```
+
+运行结果是：
+
+> 11:28:59.053 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 1
+> 11:28:59.054 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 2
+> 11:28:59.054 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 3,结果是com.learn.handlerandpipeline.Student@3b0418ac,class:class com.learn.handlerandpipeline.Student
+> 11:28:59.055 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 6
+> 11:28:59.055 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 5
+> 11:28:59.055 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 4
+
+从结果可以得知入站处理器ChannelInboundHandlerAdapter 是按照addLast的顺序执行的，而出站处理器ChannelOutboundHandlerAdapter 是按照addLast逆序执行的。ChannelPipeline实际上是一个ChannelHandlerContext组成的双向链表。如下图：数字代表了处理顺序。
+
+![image-20211013111316423](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211013111316423.png)
+
+* 入站处理器中，ctx.fireChannelRead(msg) 是 **调用下一个入站处理器**
+  * 如果注释掉 1 处代码，则仅会打印 1
+  * 如果注释掉 2 处代码，则仅会打印 1 2
+* 3 处的 ctx.channel().write(msg) 会 **从尾部开始触发** 后续出站处理器的执行
+  * 如果注释掉 3 处代码，则仅会打印 1 2 3
+* 类似的，出站处理器中，ctx.write(msg, promise) 的调用也会 **触发上一个出站处理器**
+  * 如果注释掉 6 处代码，则仅会打印 1 2 3 6
+* ctx.channel().write(msg) 和 ctx.write(msg)
+  * 都是触发出站处理器的执行
+  * ctx.channel().write(msg) 从尾部开始查找出站处理器
+  * ctx.write(msg) 是从当前节点找上一个出站处理器
+  * 3 处的 ctx.channel().write(msg) 如果改为 ctx.write(msg) 仅会打印 1 2 3，因为节点3 之前没有其它出站处理器了
+  * 6 处的 ctx.write(msg, promise) 如果改为 ctx.channel().write(msg) 会打印 1 2 3 6 6 6... 因为 ctx.channel().write() 是从尾部开始查找，结果又是节点6 自己
+
+**Handler中主要的生命周期**
+
+如下图
+
+![img](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/b33b5450gy1gdb5q4gnj1j20k205lmxd.jpg)
+
+> 1. handlerAdded: 新建立的连接会按照初始化策略，把handler添加到该channel的pipeline里面，也就是channel.pipeline.addLast(new LifeCycleInBoundHandler)执行完成后的回调；
+> 2. channelRegistered: 当该连接分配到具体的worker线程后，该回调会被调用。
+> 3. channelActive：channel的准备工作已经完成，所有的pipeline添加完成，并分配到具体的线上上，说明该channel准备就绪，可以使用了。
+> 4. channelRead：客户端向服务端发来数据，每次都会回调此方法，表示有数据可读；
+> 5. channelReadComplete：服务端每次读完一次完整的数据之后，回调该方法，表示数据读取完毕；
+> 6. channelInactive：当连接断开时，该回调会被调用，说明这时候底层的TCP连接已经被断开了。
+> 7. channelUnREgistered: 对应channelRegistered，当连接关闭后，释放绑定的workder线程；
+> 8. handlerRemoved： 对应handlerAdded，将handler从该channel的pipeline移除后的回调方法。
+
+**EmbeddedChannel**
+
+netty提供的针对ChannelHandler快速测试的类，用法如下：
+
+```java
+public class TestEmbeddedChannel {
+    public static void main(String[] args) {
+        ChannelInboundHandlerAdapter h1 = new ChannelInboundHandlerAdapter(){
+            @Override
+            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                System.out.println(1);
+                super.channelRead(ctx, msg);
+            }
+        };
+        ChannelInboundHandlerAdapter h2 = new ChannelInboundHandlerAdapter(){
+            @Override
+            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                System.out.println(2);
+                super.channelRead(ctx, msg);
+            }
+        };
+        ChannelOutboundHandlerAdapter h3 = new ChannelOutboundHandlerAdapter(){
+            @Override
+            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                System.out.println(3);
+                super.write(ctx, msg, promise);
+            }
+        };
+        ChannelOutboundHandlerAdapter h4 = new ChannelOutboundHandlerAdapter(){
+            @Override
+            public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                System.out.println(4);
+                super.write(ctx, msg, promise);
+            }
+        };
+
+        EmbeddedChannel channel = new EmbeddedChannel(h1,h2,h3,h4);
+        channel.writeInbound(ByteBufAllocator.DEFAULT.buffer().writeBytes("123".getBytes(StandardCharsets.UTF_8)));
+    }
+}
+```
+
+### 2.6 ByteBuf
 
 是对字节数据的封装
 
-### 2.8 Unpooled类
-
-netty提供了一个专门操作缓冲区，及netty的数据容器的工具类，常用方法：
+此2.6小节的log方式是自定义的
 
 ~~~java
-//通过给定的数据和字符编码返回一个ByteBuf对象(类似与NIO中的ByteBuffer但是有区别)
-public static ByteBuf copiedBuffer(CharSequence string,Charset charset)
+    private static void log(ByteBuf buffer) {
+        int length = buffer.readableBytes();
+        int rows = length / 16 + (length % 15 == 0 ? 0 : 1) + 4;
+        StringBuilder buf = new StringBuilder(rows * 80 * 2)
+                .append("read index:").append(buffer.readerIndex())
+                .append(" write index:").append(buffer.writerIndex())
+                .append(" capacity:").append(buffer.capacity())
+                .append(NEWLINE);
+        appendPrettyHexDump(buf, buffer);
+        System.out.println(buf.toString());
+    }
 ~~~
+
+**ByteBuf 优势**
+
+> * 池化 - 可以重用池中 ByteBuf 实例，更节约内存，减少内存溢出的可能
+> * 读写指针分离，不需要像 ByteBuffer 一样切换读写模式
+> * 可以自动扩容
+> * 支持链式调用，使用更流畅
+> * 很多地方体现零拷贝，例如 slice、duplicate、CompositeByteBuf
+
+创建ByteBuf
+
+```java
+ByteBuf buf = ByteBufAllocator.DEFAULT.buffer(10);
+Bytebuf buf = ctx.alloc().buffer(10);//建议使用，大部分场景shandler中
+```
+
+输出为
+
+> read index:0 write index:0 capacity:10
+
+上述代码创建了一个默认的 ByteBuf（池化基于直接内存的 ByteBuf），初始容量是 10
+
+可以使用下面的代码来创建池化基于堆的 ByteBuf
+
+```java
+ByteBuf buffer = ByteBufAllocator.DEFAULT.heapBuffer(10);
+```
+
+也可以使用下面的代码来创建池化基于直接内存的 ByteBuf
+
+```java
+ByteBuf buffer = ByteBufAllocator.DEFAULT.directBuffer(10);
+```
+
+* 直接内存创建和销毁的代价昂贵，但读写性能高（少一次内存复制），适合配合池化功能一起用
+* 直接内存对 GC 压力小，因为这部分内存不受 JVM 垃圾回收的管理，但也要注意及时主动释放
+
+**池化和非池化**
+
+池化的最大意义在于可以重用 ByteBuf，优点有
+
+* 没有池化，则每次都得创建新的 ByteBuf 实例，这个操作对直接内存代价昂贵，就算是堆内存，也会增加 GC 压力
+* 有了池化，则可以重用池中 ByteBuf 实例，并且采用了与 jemalloc 类似的内存分配算法提升分配效率
+* 高并发时，池化功能更节约内存，减少内存溢出的可能
+
+池化功能是否开启，可以通过下面的系统环境变量来设置
+
+```java
+-Dio.netty.allocator.type={unpooled|pooled}
+```
+
+上面设置命令在IDEA中的使用：在IDEA的VM option中添加
+
+![image-20211013151835704](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211013151835704.png)
+
+在IDEA的VMOption中设置
+
+* 4.1 以后，非 Android 平台默认启用池化实现，Android 平台启用非池化实现
+* 4.1 之前，池化功能还不成熟，默认是非池化实现
+
+ByteBuf 由四部分组成
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/0010.png)
+
+最开始读写指针都在 0 位置
+
+#### 2.6.1写入和扩容
+
+写入方法：
+
+> 注意
+>
+> * 这些方法的未指明返回值的，其返回值都是 ByteBuf，意味着可以链式调用
+> * 网络传输，默认习惯是 Big Endian
+
+| 方法签名                                                     | 含义                   | 备注                                        |
+| ------------------------------------------------------------ | ---------------------- | ------------------------------------------- |
+| writeBoolean(boolean value)                                  | 写入 boolean 值        | 用一字节 01\|00 代表 true\|false            |
+| writeByte(int value)                                         | 写入 byte 值           |                                             |
+| writeShort(int value)                                        | 写入 short 值          |                                             |
+| writeInt(int value)                                          | 写入 int 值            | Big Endian，即 0x250，写入后 00 00 02 50    |
+| writeIntLE(int value)                                        | 写入 int 值            | Little Endian，即 0x250，写入后 50 02 00 00 |
+| writeLong(long value)                                        | 写入 long 值           |                                             |
+| writeChar(int value)                                         | 写入 char 值           |                                             |
+| writeFloat(float value)                                      | 写入 float 值          |                                             |
+| writeDouble(double value)                                    | 写入 double 值         |                                             |
+| writeBytes(ByteBuf src)                                      | 写入 netty 的 ByteBuf  |                                             |
+| writeBytes(byte[] src)                                       | 写入 byte[]            |                                             |
+| writeBytes(ByteBuffer src)                                   | 写入 nio 的 ByteBuffer |                                             |
+| int writeCharSequence(CharSequence sequence, Charset charset) | 写入字符串             |                                             |
+
+例子：
+
+```java
+public static void main(String[] args) {
+    ByteBuf buf = ByteBufAllocator.DEFAULT.buffer(10);
+    buf.writeBytes(new byte[]{1,2,3,4});
+    log(buf);
+    buf.writeInt(5);
+    log(buf);
+}
+```
+
+输出结果
+
+~~~
+read index:0 write index:4 capacity:10
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+read index:0 write index:8 capacity:10
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04 00 00 00 05                         |........        |
++--------+-------------------------------------------------+----------------+
+~~~
+
+可以看到先写入了四个字节然后写入了一个四字节的整形结果是八个字节
+
+如果在写入一个in整数，容量就不够了，就会发生扩容。
+
+~~~
+buffer.writeInt(6);
+log(buffer);
+~~~
+
+结果：
+
+~~~
+read index:0 write index:12 capacity:64
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04 00 00 00 05 00 00 00 06             |............    |
++--------+-------------------------------------------------+----------------+
+~~~
+
+扩容规则是
+
+* 如果写入后数据大小未超过 512，则选择下一个 16 的整数倍，例如写入后大小为 12 ，则扩容后 capacity 是 16
+* 如果写入后数据大小超过 512，则选择下一个 2^n，例如写入后大小为 513，则扩容后 capacity 是 2^10=1024（2^9=512 已经不够了）
+* 扩容不能超过 max capacity 会报错
+
+#### 2.6.2 读取
+
+继续上面的代码，添加四次读取
+
+```
+System.out.println(buf.readByte());
+System.out.println(buf.readByte());
+System.out.println(buf.readByte());
+System.out.println(buf.readByte());
+log(buf);
+```
+
+结果
+
+~~~
+1
+2
+3
+4
+read index:4 write index:12 capacity:64
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 00 00 00 05 00 00 00 06                         |........        |
++--------+-------------------------------------------------+----------------+
+
+~~~
+
+读过的内容属于废弃部分，在读就只能读取未读取的部分
+
+如果需要重复读取比如上面的整形数字5，则可以在读取前做一个标记
+
+```
+buf.markReaderIndex();
+System.out.println(buf.readInt());
+log(buf);
+```
+
+结果：
+
+~~~
+5
+read index:8 write index:12 capacity:64
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 00 00 00 06                                     |....            |
++--------+-------------------------------------------------+----------------+
+~~~
+
+这时如果需要重复读取，则重置reset
+
+```
+buf.resetReaderIndex();
+log(buf);
+```
+
+结果：
+
+~~~
+read index:4 write index:12 capacity:64
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 00 00 00 05 00 00 00 06                         |........        |
++--------+-------------------------------------------------+----------------+
+~~~
+
+**或者是采用get开头的方法，这些方法不会改变读指针**
+
+#### 2.6.3 内存释放 retain和release
+
+由于 Netty 中有堆外内存的 ByteBuf 实现，堆外内存最好是手动来释放，而不是等 GC 垃圾回收。
+
+* UnpooledHeapByteBuf 使用的是 JVM 内存，只需等 GC 回收内存即可
+* UnpooledDirectByteBuf 使用的就是直接内存了，需要特殊的方法来回收内存
+* PooledByteBuf 和它的子类使用了池化机制，需要更复杂的规则来回收内存
+
+Netty 这里采用了引用计数法来控制回收内存，每个 ByteBuf 都实现了 ReferenceCounted 接口
+
+* 每个 ByteBuf 对象的初始计数为 1
+* 调用 release 方法计数减 1，如果计数为 0，ByteBuf 内存被回收
+* 调用 retain 方法计数加 1，表示调用者没用完之前，其它 handler 即使调用了 release 也不会造成回收
+* 当计数为 0 时，底层内存会被回收，这时即使 ByteBuf 对象还在，其各个方法均无法正常使用
+
+基本规则是，**谁是最后使用者，谁负责 release**
+
+> * 起点，对于 NIO 实现来讲，在 io.netty.channel.nio.AbstractNioByteChannel.NioByteUnsafe#read 方法中首次创建 ByteBuf 放入 pipeline（line 163 pipeline.fireChannelRead(byteBuf)）
+> * 入站 ByteBuf 处理原则
+>   * 对原始 ByteBuf 不做处理，调用 ctx.fireChannelRead(msg) 向后传递，这时无须 release
+>   * 将原始 ByteBuf 转换为其它类型的 Java 对象，这时 ByteBuf 就没用了，必须 release
+>   * 如果不调用 ctx.fireChannelRead(msg) 向后传递，那么也必须 release
+>   * 注意各种异常，如果 ByteBuf 没有成功传递到下一个 ChannelHandler，必须 release
+>   * 假设消息一直向后传，那么 TailContext 会负责释放未处理消息（原始的 ByteBuf）
+> * 出站 ByteBuf 处理原则
+>   * 出站消息最终都会转为 ByteBuf 输出，一直向前传，由 HeadContext flush 后 release
+> * 异常处理原则
+>   * 有时候不清楚 ByteBuf 被引用了多少次，但又必须彻底释放，可以循环调用 release 直到返回 true
+
+#### 2.6.4 slice
+
+【零拷贝】的体现之一，对原始 ByteBuf 进行切片成多个 ByteBuf，切片后的 ByteBuf 并没有发生内存复制，还是使用原始 ByteBuf 的内存，切片后的 ByteBuf 维护独立的 read，write 指针
+
+![image-20211014090002945](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211014090002945.png)
 
 示例：
 
-~~~java
-public class NettyByteBuf01 {
-
+```java
+public class TestSlice {
     public static void main(String[] args) {
-        
-        //创建一个ByteBuf
-        //说明
-        //1. 创建 对象，该对象包含一个数组arr , 是一个byte[10]
-        //2. 在netty 的buffer中，不需要使用flip 进行反转
-        //   底层维护了 readerindex 和 writerIndex
-        //3. 通过 readerindex 和  writerIndex 和  capacity， 将buffer分成三个区域
-        // 0---readerindex 已经读取的区域
-        // readerindex---writerIndex ， 可读的区域
-        // writerIndex -- capacity, 可写的区域
-        ByteBuf buffer = Unpooled.buffer(10);
-
-        for (int i = 0; i < 10; i++) {
-            buffer.writeByte(i);
-        }
-
-        System.out.println("capacity=" + buffer.capacity());//10
-        //输出
-//        for(int i = 0; i<buffer.capacity(); i++) {
-        	  //这个方法readerindex不会变
-//            System.out.println(buffer.getByte(i));
-//        }
-        for (int i = 0; i < buffer.capacity(); i++) {
-            //这个方法readerindex会变
-            System.out.println(buffer.readByte());
-        }
-        System.out.println("执行完毕");
+        ByteBuf buf = ByteBufAllocator.DEFAULT.buffer(10);
+        buf.writeBytes(new byte[]{1,2,3,4});
+        System.out.println("buf");
+        System.out.println(ByteBufUtil.prettyHexDump(buf));
+        System.out.println("slice");
+        ByteBuf slice = buf.slice();
+        System.out.println(ByteBufUtil.prettyHexDump(slice));
+        //slice.writeByte(5); //如果执行，会报 IndexOutOfBoundsException 异常
+        buf.readByte();
+        System.out.println("buf读一个字节对slice没有改变");
+        System.out.println(ByteBufUtil.prettyHexDump(buf));
+        System.out.println(ByteBufUtil.prettyHexDump(slice));
+        System.out.println("slice的内容发生了改变则原始Bytebuf也会受影响");
+        slice.setByte(1,8);
+        System.out.println(ByteBufUtil.prettyHexDump(buf));
+        System.out.println(ByteBufUtil.prettyHexDump(slice));
     }
 }
+```
 
-public class NettyByteBuf02 {
-    
-    public static void main(String[] args) {
-
-        //创建ByteBuf
-        ByteBuf byteBuf = Unpooled.copiedBuffer("hello,world!", Charset.forName("utf-8"));
-
-        //使用相关的方法
-        if (byteBuf.hasArray()) { // true
-
-            byte[] content = byteBuf.array();
-
-            //将 content 转成字符串
-            System.out.println(new String(content, Charset.forName("utf-8")));
-
-            System.out.println("byteBuf=" + byteBuf);
-
-            System.out.println(byteBuf.arrayOffset()); // 0
-            System.out.println(byteBuf.readerIndex()); // 0
-            System.out.println(byteBuf.writerIndex()); // 12
-            System.out.println(byteBuf.capacity()); // 36
-
-            //System.out.println(byteBuf.readByte()); //
-            System.out.println(byteBuf.getByte(0)); // 104
-
-            int len = byteBuf.readableBytes(); //可读的字节数  12
-            System.out.println("len=" + len);
-
-            //使用for取出各个字节
-            for (int i = 0; i < len; i++) {
-                System.out.println((char) byteBuf.getByte(i));
-            }
-
-            //按照某个范围读取
-            System.out.println(byteBuf.getCharSequence(0, 4, Charset.forName("utf-8")));
-            System.out.println(byteBuf.getCharSequence(4, 6, Charset.forName("utf-8")));
-        }
-    }
-}
+结果：
 
 ~~~
+buf
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+slice
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+buf读一个字节对slice没有改变
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 02 03 04                                        |...             |
++--------+-------------------------------------------------+----------------+
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+slice的内容发生了改变则原始Bytebuf也会受影响
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 08 03 04                                        |...             |
++--------+-------------------------------------------------+----------------+
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 08 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+~~~
 
+注意，切片后不能追加write，因为max capacity被固定到这个区间的大小
 
+如果原始Bytebuf再次读操作，此时的slice不受影响，因为他有独立的读写指针但如果slice的内容发生了改变则原始Bytebuf也会受影响，因为底层是同一块内存。
+
+#### 2.6.5 duplicate
+
+【零拷贝】的体现之一，就好比截取了原始 ByteBuf 所有内容，并且没有 max capacity 的限制，也是与原始 ByteBuf 使用同一块底层内存，只是读写指针是独立的
+
+![image-20211014091003339](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211014091003339.png)
+
+#### 2.6.6 copy
+
+copy方法会将底层内存数据进行深拷贝，因此无论读写，都与原始 ByteBuf 无关。
+
+源码注释：
+
+> Returns a copy of this buffer's readable bytes. Modifying the content of the returned buffer or this buffer does not affect each other at all. This method is identical to buf.copy(buf.readerIndex(), buf.readableBytes()). This method does not modify readerIndex or writerIndex of this buffer.
+
+#### 2.6.7 CompositeByteBuf
+
+【零拷贝】的体现之一，可以将多个 ByteBuf 合并为一个逻辑上的 ByteBuf，避免拷贝
+
+CompositeByteBuf 是一个组合的 ByteBuf，它内部维护了一个 Component 数组，每个 Component 管理一个 ByteBuf，记录了这个 ByteBuf 相对于整体偏移量等信息，代表着整体中某一段的数据。
+
+* 优点，对外是一个虚拟视图，组合这些 ByteBuf 不会产生内存复制
+* 缺点，复杂了很多，多次操作会带来性能的损耗
+
+例子：
+
+```java
+public class TestCompositeByteBuf {
+    public static void main(String[] args) {
+        ByteBuf buf1 = ByteBufAllocator.DEFAULT.buffer(5);
+        buf1.writeBytes(new byte[]{1, 2, 3, 4, 5});
+        ByteBuf buf2 = ByteBufAllocator.DEFAULT.buffer(5);
+        buf2.writeBytes(new byte[]{6, 7, 8, 9, 10});
+        System.out.println(ByteBufUtil.prettyHexDump(buf1));
+        System.out.println(ByteBufUtil.prettyHexDump(buf2));
+        //方法一
+//        ByteBuf buf3 = ByteBufAllocator.DEFAULT
+//                .buffer(buf1.readableBytes()+buf2.readableBytes());
+//        buf3.writeBytes(buf1);
+//        buf3.writeBytes(buf2);
+//        System.out.println(ByteBufUtil.prettyHexDump(buf3));
+        //方法2
+        CompositeByteBuf buf4 = ByteBufAllocator.DEFAULT.compositeBuffer();
+        // true 表示增加新的 ByteBuf 自动递增 write index, 否则 write index 会始终为 0
+        buf4.addComponents(true, buf1, buf2);
+        System.out.println(ByteBufUtil.prettyHexDump(buf4));
+    }
+}
+```
+
+结果：
+
+~~~
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04 05                                  |.....           |
++--------+-------------------------------------------------+----------------+
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 06 07 08 09 0a                                  |.....           |
++--------+-------------------------------------------------+----------------+
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04 05 06 07 08 09 0a                   |..........      |
++--------+-------------------------------------------------+----------------+
+~~~
+
+### 2.7 Unpooled类
+
+netty提供了一个专门操作缓冲区，及netty的数据容器的工具类，提供了非池化的 ByteBuf 创建、组合、复制等操作。常用方法：
+
+~~~java
+public static ByteBuf copiedBuffer(CharSequence string,Charset charset)
+public static ByteBuf wrappedBuffer(ByteBuf... buffers)
+~~~
 
 ## 三、自定义RPC
 
