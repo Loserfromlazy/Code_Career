@@ -438,21 +438,7 @@ data属性返回的是city的实体数组
             $ref: '#/definitions/ApiCityPageResponse'
 ```
 
-## 2.3 批量生产API文档
-
-只需要代码生成器生成脚本即可
-
-我们使用《黑马程序员代码生成器》自动生成所有表的yml文档
-
-自动生成的文档中类型均为string ，我们这里需要再对类型进行修改即可。
-
-步骤：
-
-（1）执行建表脚本
-
-（2）使用《黑马程序员代码生成器》生成脚本
-
-## 2.4 SwaggerUI
+## 2.3 SwaggerUI
 
 SwaggerUI是用来展示Swagger文档的界面，以下为安装步骤
 
