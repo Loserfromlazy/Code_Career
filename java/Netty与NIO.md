@@ -1,4 +1,4 @@
-Java基于TCP协议的编程
+# Java基于TCP协议的编程
 
 TCP/IP通信协议是一种可靠的网络协议，它在通信的两端各建立一个Socket，从而在通信的两端之间形成网络虚拟链路。一旦建立了虚拟的网络链路，两端的程序就可以通过虚拟链路进行通信。Java对基于TCP协议的网络通信提供了良好的封装，Java使用Socket对象来代表两端的通信端口，并通过Socket产生IO流来进行网络通信。
 
@@ -2184,9 +2184,288 @@ public static ByteBuf copiedBuffer(CharSequence string,Charset charset)
 public static ByteBuf wrappedBuffer(ByteBuf... buffers)
 ~~~
 
-## 三、自定义RPC
+## 三、Netty的粘包和半包
 
-### 3.1 概述
+### 3.1 粘包、拆包现象复现
+
+客户端分别发送了两条数据包d1和d2给服务端，由于服务端一次读取到的字节数是不确定的，故可能存在4种情况：
+
+1. 服务端分两次读取到了独立的数据包，分别是d1和d2，没有粘包和拆包
+2. 服务端一次接收了两个数据包，d1和d2粘合在一起，成为TCP粘包
+3. 如果d2de1数据包较大，服务端分两次读取到了两个数据包，第一次读取到了完成的d1和d2的一部分，第二次读取到了d2包的剩余部分，成为TCP拆包
+4. 如果d1，d2的数据包都很大，服务端分多次才能将d1和d2包接收完全，期间发生多次拆包。
+
+编写服务器端代码
+
+```java
+@Slf4j
+public class Server {
+    void start(){
+        NioEventLoopGroup bossGroup = new NioEventLoopGroup();
+        NioEventLoopGroup workerGroup = new NioEventLoopGroup();
+        try {
+            ServerBootstrap bootstrap = new ServerBootstrap()
+                    .group(bossGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ch.pipeline().addLast(new LoggingHandler(LogLevel.DEBUG));
+                            ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+
+                                @Override
+                                public void channelActive(ChannelHandlerContext ctx) throws Exception {
+                                    log.debug("channel connected {}", ctx.channel());
+                                    super.channelActive(ctx);
+                                }
+
+                                @Override
+                                public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+                                    log.debug("channel connected {}", ctx.channel());
+                                    super.channelInactive(ctx);
+                                }
+                            });
+                        }
+                    });
+            ChannelFuture channelFuture = bootstrap.bind(8080);
+            log.debug("{} binging...",channelFuture.channel());
+            channelFuture.sync();
+            log.debug("{} binded",channelFuture.channel());
+            channelFuture.channel().closeFuture().sync();
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+            log.debug("stop");
+        }
+
+    }
+
+    public static void main(String[] args) {
+        new Server().start();
+    }
+}
+```
+
+客户端代码
+
+```java
+@Slf4j
+public class Client {
+    public static void main(String[] args) {
+        NioEventLoopGroup group = new NioEventLoopGroup();
+        try {
+            Bootstrap bootstrap = new Bootstrap()
+                    .group(group)
+                    .channel(NioSocketChannel.class)
+                    .handler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ch.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                                @Override
+                                public void channelActive(ChannelHandlerContext ctx) throws Exception {
+                                    log.debug("sending...");
+                                    Random random = new Random();
+                                    for (int i = 0; i < 10; i++) {
+                                        ByteBuf buf = ctx.alloc().buffer();
+                                        buf.writeBytes(new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15});
+                                        ctx.writeAndFlush(buf);
+                                    }
+                                    super.channelActive(ctx);
+                                }
+                            });
+                        }
+                    });
+            ChannelFuture channelFuture = bootstrap.connect("localhost", 8080);
+            channelFuture.sync();
+            channelFuture.channel().closeFuture().sync();
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            group.shutdownGracefully();
+        }
+    }
+}
+```
+
+结果
+
+~~~
+13:31:52.851 [main] DEBUG com.learn.AllPackageAndHalfPackage.Server - [id: 0xf209f976] binging...
+13:31:52.857 [main] DEBUG com.learn.AllPackageAndHalfPackage.Server - [id: 0xf209f976, L:/0:0:0:0:0:0:0:0:8080] binded
+13:31:57.668 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x5d357c65, L:/127.0.0.1:8080 - R:/127.0.0.1:50455] REGISTERED
+13:31:57.668 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x5d357c65, L:/127.0.0.1:8080 - R:/127.0.0.1:50455] ACTIVE
+13:31:57.668 [nioEventLoopGroup-3-1] DEBUG com.learn.AllPackageAndHalfPackage.Server - channel connected [id: 0x5d357c65, L:/127.0.0.1:8080 - R:/127.0.0.1:50455]
+13:31:57.678 [nioEventLoopGroup-3-1] DEBUG io.netty.util.Recycler - -Dio.netty.recycler.maxCapacityPerThread: 32768
+13:31:57.678 [nioEventLoopGroup-3-1] DEBUG io.netty.util.Recycler - -Dio.netty.recycler.maxSharedCapacityFactor: 2
+13:31:57.678 [nioEventLoopGroup-3-1] DEBUG io.netty.util.Recycler - -Dio.netty.recycler.linkCapacity: 16
+13:31:57.678 [nioEventLoopGroup-3-1] DEBUG io.netty.util.Recycler - -Dio.netty.recycler.ratio: 8
+13:31:57.683 [nioEventLoopGroup-3-1] DEBUG io.netty.buffer.AbstractByteBuf - -Dio.netty.buffer.bytebuf.checkAccessible: true
+13:31:57.683 [nioEventLoopGroup-3-1] DEBUG io.netty.util.ResourceLeakDetectorFactory - Loaded default ResourceLeakDetector: io.netty.util.ResourceLeakDetector@30393488
+13:31:57.686 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x5d357c65, L:/127.0.0.1:8080 - R:/127.0.0.1:50455] READ: 160B
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000010| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000020| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000030| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000040| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000050| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000060| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000070| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000080| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000090| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
++--------+-------------------------------------------------+----------------+
+13:31:57.686 [nioEventLoopGroup-3-1] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded inbound message PooledUnsafeDirectByteBuf(ridx: 0, widx: 160, cap: 1024) that reached at the tail of the pipeline. Please check your pipeline configuration.
+13:31:57.686 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x5d357c65, L:/127.0.0.1:8080 - R:/127.0.0.1:50455] READ COMPLETE
+~~~
+
+由输出结果可见，服务器端一次接受了160个字节，而不是接受十次，这就是粘包现象
+
+如果我们将服务器端的接收缓冲区变小，
+
+在上面的服务器端代码的启动助手中加入一条设置
+
+~~~
+.option(ChannelOption.SO_RCVBUF,10)
+~~~
+
+结果：
+
+~~~
+13:44:11.849 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x396fef57, L:/127.0.0.1:8080 - R:/127.0.0.1:50708] READ: 36B
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000010| 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f |................|
+|00000020| 00 01 02 03                                     |....            |
++--------+-------------------------------------------------+----------------+
+13:44:11.849 [nioEventLoopGroup-3-1] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded inbound message PooledUnsafeDirectByteBuf(ridx: 0, widx: 36, cap: 1024) that reached at the tail of the pipeline. Please check your pipeline configuration.
+13:44:11.849 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x396fef57, L:/127.0.0.1:8080 - R:/127.0.0.1:50708] READ COMPLETE
+13:44:11.849 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x396fef57, L:/127.0.0.1:8080 - R:/127.0.0.1:50708] READ: 50B
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 00 01 02 03 |................|
+|00000010| 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 00 01 02 03 |................|
+|00000020| 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 00 01 02 03 |................|
+|00000030| 04 05                                           |..              |
++--------+-------------------------------------------------+----------------+
+13:44:11.849 [nioEventLoopGroup-3-1] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded inbound message PooledUnsafeDirectByteBuf(ridx: 0, widx: 50, cap: 1024) that reached at the tail of the pipeline. Please check your pipeline configuration.
+13:44:11.849 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x396fef57, L:/127.0.0.1:8080 - R:/127.0.0.1:50708] READ COMPLETE
+13:44:11.849 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x396fef57, L:/127.0.0.1:8080 - R:/127.0.0.1:50708] READ: 50B
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 06 07 08 09 0a 0b 0c 0d 0e 0f 00 01 02 03 04 05 |................|
+|00000010| 06 07 08 09 0a 0b 0c 0d 0e 0f 00 01 02 03 04 05 |................|
+|00000020| 06 07 08 09 0a 0b 0c 0d 0e 0f 00 01 02 03 04 05 |................|
+|00000030| 06 07                                           |..              |
++--------+-------------------------------------------------+----------------+
+13:44:11.849 [nioEventLoopGroup-3-1] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded inbound message PooledUnsafeDirectByteBuf(ridx: 0, widx: 50, cap: 512) that reached at the tail of the pipeline. Please check your pipeline configuration.
+13:44:11.850 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x396fef57, L:/127.0.0.1:8080 - R:/127.0.0.1:50708] READ COMPLETE
+13:44:11.850 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x396fef57, L:/127.0.0.1:8080 - R:/127.0.0.1:50708] READ: 24B
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 08 09 0a 0b 0c 0d 0e 0f 00 01 02 03 04 05 06 07 |................|
+|00000010| 08 09 0a 0b 0c 0d 0e 0f                         |........        |
++--------+-------------------------------------------------+----------------+
+13:44:11.850 [nioEventLoopGroup-3-1] DEBUG io.netty.channel.DefaultChannelPipeline - Discarded inbound message PooledUnsafeDirectByteBuf(ridx: 0, widx: 24, cap: 512) that reached at the tail of the pipeline. Please check your pipeline configuration.
+13:44:11.850 [nioEventLoopGroup-3-1] DEBUG io.netty.handler.logging.LoggingHandler - [id: 0x396fef57, L:/127.0.0.1:8080 - R:/127.0.0.1:50708] READ COMPLETE
+~~~
+
+我们会看到比较明显的粘包拆包现象。
+
+> serverBootstrap.option(ChannelOption.SO_RCVBUF, 10) 影响的底层接收缓冲区（即滑动窗口）大小，仅决定了 netty 读取的最小单位，netty 实际每次读取的一般是它的整数倍
+
+### 3.2 现象分析
+
+粘包现象：发送 abc def，接收abcdef
+
+原因：
+
+- 应用层：接收方ByteBuf设置过大，netty默认为1024
+- tcp滑动窗口。假设发送方 256 bytes 表示一个完整报文，但由于接收方处理不及时且窗口大小足够大，这 256 bytes 字节就会缓冲在接收方的滑动窗口中，当滑动窗口中缓冲了多个报文就会粘包
+- Nagle算法，会造成粘包
+
+> **Nagle 算法**
+>
+> * 即使发送一个字节，也需要加入 tcp 头和 ip 头，也就是总字节数会使用 41 bytes，非常不经济。因此为了提高网络利用率，tcp 希望尽可能发送足够大的数据，这就是 Nagle 算法产生的缘由
+> * 该算法是指发送端即使还有应该发送的数据，但如果这部分数据很少的话，则进行延迟发送
+>   * 如果 SO_SNDBUF 的数据达到 MSS，则需要发送
+>   * 如果 SO_SNDBUF 中含有 FIN（表示需要连接关闭）这时将剩余数据发送，再关闭
+>   * 如果 TCP_NODELAY = true，则需要发送
+>   * 已发送的数据都收到 ack 时，则需要发送
+>   * 上述条件不满足，但发生超时（一般为 200ms）则需要发送
+>   * 除上述情况，延迟发送
+
+半包现象：发送abcdef，接收abc def
+
+原因：
+
+- 应用层：接收方ByteBuf小于实际发送的数据量
+- 滑动窗口：假设接收方的窗口只剩了 128 bytes，发送方的报文大小是 256 bytes，这时放不下了，只能先发送前 128 bytes，等待 ack 后才能发送剩余部分，这就造成了半包
+- MSS限制：当发送的数据超过MSS限制后，会将数据切分发送，会造成半包
+
+本质是TCP是流式协议，消息无边界。
+
+> 滑动窗口
+>
+> * TCP 以一个段（segment）为单位，每发送一个段就需要进行一次确认应答（ack）处理，但如果这么做，缺点是包的往返时间越长性能就越差
+>
+>   ![tcpp1](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/tcpp1.png)
+>
+> * 为了解决此问题，引入了窗口概念，窗口大小即决定了无需等待应答而可以继续发送的数据最大值
+>
+>   ![tcpp2](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/tcpp2.png)
+>
+> * 窗口实际就起到一个缓冲区的作用，同时也能起到流量控制的作用
+>
+>   * 窗口内的数据才允许被发送，当应答未到达前，窗口必须停止滑动
+>   * 如果连接的数据 ack 回来了，窗口就可以向前滑动，如下图
+>   * 接收方也会维护一个窗口，只有落在窗口内的数据才能允许接收
+>
+> ![tcpp3](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/tcpp3.png)
+
+> MSS 限制
+>
+> * 链路层对一次能够发送的最大数据有限制，这个限制称之为 MTU（maximum transmission unit），不同的链路设备的 MTU 值也有所不同，例如
+>  * 以太网的 MTU 是 1500
+>  * FDDI（光纤分布式数据接口）的 MTU 是 4352
+>  * 本地回环地址的 MTU 是 65535 - 本地测试不走网卡
+> * MSS 是最大段长度（maximum segment size），它是 MTU 刨去 tcp 头和 ip 头后剩余能够作为数据传输的字节数
+>  * ipv4 tcp 头占用 20 bytes，ip 头占用 20 bytes，因此以太网 MSS 的值为 1500 - 40 = 1460
+>  * TCP 在传递大量数据时，会按照 MSS 大小将数据进行分割发送
+>  * MSS 的值在三次握手时通知对方自己 MSS 的值，然后在两者之间选择一个小值作为 MSS
+>
+
+### 3.3 粘包和拆包解决方案
+
+1. 业内的解决方案
+
+   由于底层的TCP无法理解上层的业务数据，所以在底层是无法保证数据包不被拆分和重组的，这个问题只能通过上层的应用协议栈设计来解决，根据主流协议的解决方案，分为以下：
+
+   - 消息长度固定，累计读取到长度和定长LEN的报文后，就认为读取到一个完整的信息
+   - 将换行符作为消息结束符
+   - 将特殊的分隔符作为消息的结束标志，回车换行符就是一种特殊的结束分隔符
+   - 通过在消息头中定义长度字段来标识消息的总长度
+
+2. Netty中的解决方案
+
+   netty提供了四种解码器，分别：
+
+   - 固定长度的拆包器FIxedLengthFrameDecoder，每个应用层数据包都拆分成固定长度的大小
+   - 行拆包器LineBasedFrameDecoder，每个应用层数据包，都以换行符作为分隔符，进行分割拆分。
+   - 分隔符拆包器DelimiterBasedFrameDecoder，每个应用层数据包，都通过自定义的分隔符，进行分割拆分。
+   - 基于数据包长度的拆包器LengthFieldBasedFrameDecoder，将应用层数据包的长度，作为接收端应用层数据包的拆分依据。按照应用层数据包的大小拆包
+
+## 自定义RPC
+
+### 概述
 
 RPC即远程过程调用，是一种通过网络从远程计算机程序上请求服务，而不需要了解底层网络实现的技术。常见的RPC框架Dubbo、grpc、SpringCloud等。
 
@@ -2202,7 +2481,7 @@ RPC即远程过程调用，是一种通过网络从远程计算机程序上请�
 8. client stub接收到消息并进行解码
 9. 服务消费方得到结果
 
-### 3.2 设计
+### 设计
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/rpc2.png)
 
@@ -2213,7 +2492,7 @@ RPC即远程过程调用，是一种通过网络从远程计算机程序上请�
 
 服务调用方的接口必须跟服务提供方的接口保持一致（包路径可以不同），最终实现在TestNettyRPC中远程调用HelloRPCImpl、HelloNetty中放的方法。
 
-### 3.3 实现
+### 实现
 
 被调用的接口和实现类
 
