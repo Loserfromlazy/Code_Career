@@ -325,7 +325,7 @@ http {
 
 ```shell
 docker run -id --name=c_nginx \
--p 80:80 \
+-p 8:80 \
 -v $PWD/conf/nginx.conf:/etc/nginx/nginx.conf \
 -v $PWD/logs:/var/log/nginx \
 -v $PWD/html:/usr/share/nginx/html \
