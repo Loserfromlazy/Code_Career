@@ -1,4 +1,4 @@
-# Java注解
+# Java注解学习笔记
 
 ## 一、简介
 
@@ -236,7 +236,151 @@ public class Test {
 
 ## 五、在Spring中使用自定义注解
 
-5.1 需求分析
+### 5.1 需求分析
+
+假设程序需要接收不同的指令CMD，然后根据不同的指令调用不同的处理类Handler，我们可以使用Map来存储命令和处理类的映射关系，但是项目是由多个成员开发，所以希望开发人员只关注Handler的实现，不需要主动去Map中注册CMD和Handler的映射。
+
+最终效果如下：
+
+```java
+@CmdMapping(Cmd.LOGIN)
+public class LoginHandler implements ICmdHandler {
+    @Override
+    public void handle() {
+        System.out.println("handle login request");
+    }
+}
+
+@CmdMapping(Cmd.LOGOUT)
+public class LogoutHandler implements ICmdHandler {
+    @Override
+    public void handle() {
+        System.out.println("handle logout request");
+    }
+}
+```
+
+开发人员增加自己的`Handler`，只需要创建新的类并注上`@CmdMapping(Cmd.Xxx)`即可。
+
+### 5.2 实现
+
+具体的实现是使用Spring和自定义注解
+
+首先定义@CmdMapping
+
+```java
+@Documented
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+@Component
+public @interface CmdMapping {
+    int value();
+}
+```
+
+> `@CmdMapping`中有一个`int`类型的元素`value`，用于指定`CMD`。这里做成一个单值注解。
+> 这里还加了`Spring`的`@Component`注解，因此注解了`@CmdMapping`的类也会被Spring创建实例。
+
+然后定义CMD接口，存储命令
+
+```java
+public interface Cmd {
+    int REGISTER =1;
+    int LOGIN =2;
+    int LOGOUT =3;
+}
+```
+
+处理类接口
+
+```java
+public interface ICmdHandler {
+    void handler();
+}
+```
+
+注解是不起作用的，需要其他的支持，下面是让注解生效的部分：
+
+```java
+@Component
+public class HandlerDispatcherServlet implements InitializingBean , ApplicationContextAware {
+
+    private ApplicationContext applicationContext;
+    private Map<Integer,ICmdHandler> handlers = new HashMap<>();
+
+    public void handle(int cmd){
+        handlers.get(cmd).handler();
+    }
+    /**
+     * 继承InitializingBean接口的方法，InitializingBean接口为bean提供了初始化方法的方式，它只包括afterPropertiesSet方法，凡是继承该接口的类，在初始化bean的时候都会执行该方法。
+     **/
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        // 获取所有的beanName
+        String[] beanNames = this.applicationContext.getBeanNamesForType(Object.class);
+        for (String beanName : beanNames) {
+            if (ScopedProxyUtils.isScopedTarget(beanName)) {
+                continue;
+            }
+            // 通过beanName获取Bean类型
+            Class<?> beanType = this.applicationContext.getType(beanName);
+
+            if (beanType != null) {
+                // 是否带有CmdMapping注解
+                CmdMapping annotation = AnnotatedElementUtils.findMergedAnnotation(
+                        beanType, CmdMapping.class);
+
+                if(annotation != null) {
+                    // 获取bena，在handlers中注册
+                    handlers.put(annotation.value(), (ICmdHandler) applicationContext.getBean(beanType));
+                }
+            }
+        }
+    }
+    /**
+     * 继承ApplicationContextAware接口的方法，实现了这个接口的bean，当spring容器初始化的时候，会自动的将ApplicationContext注入进来
+     **/
+    @Override
+    public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
+        this.applicationContext = applicationContext;
+    }
+}
+```
+
+这部分代码主要工作全是Spring在做，我们只是维护Map
+
+然后定义三个ICmdHandler的实现类，此处以一个为例
+
+```java
+@CmdMapping(Cmd.LOGIN)
+public class LoginHandler implements ICmdHandler {
+    @Override
+    public void handler() {
+        System.out.println("handle login request");
+    }
+}
+```
+
+测试类
+
+```java
+@ComponentScan("com.learn.testMyAnno")
+public class Test {
+    public static void main(String[] args) {
+        //使用AnnotationConfigApplicationContext可以实现基于Java的配置类加载Spring的应用上下文。避免使用application.xml进行配置。相比XML配置，更加便捷。
+        AnnotationConfigApplicationContext context
+                = new AnnotationConfigApplicationContext(Test.class);
+
+        HandlerDispatcherServlet bean = context.getBean(HandlerDispatcherServlet.class);
+
+        bean.handler(Cmd.REGISTER);
+        bean.handler(Cmd.LOGIN);
+        bean.handler(Cmd.LOGOUT);
+
+        context.close();
+    }
+}
+```
 
 
 
