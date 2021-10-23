@@ -2463,227 +2463,56 @@ public class Client {
    - 分隔符拆包器DelimiterBasedFrameDecoder，每个应用层数据包，都通过自定义的分隔符，进行分割拆分。
    - 基于数据包长度的拆包器LengthFieldBasedFrameDecoder，将应用层数据包的长度，作为接收端应用层数据包的拆分依据。按照应用层数据包的大小拆包
 
-## 自定义RPC
+## 四、自定义RPC
 
-### 概述
+### 4.1 分布式网络通信
 
-RPC即远程过程调用，是一种通过网络从远程计算机程序上请求服务，而不需要了解底层网络实现的技术。常见的RPC框架Dubbo、grpc、SpringCloud等。
+在分布式服务框架中，一个最基础的要求就是远程服务通讯，在Java领域有很多技术，比如RMI、Hessian、SOAP、ESB、JMS。
 
-![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/rpc.png)
+然而要实现网络机器的通讯，首先还是得了解计算机网络通信的基本原理，从底层层面看，网络通信主要是将流从一台计算机传输到另一台计算机，基于传输协议和网络IO来实现。传输协议比较出名的有tcp，UDP等，这些都是在基于Socket概念上为某类应用场景而扩展出的传输协议。如下图：
 
-1. 服务消费方以本地调用方式调用服务
-2. client stub 接收到调用后负责将方法、参数等封装成能够进行网络传输的消息体
-3. client stub 将消息编码后发送到服务端
-4. server stub 收到消息后进行解码
-5. server stub根据解码结果调用本地服务
-6. 本地服务执行并将结果返回给server stub
-7. server stub将返回结果编码并发送到服务消费方
-8. client stub接收到消息并进行解码
-9. 服务消费方得到结果
+![SocketPicture](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/SocketPicture.png)
 
-### 设计
+网络IO，主要有BIO、NIO、AIO，所有的分布式应用都基于这个原理
 
-![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/netty/rpc2.png)
+**什么是RPC**
 
-- Client：两个接口+一个包含main方法的测试类
-- Client Stub：一个客户端代理类+一个客户端业务处理类
-- Server：两个接口+两个实现类
-- Server Stub：一个网络处理服务器+一个服务器处理业务类
+RPC全称为remote procedure call，即远程过程调用。借助RPC可以做到像本地调用一样调用远程服务，是一种进程间的通信方式。
 
-服务调用方的接口必须跟服务提供方的接口保持一致（包路径可以不同），最终实现在TestNettyRPC中远程调用HelloRPCImpl、HelloNetty中放的方法。
+比如有AB两台服务器，A服务器上的应用想调用B服务器上的应用提供的方法，由于两个应用不在一个内存空间，不能直接调用，所以需要网络来表达调用的语义和传达调用的数据。如下图：
 
-### 实现
+> rpc指的是整个网络远程调用过程。
 
-被调用的接口和实现类
+![rpc调用过程](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/rpc%E8%B0%83%E7%94%A8%E8%BF%87%E7%A8%8B.png)
 
-```java
-public interface HelloNetty{
-    String hello();
-}
-public class HelloNettyImpl implements HelloNetty{
-    @Override
-    public String hello() {
-        return "hello netty";
-    }
-}
-public interface HelloRPC {
-    String hello(String name);
-}
-public class HelloRPCImpl implements HelloRPC{
-    @Override
-    public String hello(String name) {
-        return "hello,"+name;
-    }
-}
-```
+一个完整的RPC架构包含四个核心组件，分别是Client，ClientStub，Server，ServerClub
 
-服务端业务处理类
+- Client，客户端，服务的调用方
+- Server，服务端，服务提供者
+- Client Stub，存放服务端的地址消息。再将客户端的请求参数打包成网络消息，然后通过网络远程发送给服务方
+- Server Stub，接收客户端发送过来的消息，将消息解包，并调用本地的方法
 
-```java
-public class InvokeHandler extends ChannelInboundHandlerAdapter {
+在java中RPC框架比较多，常见的有Hessian、gRPC、Dubbo 等，其实对 于RPC框架而言，核心模块就是**通讯和序列化**
 
-    private String getImplClassName(ClassInfo classInfo) throws Exception {
-        String interfacePath = "com.learn.rpcserver";
-        int lastDot = classInfo.getClassName().lastIndexOf(".");
-        String interfaceName = classInfo.getClassName().substring(lastDot);
-        Class superClass = Class.forName(interfacePath + interfaceName);
-        Reflections reflections = new Reflections();
-        //得到某接口下所有的实现类
-        Set<Class> ImplClassSet = reflections.getSubTypesOf(superClass);
-        if (ImplClassSet.size()==0){
-            System.out.println("未找到实现类");
-            return null;
-        }else if (ImplClassSet.size()>1){
-            System.out.println("找到多个实现类");
-            return null;
-        }else {
-            Class[] classes = ImplClassSet.toArray(new Class[0]);
-            return classes[0].getName();
-        }
-    }
+### 4.2 Netty实现RPC框架
 
-    @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        ClassInfo classInfo = (ClassInfo) msg;
-        Object calzz = Class.forName(getImplClassName(classInfo)).newInstance();
-        Method method = calzz.getClass().getMethod(classInfo.getMethodName(), classInfo.getTypes());
-        Object result = method.invoke(calzz, classInfo.getObjects());
-        ctx.writeAndFlush(result);
-    }
-}
-```
+需求：
 
-服务端
+dubbo底层使用了Netty作为网络通讯框架，要求用Netty实现一个简单的RPC框架，消费者和提供服务者约定接口和协议，消费者远程调用提供者的服务。具体需求是客户端远程带调用服务端提供根据ID查询user对象的方法。
 
-```java
-public class NettyRPCServer {
 
-    private int port;
 
-    public NettyRPCServer(int port) {
-        this.port = port;
-    }
 
-    public void start() throws InterruptedException {
-        EventLoopGroup bossGroup = new NioEventLoopGroup();
-        EventLoopGroup workerGroup = new NioEventLoopGroup();
-        ServerBootstrap bootstrap = new ServerBootstrap();
-        bootstrap.group(bossGroup, workerGroup)
-                .channel(NioServerSocketChannel.class)
-                .option(ChannelOption.SO_BACKLOG, 128)
-                .childOption(ChannelOption.SO_KEEPALIVE, true)
-                .localAddress(port)
-                .childHandler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    protected void initChannel(SocketChannel ch) throws Exception {
-                        ChannelPipeline pipeline = ch.pipeline();
-                        //编码器
-                        pipeline.addLast("encoder", new ObjectEncoder());
-                        //解码器
-                        pipeline.addLast("decoder", new ObjectDecoder(Integer.MAX_VALUE, ClassResolvers.cacheDisabled(null)));
-                        //服务器端业务处理类
-                        pipeline.addLast(new InvokeHandler());
-                    }
-                });
-        ChannelFuture future = bootstrap.bind(port).sync();
-        System.out.println("server is readey");
-        future.channel().closeFuture().sync();
-        bossGroup.shutdownGracefully();
-        workerGroup.shutdownGracefully();
-    }
 
-    public static void main(String[] args) throws InterruptedException {
-        new NettyRPCServer(9999).start();
-    }
-}
-```
 
-数据传输类
 
-```java
-public class ClassInfo implements Serializable {
-    private static final long serialVersionUID =1L;
-    private String className;//类名
-    private String methodName;//方法名
-    private Class<?>[] types;//参数类型
-    private Object[] objects;//参数列表
-    //get and set
-}
-```
 
-客户端代理类
 
-```java
-public class NettyRPCProxy {
 
-    public static Object create(Class target){
-        return Proxy.newProxyInstance(target.getClassLoader(), new Class[]{target}, new InvocationHandler() {
-            @Override
-            public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-                //封装classinfo
-                ClassInfo classInfo = new ClassInfo();
-                classInfo.setClassName(target.getName());
-                classInfo.setMethodName(method.getName());
-                classInfo.setObjects(args);
-                classInfo.setTypes(method.getParameterTypes());
-                //开始用netty发送数据
-                EventLoopGroup group = new NioEventLoopGroup();
-                ResultHandler resultHandler = new ResultHandler();
-                Bootstrap bootstrap =new Bootstrap();
-                bootstrap.group(group)
-                        .channel(NioSocketChannel.class)
-                        .handler(new ChannelInitializer<SocketChannel>() {
-                            @Override
-                            protected void initChannel(SocketChannel ch) throws Exception {
-                                ChannelPipeline pipeline = ch.pipeline();
-                                //编码器
-                                pipeline.addLast("encoder",new ObjectEncoder());
-                                //解码器
-                                pipeline.addLast("decoder",new ObjectDecoder(Integer.MAX_VALUE, ClassResolvers.cacheDisabled(null)));
-                                pipeline.addLast("handler",resultHandler);
-                            }
-                        });
-                ChannelFuture future = bootstrap.connect("127.0.0.1", 9999).sync();
-                future.channel().writeAndFlush(classInfo).sync();
-                future.channel().closeFuture().sync();
-                group.shutdownGracefully();
-                return resultHandler.getResponse();
-            }
-        });
-    }
-}
-```
 
-客户端服务处理
 
-```java
-public class ResultHandler extends ChannelInboundHandlerAdapter {
-    private Object response;
 
-    public Object getResponse() {
-        return response;
-    }
 
-    @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        response = msg;
-        ctx.close();
-    }
-}
-```
 
-客户端测试
 
-```java
-public class TestNettyRpc {
-    public static void main(String[] args) {
-        //第一次远程调用
-        HelloNetty helloNetty = (HelloNetty) NettyRPCProxy.create(HelloNetty.class);
-        System.out.println(helloNetty.hello());
-        //第二次远程调用
-        HelloRPC helloRPC = (HelloRPC) NettyRPCProxy.create(HelloRPC.class);
-        System.out.println(helloRPC.hello("hahahahaha"));
-    }
-}
-```
 
