@@ -370,7 +370,13 @@ Callback是一个空的接口，在Cglib中它的实现类有以下几种：
 
 Dispatcher和LazyLoader接口相同，也是提供了loadObject()方法。不过它们之间不同的地方在于，Dispatcher的loadObject()方法在每次发生对原方法的调用时都会被调用并返回一个代理对象来调用原方法。也就是说Dispatcher的loadObject()方法返回的对象并不会被存储起来，可以类比成Spring中的Prototype类型，而LazyLoader则是lazy模式的Singleton。
 
-## 4.2 实例：使用`CGLib`实现动态代理
+### 4.1.3 FastClass
+
+FastClass不使用反射类（Constructor或Method）来调用委托类方法，而是动态生成一个新的类（继承FastClass），向类中写入委托类实例直接调用方法的语句，用模板方式解决Java语法不支持问题，同时改善Java反射性能。
+
+动态类为委托类方法调用语句建立索引，使用者根据方法签名（方法名+参数类型）得到索引值，再通过索引值进入相应的方法调用语句，得到调用结果。
+
+## 4.2 实例：使用`CGLib`的EnHancer实现动态代理
 
 被代理的类：
 
@@ -447,12 +453,6 @@ public class Test3 {
 > 交钱办房产证
 > 中介进行处理
 > 结束代理
-
-
-
-
-
-
 
 
 
