@@ -2500,19 +2500,337 @@ RPC全称为remote procedure call，即远程过程调用。借助RPC可以做�
 
 dubbo底层使用了Netty作为网络通讯框架，要求用Netty实现一个简单的RPC框架，消费者和提供服务者约定接口和协议，消费者远程调用提供者的服务。具体需求是客户端远程带调用服务端提供根据ID查询user对象的方法。
 
+#### 4.2.1 公用接口
+
+```java
+public interface IUserService {
+    User getById(Integer id);
+}
+```
+
+实体类
+
+```java
+@Data
+public class User {
+    private int id;
+    private String name;
+}
+```
+
+请求和返回对象略
+
+#### 4.2.2 服务端实现
+
+定义注解
+
+```java
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface RpcService {
+}
+```
+
+服务类
+
+```java
+@Service
+public class RpcServer implements DisposableBean {
+
+    private NioEventLoopGroup bossGroup;
+    private NioEventLoopGroup workerGroup;
+
+    @Autowired
+    RpcServerHandler rpcServerHandler;
+
+    public void startServer(String ip, Integer port) {
+        try {
+            bossGroup =new NioEventLoopGroup();
+            workerGroup = new NioEventLoopGroup();
+            ServerBootstrap serverBootstrap = new ServerBootstrap();
+            serverBootstrap
+                    .group(bossGroup,workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ChannelPipeline pipeline = ch.pipeline();
+                            //添加解码器
+                            pipeline.addLast(new StringDecoder());
+                            pipeline.addLast(new StringEncoder());
+                            //业务处理类
+                            pipeline.addLast(rpcServerHandler);
+                        }
+                    });
+            ChannelFuture sync = serverBootstrap.bind(ip, port).sync();
+            System.out.println("服务端启动成功");
+            sync.channel().closeFuture().sync();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }finally {
+            if (bossGroup!=null){
+                bossGroup.shutdownGracefully();
+            }
+            if (bossGroup!=null){
+                bossGroup.shutdownGracefully();
+            }
+        }
+    }
+
+    /**
+     * @Author Yuhaoran
+     * @Description 此方法   可以在容器销毁时执行
+     * @Date 2021/10/23 15:42
+     **/
+    @Override
+    public void destroy() throws Exception {
+        if (bossGroup!=null){
+            bossGroup.shutdownGracefully();
+        }
+        if (bossGroup!=null){
+            bossGroup.shutdownGracefully();
+        }
+    }
+}
+```
+
+服务端业务处理类
+
+```java
+@Component
+@ChannelHandler.Sharable
+public class RpcServerHandler extends SimpleChannelInboundHandler implements ApplicationContextAware {
+
+    private static final Map SERVICE_INSTANCE_MAP = new ConcurrentHashMap();
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+        //将msg转换成RpcRequest
+        RpcRequest rpcRequest = JSON.parseObject(msg.toString(), RpcRequest.class);
+        RpcResponse rpcResponse = new RpcResponse();
+        rpcResponse.setRequestId(rpcRequest.getRequestId());
+        try {
+            //业务处理
+            rpcResponse.setResult(handler(rpcRequest));
+        }catch (Exception e){
+            e.printStackTrace();
+            rpcResponse.setError(e.getMessage());
+        }
+        ctx.writeAndFlush(JSON.toJSONString(rpcResponse));
+    }
+    /**
+     * @Author Yuhaoran
+     * @Description 业务处理逻辑
+     * @param rpcRequest
+     * @return java.lang.Object
+     * @Date 2021/10/23 16:15
+     **/
+    private Object handler(RpcRequest rpcRequest) throws InvocationTargetException {
+        //从缓存中获取bean
+        String className = rpcRequest.getClassName();
+        Object serviceBean = SERVICE_INSTANCE_MAP.get(className);
+        if (serviceBean == null){
+            throw new RuntimeException("根据BeanName找不到服务,BeanName="+className);
+        }
+        Class<?> clazz = serviceBean.getClass();
+        String methodName = rpcRequest.getMethodName();
+        Class<?>[] parameterTypes = rpcRequest.getParameterTypes();
+        Object[] parameters = rpcRequest.getParameters();
+        //反射调用方法 CGLIB
+        FastClass fastClass = FastClass.create(clazz);
+        FastMethod method = fastClass.getMethod(methodName,parameterTypes);
+        return method.invoke(serviceBean,parameters);
+    }
+
+
+    @Override
+    public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
+        //找到标有RpcService注解的全部bean
+        Map<String, Object> serviceMap = applicationContext.getBeansWithAnnotation(RpcService.class);
+        if (serviceMap != null && serviceMap.size() > 0) {
+            Set<Map.Entry<String, Object>> entries = serviceMap.entrySet();
+                entries.forEach(item -> {
+                    Object serviceBean = item.getValue();
+                    if (serviceBean.getClass().getInterfaces().length ==0){
+                        throw new RuntimeException("服务必须实现接口");
+                    }
+                    //默认 约定 取第一个接口作为缓存Bean的名称
+                    String name = serviceBean.getClass().getInterfaces()[0].getName();
+                    SERVICE_INSTANCE_MAP.put(name,serviceBean);
+                });
+        }
+    }
+}
+```
+
+#### 4.2.3 客户端实现
+
+客户端代码
+
+```java
+public class RpcClient {
+
+    private EventLoopGroup group;
+
+    private Channel channel;
+
+    private String ip;
+
+    private int port;
+
+    private RpcClientHandler rpcClientHandler = new RpcClientHandler();
+
+    private ExecutorService executorService = Executors.newCachedThreadPool();
+
+    public RpcClient(String ip, int port) {
+        this.ip = ip;
+        this.port = port;
+        initClient();
+    }
+
+    /**
+     * 初始化方法连接客户端
+     *
+     * @author Yuhaoran
+     * @date 2021/10/26 18:33
+     */
+    public void initClient() {
+        try {
+            group = new NioEventLoopGroup();
+            Bootstrap bootstrap = new Bootstrap();
+            bootstrap
+                    .group(group)
+                    .channel(NioSocketChannel.class)
+                    .option(ChannelOption.SO_KEEPALIVE, Boolean.TRUE)
+                    .option(ChannelOption.SO_TIMEOUT, 3000)
+                    .handler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ChannelPipeline pipeline = ch.pipeline();
+                            pipeline.addLast(new StringDecoder());
+                            pipeline.addLast(new StringEncoder());
+                            //客户端处理类
+                            pipeline.addLast(rpcClientHandler);
+                        }
+                    });
+            channel = bootstrap.connect(ip, port).sync().channel();
+        } catch (Exception e) {
+            e.printStackTrace();
+            if (channel != null) {
+                channel.close();
+            }
+            if (group != null) {
+                group.shutdownGracefully();
+            }
+        }
+    }
+    /**
+     * 给调用者主动关闭的方法
+     * @author Yuhaoran
+     * @date 2021/10/26 18:41
+     */
+    public void close(){
+        if (channel != null) {
+            channel.close();
+        }
+        if (group != null) {
+            group.shutdownGracefully();
+        }
+    }
+    /**
+     * 提供消息发送的方法
+     * @author Yuhaoran
+     * @date 2021/10/26 18:42
+     */
+    public Object send(String msg) throws ExecutionException, InterruptedException {
+        this.rpcClientHandler.setRequestMsg(msg);
+        Future submit = executorService.submit(rpcClientHandler);
+        return submit.get();
+    }
+
+}
+```
+
+客户端业务处理器
+
+```java
+public class RpcClientHandler extends SimpleChannelInboundHandler implements Callable {
+
+    ChannelHandlerContext ctx;
+
+    String requestMsg;
+
+    String responseMsg;
 
 
 
+    public void setRequestMsg(String requestMsg) {
+        this.requestMsg = requestMsg;
+    }
 
+    @Override
+    protected synchronized void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+        responseMsg = (String) msg;
+        //唤醒等待的线程
+        notify();
+    }
 
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        this.ctx=ctx;
+    }
 
+    /**
+     * 发送消息到服务端
+     *
+     * @author Yuhaoran
+     * @date 2021/10/26 18:44
+     */
+    @Override
+    public synchronized Object call() throws Exception {
+        ctx.writeAndFlush(requestMsg);
+        wait();
+        return responseMsg;
+    }
+}
+```
 
+客户端代理
 
+```java
+public class RpcClientProxy {
+    public static Object createProxy(Class serviceClass){
+        return Proxy.newProxyInstance(Thread.currentThread().getContextClassLoader()
+                , new Class[]{serviceClass}, (proxy, method, args) -> {
+                    //封装request请求对象
+                    RpcRequest request = new RpcRequest();
+                    request.setRequestId(UUID.randomUUID().toString());
+                    request.setClassName(method.getDeclaringClass().getName());
+                    request.setParameterTypes(method.getParameterTypes());
+                    request.setParameters(args);
+                    request.setMethodName(method.getName());
+                    //创建RpcClient
+                    RpcClient rpcClient = new RpcClient("127.0.0.1",8899);
+                    try {
+                        Object responseMsg = rpcClient.send(JSON.toJSONString(request));
+                        RpcResponse rpcResponse = JSON.parseObject(responseMsg.toString(), RpcResponse.class);
+                        if (rpcResponse.getError()!=null){
+                            throw new RuntimeException(rpcResponse.getError());
+                        }
+                        Object result = rpcResponse.getResult();
+                        return JSON.parseObject(result.toString(), method.getReturnType());
+                    }catch (Exception e){
+                        throw e;
+                    }finally {
+                        rpcClient.close();
+                    }
 
+                });
 
+    }
+}
+```
 
-
-
-
+[项目地址]: https://github.com/Loserfromlazy/My_RPC	"自定义RPC"
 
 
