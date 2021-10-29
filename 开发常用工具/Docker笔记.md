@@ -176,8 +176,8 @@ cd ~/mysql
 
 ```shell
 docker run -id \
--p 3307:3306 \
---name=c_mysql \
+-p 3306:3306 \
+--name=mysql \
 -v $PWD/conf:/etc/mysql/conf.d \
 -v $PWD/logs:/logs \
 -v $PWD/data:/var/lib/mysql \
@@ -186,7 +186,7 @@ mysql:5.6
 ```
 
 - 参数说明：
-  > - **-p 3307:3306**：将容器的 3306 端口映射到宿主机的 3307 端口。
+  > - **-p 3306:3306**：将容器的 3306 端口映射到宿主机的 3306 端口。
   >
   > - **-v $PWD/conf:/etc/mysql/conf.d**：将主机当前目录下的 conf/my.cnf 挂载到容器的 /etc/mysql/my.cnf。配置目录
   >
@@ -207,8 +207,10 @@ mysql:5.6
 4. 进入容器，操作mysql
 
 ```shell
-docker exec –it c_mysql /bin/bash
+docker exec -it mysql /bin/bash
 ```
+
+`ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY '123456';`
 
 5. 使用外部机器连接容器中的mysql
 
