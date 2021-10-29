@@ -12,4 +12,11 @@ mysql主从复制，主要是将主数据库的增删改查操作记录到二进
 - 负载均衡：实现读写分离
 - 备份：日常备份
 
+### 1.3 过程
+
+![mysql主从复制](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/mysql%E4%B8%BB%E4%BB%8E%E5%A4%8D%E5%88%B6.png)
+
+如上图，其中的Binary Log 是
+
 ## 二、实践
+
