@@ -2,6 +2,8 @@
 
 ## 一. mysql简介
 
+### 1.1 mysql基础
+
 **sql分类**：
 
 1. DDL（Data Definition Language）数据定义语言，用来定义数据库对象：数据库，表，列等。create，drop，alter等。
@@ -21,6 +23,112 @@ Enter password:******
 mysql>exit
 Bye
 ```
+
+**mysql建表规范**
+
+~~~
+/* 建表规范 */ ------------------
+    -- Normal Format, NF
+        - 每个表保存一个实体信息
+        - 每个具有一个ID字段作为主键
+        - ID主键 + 原子表
+    -- 1NF, 第一范式
+        字段不能再分，就满足第一范式。通俗理解即一个字段只存储一项信息。
+    -- 2NF, 第二范式
+        满足第一范式的前提下，不能出现部分依赖。
+        消除复合主键就可以避免部分依赖。增加单列关键字。
+        第二范式（2NF）要求数据库表中的每个实例或行必须可以被惟一地区分。为实现区分通常需要我们设计一个主键来实现(这里的主键不包含业务逻辑)。
+    -- 3NF, 第三范式
+        满足第二范式的前提下，不能出现传递依赖。
+        某个字段依赖于主键，而有其他字段依赖于该字段。这就是传递依赖。
+        将一个实体信息的数据放在一个表内实现。
+        简而言之，第三范式（3NF）要求一个数据库表中不包含已在其它表中已包含的非主键字段。就是说，表的信息，如果能够被推导出来，就不应该单独的设计一个字段来存放(能尽量外键join就用外键join)。很多时候，我们为了满足第三范式往往会把一张表分成多张表。
+~~~
+
+### 1.2 mysql架构演变
+
+**单机单库**
+
+小型网站，只需一个mysql就能满足数据读取和写入需求。
+
+瓶颈：
+
+- 数据量不能太大，超出一台服务器承受
+- 读写操作量不能太大，超出一台服务器承受
+- 可用性差
+
+**主从架构**
+
+主要解决单机单库下的高可用和读扩展问题，主库宕机可以通过主从切换保障高可用。mysql也可以通过主从结构完成读写分离即主库用来写，从库用来读。
+
+瓶颈：
+
+- 数据量不能过大，超出一台服务器承受
+- 写操作不能太大，超出一台服务器承受
+
+**分库分表**
+
+对于存储和写瓶颈，可以通过水平拆分来解决，水平和垂直拆分有较大区别，垂直拆分的结果是每一个实例都有全部数据，而水平拆分之后，任何实例都只有全量的1/n。
+
+### 1.3 mysql架构
+
+![image-20211030152239007](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211030152239007.png)
+
+MySQL Server架构自顶向下大致可以分网络连接层、服务层、存储引擎层和系统文件层。
+
+1. 网络连接层
+
+   客户端连接器（Client Connectors）：提供与MySQL服务器建立的支持。目前几乎支持所有主流的服务端编程技术，例如常见的 Java、C、Python、.NET等，它们通过各自API技术与MySQL建立连接
+
+2. 服务层
+
+   服务层是MySQL Server的核心，主要包含系统管理和控制工具、连接池、SQL接口、解析器、查询优化器和缓存六个部分。
+
+   1. 连接池：负责存储和管理客户端与数据库的连接，一个线程负责管理一个连接
+
+   2. 系统管理和控制工具：例如备份恢复、安全管理、集群管理
+
+   3. SQL接口：用于接收客户端发送的各种SQL命令，并且返回用户需要查询的结果。比如DML、DDL、存储过程、视图、触发器等
+
+   4. 解析器：负责将请求的SQL解析生成一个"解析树"。然后根据一些MySQL规则进一步检查解析树是否合法。
+
+   5. 查询优化器:
+
+      当“解析树”通过解析器语法检查后，将交由优化器将其转化成执行计划，然后与存储引擎交互
+
+   6. 缓存:
+
+      缓存机制是由一系列小缓存组成的。比如表缓存，记录缓存，权限缓存，引擎缓存等。如果查询缓存有命中的查询结果，查询语句就可以直接去查询缓存中取数据
+
+3. 存储引擎层
+
+   存储引擎负责MySQL中数据的存储与提取，与底层系统文件进行交互。MySQL存储引擎是插件式的，服务器中的查询执行引擎通过接口与存储引擎进行通信，接口屏蔽了不同存储引擎之间的差异 。现在有很多种存储引擎，各有各的特点，最常见的是MyISAM和InnoDB
+
+4. 系统文件层
+
+   该层负责将数据库的数据和日志存储在文件系统之上，并完成与存储引擎的交互，是文件的物理存储层。主要包含日志文件，数据文件，配置文件，pid 文件，socket 文件等
+
+### 1.4 mysql运行机制
+
+![mysql流程](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/mysql%E6%B5%81%E7%A8%8B.png)
+
+建立连接（Connectors&Connection Pool），通过客户端/服务器通信协议与MySQL建立连接。MySQL 客户端与服务端的通信方式是 “ 半双工 ”。对于每一个 MySQL 的连接，时刻都有一个线程状态来标识这个连接正在做什么
+
+查询缓存（Cache&Buffer）,这是Mysql一个可优化查询的地方，开启了查询缓存且在查询缓存过程中查询到完全相同的sql语句，则直接将查询结果返回给客户端，如果没有开启或没有查询到完全相同的sql语句则由解析器进行语法解析，并生成解析树。
+
+解析器，将客户端发送的SQL进行语法解析，生成"解析树"。预处理器根据一些MySQL规则进一步检查“解析树”是否合法，例如这里将检查数据表和数据列是否存在，还会解析名字和别名，看看它们是否有歧义，最后生成新的“解析树
+
+查询优化器：根据“解析树”生成最优的执行计划。MySQL使用很多优化策略生成最优的执行计划，可以分为两类：静态优化（编译时优化）、动态优化（运行时优化）
+
+- 等价变化策略
+  - `5=5 and a>5`改成`a>5`
+  - `a<b and a=5`改成`b>5 and a=5`
+  - 基于联合索引调整条件位置
+- 优化count、min、max函数
+- 提前终止查询
+  - 使用limit，则获取所需的数据，不在遍历后面的数据
+
+查询执行引擎，负责执行 SQL 语句，此时查询执行引擎会根据 SQL 语句中表的存储引擎类型，以及对应的API接口与底层存储引擎缓存或者物理文件的交互，得到查询结果并返回给客户端。若开启用查询缓存，这时会将SQL 语句和结果完整地保存到查询缓存（Cache&Buffffer）中，以后若有相同的 SQL 语句执行则直接返回结果。
 
 ## 二. Mysql-DDL
 
@@ -388,7 +496,60 @@ select * from tb1 a left join tb2 b on a.id =b.id
 2 truncate 重置auto_increment的值。而delete不会
 3 当被用于带分区的表时，truncate 会保留分区
 
-## 五、索引
+## 五、mysql-对用户的操作
+
+~~~mysql
+-- 刷新权限
+FLUSH PRIVILEGES;
+-- 增加用户
+CREATE USER 用户名 IDENTIFIED BY [PASSWORD] 密码(字符串)
+	必须拥有mysql数据库的全局CREATE USER权限，或拥有INSERT权限。
+	用户名，注意引号：如 'user_name'@'192.168.1.1'可以用%代替ip地址表示全部ip
+-- 重命名用户
+RENAME USER old_user TO new_user
+-- 分配权限/添加用户
+GRANT 权限列表 ON 表名 TO 用户名 [IDENTIFIED BY [PASSWORD] 'password']
+     all privileges 表示所有权限
+     *.* 表示所有库的所有表
+     库名.表名 表示某库下面的某表
+    GRANT ALL PRIVILEGES ON `pms`.* TO 'pms'@'%' IDENTIFIED BY 'pms0817';
+-- 撤消权限
+REVOKE 权限列表 ON 表名 FROM 用户名
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 用户名   -- 撤销所有权限
+-- 查看权限
+SHOW GRANTS FOR 用户名 
+-- 权限列表
+ALL [PRIVILEGES]    -- 设置除GRANT OPTION之外的所有简单权限
+ALTER   -- 允许使用ALTER TABLE
+ALTER ROUTINE   -- 更改或取消已存储的子程序
+CREATE  -- 允许使用CREATE TABLE
+CREATE ROUTINE  -- 创建已存储的子程序
+CREATE TEMPORARY TABLES     -- 允许使用CREATE TEMPORARY TABLE
+CREATE USER     -- 允许使用CREATE USER, DROP USER, RENAME USER和REVOKE ALL PRIVILEGES。
+CREATE VIEW     -- 允许使用CREATE VIEW
+DELETE  -- 允许使用DELETE
+DROP    -- 允许使用DROP TABLE
+EXECUTE     -- 允许用户运行已存储的子程序
+FILE    -- 允许使用SELECT...INTO OUTFILE和LOAD DATA INFILE
+INDEX   -- 允许使用CREATE INDEX和DROP INDEX
+INSERT  -- 允许使用INSERT
+LOCK TABLES     -- 允许对您拥有SELECT权限的表使用LOCK TABLES
+PROCESS     -- 允许使用SHOW FULL PROCESSLIST
+REFERENCES  -- 未被实施
+RELOAD  -- 允许使用FLUSH
+REPLICATION CLIENT  -- 允许用户询问从属服务器或主服务器的地址
+REPLICATION SLAVE   -- 用于复制型从属服务器（从主服务器中读取二进制日志事件）
+SELECT  -- 允许使用SELECT
+SHOW DATABASES  -- 显示所有数据库
+SHOW VIEW   -- 允许使用SHOW CREATE VIEW
+SHUTDOWN    -- 允许使用mysqladmin shutdown
+SUPER   -- 允许使用CHANGE MASTER, KILL, PURGE MASTER LOGS和SET GLOBAL语句，mysqladmin debug命令；允许您连接（一次），即使已达到max_connections。
+UPDATE  -- 允许使用UPDATE
+USAGE   -- “无权限”的同义词
+GRANT OPTION    -- 允许授予权限
+~~~
+
+## 六、索引
 
 索引是数据库用来提高性能的最常用工具，是帮助mysql搞笑获取数据的数据结构。
 
