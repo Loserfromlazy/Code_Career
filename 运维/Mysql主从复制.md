@@ -20,22 +20,27 @@ mysql主从复制，主要是将主数据库的增删改查操作记录到二进
 
 ## 二、实践
 
+准备两个数据库，在`conf`文件夹下创建`my.cnf`配置文件
+
 主库从库配置相同，但server-id不同
 
-~~~
+~~~mysql
 [mysqld]
 #[必须]启用二进制日志
 log-bin=mysql-bin
 #[必须]服务器唯一ID，默认是取IP最后一段
 server-id=10
+#binlog-do-db = xxxname 要同步的数据库名
+#binlog-ignore-db = mysql 不同步mysql库和test库
+#binlog-ignore-db = test
 ~~~
 
-主库
+主库执行命令
 
 ~~~mysql
 #创建同步账户并授权
 create user 'copyUser'@'%' IDENTIFIED by 'copyUser';
-grant replication slave on *.* to 'copyUser'@'%';
+GRANT REPLICATION SLAVE ON *.* TO 'copyUser'@'%';
 flush PRIVILEGES;
 #查看master状态
 show master status
@@ -50,14 +55,14 @@ flush PRIVILEGES;
 
 ![image-20211029171220902](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211029171220902.png)
 
-从库
+从库执行命令
 
 ~~~mysql
 #设置master相关信息
 CHANGE MASTER TO
 master_host='ip地址',
-master_user='cpoyUser',
-master_password='cpoyUser',
+master_user='copyUser',
+master_password='copyUser',
 master_port=3306,
 master_log_file='mysql-bin.000001',
 master_log_pos=2145;
@@ -65,9 +70,40 @@ master_log_pos=2145;
 start SLAVE;
 #查看master状态
 show slave status;
+#stop SLAVE;可以使用此命令停止主从复制
 ~~~
 
-很长，这里只截一部分
+![image-20211030105932129](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211030105932129.png)
 
-![image-20211029171332488](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211029171332488.png)
+测试是否成功：
 
+主库创建数据库、表并插入数据
+
+![image-20211030111312095](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211030111312095.png)
+
+在从库中进行查看
+
+![image-20211030111525074](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211030111525074.png)
+
+## 三、取消主从复制
+
+### 3.1 slave流程
+
+停止slave    `mysql> stop slave`
+
+清除slave信息
+
+~~~
+mysql>reset slave all;
+
+# 可以通过以下命令查看当前状态
+mysql> show slave status\G
+
+Emptyset (0,00 sec)
+~~~
+
+### 3.2 master流程
+
+清除master上主从信息    `mysql> reset master;`
+
+如果想彻底清除主从的机制，可以修改配置文件，删除主从相关的配置项，然后重启mysql即可。
