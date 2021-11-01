@@ -1,6 +1,6 @@
 
 
-# Java算法与数据结构学习
+# Java数据结构学习
 
 此文章涉及到的代码及测试类详见我的GitHub：https://github.com/Loserfromlazy/java_data_structure_demo
 
