@@ -32,7 +32,7 @@
 - [results file] 为测试结果文件路径
 - [Path to web report folder] 为web报告保存路径。
 
-例子：`jmeter -n -t testplan/RedisLock.jmx -l testplan/result/result.txt -e -o testplan/webreport`
+例子：`jmeter -n -t test\testAppServiceApi_querySn.jmx -l test\result.txt -e -o report`
 
 ##   二、快速入门
 
