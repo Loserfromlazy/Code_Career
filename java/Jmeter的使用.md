@@ -18,6 +18,22 @@
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/jmeter/jmeter4.jpg)
 
+打开jmeter.bat的同时会也有cmd命令行窗口：
+
+![image-20211108105345236](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211108105345236.png)
+
+上面的意思就是：不要使用GUI运行压力测试，GUI仅用于压力测试的创建和调试；执行压力测试请不要使用GUI。使用下面的命令来执行测试：
+
+```shell
+ jmeter -n -t [jmx file] -l [results file] -e -o [Path to web report folder]
+```
+
+- [jmx file] 为测试计划文件路径
+- [results file] 为测试结果文件路径
+- [Path to web report folder] 为web报告保存路径。
+
+例子：`jmeter -n -t testplan/RedisLock.jmx -l testplan/result/result.txt -e -o testplan/webreport`
+
 ##   二、快速入门
 
 以`http:localhost:8080/goods/getAll`接口为例，使用Jmeter对其进行压力测试。
@@ -55,6 +71,8 @@
 6. 点击运行
 
    ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/jmeter/jmeter12.jpg)
+   
+   **运行完后可以保存，在命令行执行命令进行测试并得到测试报告**
 
 ## 三、自定义变量&模拟多用户
 
@@ -70,7 +88,7 @@
 
    点击运行，开始测试
 
-### 3.2 模拟多个用户请求
+
 
 
 
