@@ -211,7 +211,7 @@ CREATE PROCEDURE test_insert () BEGIN
 	DECLARE
 		i INT DEFAULT 1;
 	WHILE
-			i <= 5000000 DO
+			i <= 10000000 DO
 			INSERT INTO tbiguser
 		VALUES
 			( NULL, concat( 'zy', i ), concat( 'zhaoyun', i ), 23, '1', 1, 'beijing' );
@@ -229,15 +229,13 @@ END;
 SELECT COUNT(*) FROM tbiguser
 ~~~
 
-结果：5020720
-
-> 因为机器配置原因我只加了5020720条数据，可以自行增加更多数据
+结果：10000000
 
 使用explain查看索引使用情况
 
-`SELECT * FROM tbiguser WHERE nickname = 'zy2`因为数据量很大所以这条sql语句将会很慢，（在我的机器上跑需要1.578s，可以根据自己机器配置自行修改数据数量）
+`SELECT * FROM tbiguser WHERE nickname = 'zy2`因为数据量很大所以这条sql语句将会很慢，（在我的机器上跑需要3.007s，可以根据自己机器配置自行修改数据数量）
 
-![image-20211108193542922](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211108193542922.png)
+![image-20211109182252904](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109182252904.png)
 
 这时我们通过explain查询这条sql的执行计划
 
@@ -297,7 +295,278 @@ mysql会自动先查询索引进行优化，所以查询速度依旧不慢，下
 
 ### 3.3 SQL语句中IN包含的值不应该过多
 
+MySQL对于IN做了相应的优化，即将IN中的常量全部存储在一个数组里面，而且这个数组是排好序的。但是如果数值较多，产生的消耗也是比较大的.
+
+### 3.4 select语句务必指明字段
+
+SELECT * 增加很多不必要的消耗（CPU、IO、内存、网络带宽）；减少了使用覆盖索引的可能性；当表结构发生改变时，前端也需要更新。所以要求直接在select后面接上字段名。
+
+### 3.5 当只需要一条数据时，使用limit
+
+limit可以停止全表扫描。
+
+![image-20211109183021968](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109183021968.png)
+
+### 3.6 排序的字段需要加索引
+
+排序的字段加不加索引以下面的两句sql语句为例：
+
+~~~mysql
+EXPLAIN select * from tbiguser WHERE loginname ='zhaoyun999' ORDER BY id
+EXPLAIN select * from tbiguser WHERE loginname ='zhaoyun999' ORDER BY loginname
+~~~
+
+![image-20211109183757181](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109183757181.png)
+
+![image-20211109183825160](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109183825160.png)
+
+其中id有索引而loginname没有索引，所以两个语句的级别也会有差别
+
+### 3.7 如果限制条件中其他字段没有索引，尽量少用or
+
+比如下面nickname有索引但loginname没有索引，`select * from tbiguser WHERE loginname ='zhaoyun999' or nickname = 'zy999'`
+
+![image-20211109184248983](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109184248983.png)
+
+可以使用下面的语句保证一个索引的生效
+
+~~~mysql
+select * from tbiguser WHERE loginname ='zhaoyun999' union all select * from tbiguser WHERE nickname = 'zy999'
+~~~
+
+![image-20211109184605735](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109184605735.png)
+
+### 3.8 使用union all代替union
+
+union和union all的差异主要是前者需要将结果集合并后再进行唯一性过滤操作，这就会涉及到排序，增加大量的CPU运算，加大资源消耗及延迟。当然，union all的前提条件是两个结果集没有重复数据。
+
+### 3.9 区分in和exists
+
+例：select * from t1 where id in (select id from t2);
+
+上面的语句等同于
+
+select * from t1 where exists(select * from t2 where t2.id=t1.id); 
+
+区分in和exists主要是造成了驱动顺序的改变（这是性能变化的关键），如果是exists，那么以外表为驱动表，先被访问，如果是in，那么先执行子查询。所以in适合于外表大而内表小的情况，exists相反。
+
+### 3.10 limit分页优化
+
+分页使用 limit m,n 尽量让m 小
+
+比如如下两个sql语句,可以取前一页的最大行数的id，然后根据这个最大的id来限制下一页的起点
+
+~~~mysql
+select * from tbiguser limit 9999998 ,2 
+select * from tbiguser where id>9999998 limit 2
+~~~
+
+运行结果：
+
+![image-20211109185347150](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109185347150.png)
+
+![image-20211109185402869](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109185402869.png)
+
+### 3.11 不建议使用%前缀模糊查询
+
+例如LIKE“%name”或者LIKE“%name%”，这种查询会导致索引失效而进行全表扫描。但是可以使用LIKE“name%”。
+
+### 3.12 避免在where子句中对字段进行表达式操作
+
+例如：
+
+~~~mysql
+select id,loginname from igtbuser where age*2=36;
+可以修改为：
+select id,loginname from igtbuser where age=36/2;
+~~~
+
+### 3.13 避免隐式类型转换
+
+where子句中出现column字段的类型和传入的参数类型不一致的时候发生的类型转换，建议先确定where中的参数类型。 
+
+例如可以`where age=18`而不是`where age='18'`
+
+### 3.14 join优化
+
+LEFT JOIN A表为驱动表，INNER JOIN MySQL会自动找出那个数据少的表作用驱动表，RIGHT JOIN B表为驱动表。
+
+1.mysql中没有 full join 所以可以使用以下sql语句
+
+~~~mysql
+select * from A left join B on B.name =A.name where B.name is null union all select * from B
+~~~
+
+2.尽量使用inner join，避免left join：
+
+参与联合查询的表至少为2张表，一般都存在大小之分。如果连接方式是inner join，在没有其他过滤条件的情况下MySQL会自动选择小表作为驱动表，但是left join在驱动表的选择上遵循的是左边驱动右边的原则，即left join左边的表名为驱动表。
+
+3.利用小表去驱动大表
+
+类似循环嵌套
+
+~~~
+for(int i=5;.......)
+{
+     for(int j=1000;......)
+     {
+         
+     }
+}
+~~~
+
+如果小的循环在外层，对于数据库连接来说就只连接5次，进行5000次操作，如果1000在外，则需要进行1000次数据库连接，从而浪费资源，增加消耗。
+
 ## 四、索引优化实例
 
+### 4.1 创建表
 
+使用之前的tbiguser表，里面有一千万条数据
+
+创建tbuser1和tbuser2两个表并增加一下重复数据
+
+~~~mysql
+CREATE TABLE tuser1 ( id INT PRIMARY KEY auto_increment, NAME VARCHAR ( 255 ), address VARCHAR ( 255 ) );
+CREATE TABLE tuser2 ( id INT PRIMARY KEY auto_increment, NAME VARCHAR ( 255 ), address VARCHAR ( 255 ) );
+~~~
+
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (1, 'zhangfei', 'tianjing');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (2, 'zhaoyun', 'tianjing');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (3, 'guanyu', 'guangzhou');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (4, 'guanyu', 'xian');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (5, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (6, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (7, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (8, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (9, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (10, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (11, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (12, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (13, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (14, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (15, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (16, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (17, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (18, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (19, '1', '1');
+> INSERT INTO `test`.`tuser1`(`id`, `NAME`, `address`) VALUES (20, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (1, 'zhangfei', 'shandong');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (2, 'zhaoyun', 'shandong');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (3, 'guanyu', 'guangzhou');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (4, 'guanyu', 'shenzhen');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (5, 'guanyu', 'hebei');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (6, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (7, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (8, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (9, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (10, 'guanyu', 'jilin');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (11, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (12, '12', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (13, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (14, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (15, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (16, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (17, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (18, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (19, '1', '1');
+> INSERT INTO `test`.`tuser2`(`id`, `NAME`, `address`) VALUES (20, '1', '1');
+
+### 4.2 需求
+
+tbiguser表按照地区分组统计求和，要求是在tuser1表和tuser2表中出现过的地区
+
+按照需求写出sql
+
+~~~mysql
+SELECT
+	count( id ) num,
+	address 
+FROM
+	tbiguser 
+WHERE
+	address IN ( SELECT DISTINCT address FROM tuser1 ) 
+GROUP BY
+	address 	
+UNION
+SELECT
+	count( id ) num,
+	address 
+FROM
+	tbiguser 
+WHERE
+	address IN ( SELECT DISTINCT address FROM tuser2 ) 
+GROUP BY
+	address
+~~~
+
+执行sql可以看到需要7.026s
+
+![image-20211109192646732](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109192646732.png)
+
+### 4.3 优化
+
+使用explain查看索引使用情况
+
+![image-20211109192855741](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109192855741.png)
+
+> type:为ALL 说明没有索引，全表扫描
+>
+> Using temporary：说明使用了临时表
+>
+> Using where：没有索引下推，在Server层进行了全表扫描和过滤
+>
+> Using join buffer(Block Nested Loop)：关联没有索引，有关联优化
+
+可以看到全部都是all，而且还有using temporary这些都是需要优化的。
+
+由于原始sql语句大量使用了address所以我们可以增加索引，**第一次优化**：在三个表的address字段上都增加normal索引，之后再次执行sql语句
+
+结果是5.657秒
+
+![image-20211109193326142](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109193326142.png)
+
+执行explain
+
+![image-20211109193558396](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109193558396.png)
+
+> type：index ，说明用到了索引 ： 覆盖索引
+>
+> Using temporary ：有临时表
+>
+> Using where ：没有索引下推，在Server层进行了全表扫描和过滤
+
+**第二次优化**
+
+~~~mysql
+SELECT
+	count( id ) num,
+	address 
+FROM
+	tbiguser 
+WHERE
+	address IN ( SELECT DISTINCT address FROM tuser1 ) 
+	OR address IN ( SELECT DISTINCT address FROM tuser2 ) 
+GROUP BY
+	address
+~~~
+
+执行sql语句发现用了3.035s
+
+![image-20211109194117054](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109194117054.png)
+
+我们在执行explain
+
+![image-20211109194255291](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109194255291.png)
+
+> type：index
+>
+> 没有了临时表
+
+我们会发现这时没有临时表了，而且对比两次explain发现使用union之后会有两次908万多的查询，而使用or之后只有一次。（这里or两端都是address都是有索引的）
+
+**第三次优化**
+
+从第二次优化的explain可以看出，索引只是使用了覆盖索引，rows=908万多，说明还是使用了全表扫描。
+
+所以我们可以利用address过滤数据
 
