@@ -562,11 +562,94 @@ GROUP BY
 >
 > 没有了临时表
 
-我们会发现这时没有临时表了，而且对比两次explain发现使用union之后会有两次908万多的查询，而使用or之后只有一次。（这里or两端都是address都是有索引的）
+我们会发现这时没有临时表了，而且对比两次explain发现使用union之后会有两次908万多的查询，而使用or之后只有一次。（这里or两端都是address都是有索引的，所以不会使索引失效）
 
 **第三次优化**
 
 从第二次优化的explain可以看出，索引只是使用了覆盖索引，rows=908万多，说明还是使用了全表扫描。
 
-所以我们可以利用address过滤数据
+所以我们可以利用address做关联，过滤数据
+
+~~~mysql
+SELECT DISTINCT
+	r.* 
+FROM
+	tuser1 l,
+	tbiguser r 
+WHERE
+	l.address = r.address
+~~~
+
+执行结果：仅用了0.021s
+
+![image-20211110163722373](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211110163722373.png)
+
+我们对上面的sql语句进行explain
+
+![image-20211110163827535](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211110163827535.png)
+
+可以看到type=ref且rows=4542079，说明使用了address索引进行了关联
+
+同理对tuser2表也可以这样处理
+
+~~~mysql
+SELECT DISTINCT
+	r.* 
+FROM
+	tuser2 l,
+	tbiguser r 
+WHERE
+	l.address = r.address
+~~~
+
+我们对这两次过滤出来的数据进行合并结果集
+
+~~~mysql
+SELECT DISTINCT
+	r.* 
+FROM
+	tuser1 l,
+	tbiguser r 
+WHERE
+	l.address = r.address
+UNION all
+SELECT DISTINCT
+	r.* 
+FROM
+	tuser2 l,
+	tbiguser r 
+WHERE
+	l.address = r.address
+~~~
+
+查询结果：
+
+![image-20211110164925182](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211110164925182.png)
+
+我们对这个结果集进行分组求和即可
+
+~~~mysql
+SELECT
+	count( t.id ),
+	t.address 
+FROM
+	(
+	SELECT DISTINCT
+		r.* 
+	FROM
+		tuser1 l,
+		tbiguser r 
+	WHERE
+		l.address = r.address UNION ALL
+	SELECT DISTINCT
+		r.* 
+	FROM
+		tuser2 l,
+		tbiguser r 
+	WHERE
+		l.address = r.address 
+	) t 
+GROUP BY
+	t.address
+~~~
 
