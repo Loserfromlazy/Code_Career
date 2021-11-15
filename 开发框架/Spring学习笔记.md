@@ -7,7 +7,7 @@ Spring是分层的Java SE/EE应用full-stack轻量级开源框架，以IoC（Inv
 
 在Core中都包括IOC Container（IOC容器），Events（事件），Resources（资源），i18n（），Validation（验证），DataBinging（数据绑定），Type Conversion（类型转换），SpEL，AOP
 
-# 一.概述
+# 一、概述
 
 在Spring框架中最重要的就是控制反转容器和面向切面编程
 
@@ -30,7 +30,7 @@ Expert One-to-One J2EE Development without EJB(2004)
 
 ![img](https://img2018.cnblogs.com/blog/480452/201903/480452-20190318225849216-2097896352.png)
 
-# 二. IOC容器
+# 二、IOC容器
 
 本章介绍了控制反转（IoC）原理的Spring框架实现。IoC也称为依赖注入（DI）。在此过程中，对象仅通过构造函数参数，工厂方法的参数或在构造或从工厂方法返回后在对象实例上设置的属性来定义其依赖项（即，与它们一起使用的其他对象） 。然后，容器在创建bean时注入那些依赖项。此过程从根本上讲是通过使用类的直接构造或诸如服务定位器模式的机制来控制其依赖项的实例化或位置的Bean本身的逆过程（因此称为控件的倒置）。
 
@@ -99,10 +99,8 @@ Expert One-to-One J2EE Development without EJB(2004)
 
 当是我们讲解jdbc时，是通过反射来注册驱动的，代码如下：
 `Class.forName("com.mysql.jdbc.Driver");`//此处只是一个字符串
-此时的好处是，我们的类中不再依赖具体的驱动类，此时就算删除mysql的驱动jar包，依然可以编译（运
-行就不要想了，没有驱动不可能运行成功的）。
-同时，也产生了一个新的问题，mysql驱动的全限定类名字符串是在java类中写死的，一旦要改还是要修改
-源码。
+此时的好处是，我们的类中不再依赖具体的驱动类，此时就算删除mysql的驱动jar包，依然可以编译（运行就不要想了，没有驱动不可能运行成功的）。
+同时，也产生了一个新的问题，mysql驱动的全限定类名字符串是在java类中写死的，一旦要改还是要修改源码。
 解决这个问题也很简单，使用配置文件配置。
 
 **工厂模式解耦合**：
@@ -272,7 +270,7 @@ factory-method="createAccountService"></bean>
 
 
 
-## 2.4 基于XML的IOC配置（IOC解耦合）
+## 2.4 基于XML的IOC配置
 
 ### 2.4.1 IOC入门
 
@@ -369,7 +367,7 @@ destroy-method：指定类中销毁方法名称。
 
 ## 2.5 依赖注入
 
-依赖注入：Dependency Injection。它是spring框架核心ioc的具体实现。
+依赖注入：Dependency Injection。它是spring框架核心ioc的具体实现。IOC和DI描述的是同⼀件事情，只不过⻆度不⼀样罢了。
 我们的程序在编写时，通过控制反转，把对象的创建交给了spring，但是代码中不可能出现没有依赖的情况。
 ioc解耦只是降低他们的依赖关系，但不会消除。例如：我们的业务层仍会调用持久层的方法。那这种业务层和持久层的依赖关系，在使用spring之后，就让spring来维护了。简单的说，就是坐等框架把持久层对象传入业务层，而不用我们自己去获取。
 
@@ -627,116 +625,13 @@ value：指定范围的值。
 作用：
 用于指定销毁方法。
 
-# 三. SpEL
+# 三 、AOP
 
-SpEL（Spring Expression Language），即Spring表达式语言，是比JSP的EL更强大的一种表达式语言。
-
-常见用法：在@Value注解中；在xml配置中；或者是在代码块中使用Expression。
-
-## 3.1 用法
-
-### @Value
-
-~~~java
-@Value("#{表达式}")
-public String arg;
-~~~
-
-### < bean>配置
-
-~~~xml
-<bean id="xxx" class="com.xxx.xxx">
-    <!--同@Value #{}内是表达式的值，可以放在property或constructor-arg内-->
-    <property name="arg" value="#{表达式}"/>
-</bean>
-~~~
-
-### Expression
-
-~~~java
-import org.springframework.expression.Expression;
-import org.springframework.expression.ExpressionParser;
-import org.springframework.expression.spel.standard.SpelExpressionParser;
-import org.springframework.expression.spel.support.StandardEvaluationContext;
- 
-public class SpELTest {
- 
-    public static void main(String[] args) {
- 
-        //创建ExpressionParser解析表达式
-        ExpressionParser parser = new SpelExpressionParser();
-        //表达式放置
-        Expression expression = parser.parseExpression("表达式");
-        //执行表达式，默认容器是spring本身的容器：ApplicationContext
-        Object value = expression.getValue();
-        
-        /**如果使用其他的容器，则用下面的方法*/
-        //创建一个虚拟的容器EvaluationContext
-        StandardEvaluationContext ctx = new StandardEvaluationContext();
-        //向容器内添加bean
-        BeanA beanA = new BeanA();
-        ctx.setVariable("bean_id", beanA);
-        
-        //setRootObject并非必须；一个EvaluationContext只能有一个RootObject，引用它的属性时，可以不加前缀
-        ctx.setRootObject(XXX);
-        
-        //getValue有参数ctx，从新的容器中根据SpEL表达式获取所需的值
-        Object value = expression.getValue(ctx);
-    }
-}
-~~~
-
-# 四. Spring中的配置文件
-
-Spring配置文件是用于指导Spring工厂进行Bean生产、依赖关系注入（装配）及Bean实例分发的"图纸"。
-
-# 五. Spring整合Junit
-
-在测试类中，每个测试方法都有以下两行代码：
-	ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-	IAccountService as = ac.getBean("accountService",IAccountService.class);
-这两行代码的作用是获取容器，如果不写的话，直接会提示空指针异常。所以又不能轻易删掉。
-
-步骤：
-
-导入jar包
-
-使用@RunWith替换原有运行器
-
-~~~java
-@RunWith(SpringJUnit4ClassRunner.class)
-public class AccountServiceTest {
-}
-~~~
-
-使用@ContextConfiguration指定配置文件
-
-~~~java
-@RunWith(SpringJUnit4ClassRunner.class)
-@ContextConfiguration(locations= {"classpath:bean.xml"})
-public class AccountServiceTest {
-}
-~~~
-
-使用@Autowired注入数据
-
-~~~java
-@RunWith(SpringJUnit4ClassRunner.class)
-@ContextConfiguration(locations= {"classpath:bean.xml"})
-public class AccountServiceTest {
-@Autowired
-private IAccountService as ;
-}
-~~~
-
-# 六 . AOP
-
-## 5.1概述
+## 3.1概述
 
 AOP：全称是Aspect Oriented Programming即：面向切面编程。
 
-简单的说它就是把我们程序重复的代码抽取出来，在需要执行的时候，使用动态代理的技术，在不修改源码的
-基础上，对我们的已有方法进行增强。
+简单的说它就是把我们程序重复的代码抽取出来，在需要执行的时候，使用动态代理的技术，在不修改源码的基础上，对我们的已有方法进行增强。
 
 作用：
 	在程序运行期间，不修改源码对已有方法进行增强。
@@ -770,8 +665,7 @@ accountDao.update(source);
 int i=1/0; //模拟转账异常
 accountDao.update(target);
 }
-当我们执行时，由于执行有异常，转账失败。但是因为我们是每次执行持久层方法都是独立事务，导致无法实
-事务控制（不符合事务的一致性）
+当我们执行时，由于执行有异常，转账失败。但是因为我们是每次执行持久层方法都是独立事务，导致无法实现事务控制（不符合事务的一致性）
 ~~~
 
 解决办法：
@@ -861,7 +755,7 @@ public static void release() {
 > 提供者：第三方的CGLib，如果报asmxxxx异常，需要导入asm.jar。
 > 要求：被代理类不能用final修饰的类（最终类）。
 
-## 5.2 AOP中的概念
+## 3.2 AOP中的概念
 
 Joinpoint(连接点):
 
@@ -899,7 +793,7 @@ Aspect(切面):
 
 > 是切入点和通知（引介）的结合。
 
-## 5.3 基于XML的AOP
+## 3.3 基于XML的AOP
 
 步骤
 
@@ -1056,7 +950,7 @@ pointcut-ref：指定切入点表达式的引用
 通常情况下，环绕通知都是独立使用的
 ~~~
 
-## 5.4 基于注解的AOP
+## 3.4 基于注解的AOP
 
 步骤
 
@@ -1239,469 +1133,31 @@ public class SpringConfiguration {
 }
 ~~~
 
-# 六. Spring中的JdbcTemplate
-
-它是spring框架中提供的一个对象，是对原始Jdbc API对象的简单封装。spring框架为我们提供了很多
-的操作模板类。
-操作关系型数据的：
-	JdbcTemplate
-	HibernateTemplate
-操作nosql数据库的：
-	RedisTemplate
-操作消息队列的：
-	JmsTemplate
-
-**使用前需配置数据源**（以DBCP为例，不同数据源大同小异）
-
-~~~xml
-<bean id="dataSource" class="org.apache.commons.dbcp.BasicDataSource">
-<property name="driverClassName" value="com.mysql.jdbc.Driver"></property>
-<property name="url" value="jdbc:mysql:// /spring_day02"></property>
-<property name="username" value="root"></property>
-<property name="password" value="1234"></property>
-</bean>
-~~~
-
-## 6.1 JdbcTemplate的增删改查操作
-
-配置文件
-
-~~~xml
-<?xml version="1.0" encoding="UTF-8"?>
-<beans xmlns="http://www.springframework.org/schema/beans"
-xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-xsi:schemaLocation="http://www.springframework.org/schema/beans
-http://www.springframework.org/schema/beans/spring-beans.xsd">
-<!-- 配置一个数据库的操作模板：JdbcTemplate -->
-<bean id="jdbcTemplate" class="org.springframework.jdbc.core.JdbcTemplate">
-<property name="dataSource" ref="dataSource"></property>
-</bean>
-<!-- 配置数据源-->
-<bean id="dataSource"
-class="org.springframework.jdbc.datasource.DriverManagerDataSource">
-<property name="driverClassName" value="com.mysql.jdbc.Driver"></property>
-<property name="url" value="jdbc:mysql:///spring_day02"></property>
-<property name="username" value="root"></property>
-<property name="password" value="1234"></property>
-</bean>
-</beans>
-~~~
-
-**基本使用**
-
-~~~java
-public class JdbcTemplateDemo{
-public static void main(String[] args) {
-//1.获取Spring容器
-ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-//2.根据id获取bean对象
-JdbcTemplate jt = (JdbcTemplate) ac.getBean("jdbcTemplate");
-//3.执行操作
-jt.execute("insert into account(name,money)values('eee',500)");
-}
-}
-~~~
-
-**保存操作**
-
-~~~java
-public class JdbcTemplateDemo3 {
-public static void main(String[] args) {
-//1.获取Spring容器
-ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-//2.根据id获取bean对象
-JdbcTemplate jt = (JdbcTemplate) ac.getBean("jdbcTemplate");
-//3.执行操作
-//保存
-jt.update("insert into account(name,money)values(?,?)","fff",5000);
-}
-}
-~~~
-
-**更新操作**
-
-~~~java
-public class JdbcTemplateDemo3 {
-public static void main(String[] args) {
-//1.获取Spring容器
-ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-//2.根据id获取bean对象
-JdbcTemplate jt = (JdbcTemplate) ac.getBean("jdbcTemplate");
-//3.执行操作
-//修改
-jt.update("update account set money = money-? where id = ?",300,6);
-}
-}
-~~~
-
-**删除操作**
-
-~~~java
-public class JdbcTemplateDemo3 {
-public static void main(String[] args) {
-//1.获取Spring容器
-ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-//2.根据id获取bean对象
-JdbcTemplate jt = (JdbcTemplate) ac.getBean("jdbcTemplate");
-//3.执行操作
-//删除
-jt.update("delete from account where id = ?",6);
-}
-}
-~~~
-
-**查询所有**
-
-~~~java
-public class JdbcTemplateDemo3 {
-public static void main(String[] args) {
-    //1.获取Spring容器
-    ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-    //2.根据id获取bean对象
-    JdbcTemplate jt = (JdbcTemplate) ac.getBean("jdbcTemplate");
-    //3.执行操作
-    //查询所有
-    List<Account> accounts = jt.query("select * from account where money > ? ",
-    new AccountRowMapper(), 500);
-    for(Account o : accounts){
-    System.out.println(o);
-	}
-}
-}
-public class AccountRowMapper implements RowMapper<Account>{
-@Override
-public Account mapRow(ResultSet rs, int rowNum) throws SQLException {
-    Account account = new Account();
-    account.setId(rs.getInt("id"));
-    account.setName(rs.getString("name"));
-    account.setMoney(rs.getFloat("money"));
-    return account;
-}
-~~~
-
-**查询一个**
-
-~~~java
-使用RowMapper的方式：常用的方式
-public class JdbcTemplateDemo3 {
-public static void main(String[] args) {
-    //1.获取Spring容器
-    ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-    //2.根据id获取bean对象
-    JdbcTemplate jt = (JdbcTemplate) ac.getBean("jdbcTemplate");
-    //3.执行操作
-    //查询一个
-    List<Account> as = jt.query("select * from account where id = ? ",
-    new AccountRowMapper(), 55);
-    System.out.println(as.isEmpty()?"没有结果":as.get(0));
-}
-}
-使用ResultSetExtractor的方式:不常用的方式
-public class JdbcTemplateDemo3 {
-public static void main(String[] args) {
-    //1.获取Spring容器
-    ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-    //2.根据id获取bean对象
-    JdbcTemplate jt = (JdbcTemplate) ac.getBean("jdbcTemplate");
-    //3.执行操作
-    //查询一个
-    Account account = jt.query("select * from account where id = ?",
-    new AccountResultSetExtractor(),3);
-    System.out.println(account);
-}
-}
-
-~~~
-
-**查询返回一行一列**
-
-~~~java
-public class JdbcTemplateDemo3 {
-public static void main(String[] args) {
-//1.获取Spring容器
-ApplicationContext ac = new ClassPathXmlApplicationContext("bean.xml");
-//2.根据id获取bean对象
-JdbcTemplate jt = (JdbcTemplate) ac.getBean("jdbcTemplate");
-//3.执行操作
-//查询返回一行一列：使用聚合函数，在不使用group by字句时，都是返回一行一列。最长用的
-就是分页中获取总记录条数
-Integer total = jt.queryForObject("select count(*) from account where money > ?
-",Integer.class,500);
-System.out.println(total);
-}
-}
-~~~
-
-# 七. Spring中的事务控制
-
-第一：JavaEE体系进行分层开发，事务处理位于业务层，Spring提供了分层设计业务层的事务处理解决方
-案。
-第二：spring 框架为我们提供了一组事务控制的接口。具体在后面介绍。这组接口是在
-spring-tx-5.0.2.RELEASE.jar中。
-第三：spring的事务控制都是基于AOP的，它既可以使用编程的方式实现，也可以使用配置的方式实现。我
-们学习的重点是使用配置的方式实现。
-
-## 7.1事务
-
-什么是事务：逻辑上的一组操作，组成这组操作的各个单元，要么全部成功，要么全部失败
-
-事物的特性：
+# 四、手写IOC和AOP
 
-> 原子性：事务不可分割
->
-> 一致性：事务执行前后数据完整性必须保持一致
->
-> 隔离性：一个事务执行不应该受到其他的事物的干扰
->
-> 持久性：一旦事务执行，数据就持久化到数据库
+在理解了IOC和AOP思想之后，根据银行转账案例我们逐步分析，并一步步手写IOC和AOP。
 
-如果不考虑隔离性引发的安全性问题
+> 由于要手写IOC和AOP所以就只使用原生的Servlet，以及mybatis。就不引入Spring和SpringMVC了。
 
-读问题：
+## 4.1 银行转账案例
 
-脏读：一个事务读到另一个事务未提交的数据
 
-不可重复读：一个事务读到另一个事务已经提交的update的数据，导致一个事务中多次查询结果不一致。
 
-虚读、幻读：一个事务读到另一个事务已经提交的insert数据，导致一个事务中多次查询结果不一致。
 
-写问题：
 
- 丢失更新
 
-解决读问题：
 
-设置事务的隔离级别：
-
-Read uncommitted：未提交读，任何读问题都解决不了
 
-Read committed：已读提交，解决脏读，但是不可重复读和虚读有可能发生（Oracle）
 
-Repeatable read：重复读，解决脏读和不可重复读，但是虚读有
 
-可能发生（Mysql）
 
-Serializable：解决所有读问题
 
-## 7.2 Spring中事物的API
-
-**PlatformTransactionManager**
 
-此接口是spring的事务管理器，它里面提供了我们常用的操作事务的方法：
 
-> TransactionStatus   getTransaction(TransactionDefinitiond  definition)//获取事务的状态信息
->
-> void  commit(TransactionStatus   status)//提交事务
->
-> void   rollback(TransactionStatus   status)//回滚事务
 
-真正管理事务的对象
 
-> org.springframework.jdbc.datasource.DataSourceTransactionManager 使用Spring
-> JDBC或iBatis 进行持久化数据时使用
-> org.springframework.orm.hibernate5.HibernateTransactionManager 使用
-> Hibernate版本进行持久化数据时使用
-
-**TransactionDefinition**
-
-它是事务的定义信息对象
-
-> String  getName()//获取事务对象名称
->
-> int getIsolationLevel()//获取事务隔离级
->
-> int getPropagationBehavior()//获取事务传播行为
->
-> int getTimeout()//获取事务超过时间
->
-> boolean isReadOnly()//获取事务是否只读
-
-**Spring中传播行为用途：**
-
-`保证多个操作在同一个事务中`
-
-PROPAGATION_REQUIRED :默认值，如果A中有事务，使用A中的事务，如果A没有，创建事务将操作包含起来
-
-PRQPAGATION_SUPPORTS：支持事务，如果A中有事务，使用A中的事务，如果A没有事务，不使用事务
-
-PROPAGATION_MANDATORY：如果A中有事务，使用A中的事务，如果A没有事务，抛出异常
-
-`保证多个操作不在同一个事务中：`
-
- PROPAGATION_REQUIRES_NEW：如果A中有事务，将A中事务挂起（暂停），创建新事务，只包含自身操作。如果A中没有事务，创建新事务，包含自身操作
-
-PROPAGATION_NOT_SUPPORTED：如果A中有事务，将A的事务挂起，不使用事务管理
-
- PROPAGATION_NEVER：如果A中有事务，抛出异常
-
-`嵌套式事务`
-
-PROPAGATION_NESTED：嵌套事务，若果A中有事务，按照A的执行，执行完成后，设置A的保存点，执行B的操作，若果没有异常，执行通过，若果有异常，可以选择回滚到最初始位置，也可以回滚到保存点。
-
-**事务的隔离级别**
-
-ISOLATION_DEFAULT	默认级别，属于下列某一种
-
-ISOLATION_READ_UNCOMMITED	可以读取未提交数据
-
-ISOLATION_READ_COMMITED	只能读取已提交数据，解决脏读（Oracle默认级别）
-
-ISOLATION_REPEATABLE_READ	是否读取替他十五提交后的数据，解决不可重复读（MYSQL默认级别）
-
-ISOLATION_SERIALIZABLE	是否读取其他事务提交添加后的数据，解决幻影读
-
-## 7.3 基于XML的声明式事务控制（配置方式）
-
-步骤
-
-**1.拷贝jar包**
-
-**2.创建spring配置文件**
-
-~~~xml
-<?xml version="1.0" encoding="UTF-8"?>
-<beans xmlns="http://www.springframework.org/schema/beans"
-xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-xmlns:aop="http://www.springframework.org/schema/aop"
-xmlns:tx="http://www.springframework.org/schema/tx"
-xsi:schemaLocation="http://www.springframework.org/schema/beans
-http://www.springframework.org/schema/beans/spring-beans.xsd
-http://www.springframework.org/schema/tx
-http://www.springframework.org/schema/tx/spring-tx.xsd
-http://www.springframework.org/schema/aop
-http://www.springframework.org/schema/aop/spring-aop.xsd">
-</beans>
-~~~
-
-**3.创建数据库和表、编写业务层持久层的接口和实现类，编写业务层和持久层的配置文件**
-
-**4.（开始事务配置）配置事务管理器**
-
-~~~xml
-<!-- 配置一个事务管理器-->
-<bean id="transactionManager"
-class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
-<!-- 注入DataSource -->
-<property name="dataSource" ref="dataSource"></property>
-</bean>
-~~~
-
-**5.配置事物的通知引用事务管理器**
-
-~~~xml
-<!-- 事务的配置-->
-<tx:advice id="txAdvice" transaction-manager="transactionManager">
-</tx:advice>
-~~~
-
-**6.配置事务的属性**
-
-~~~xml
-<!--在tx:advice标签内部配置事务的属性-->
-<tx:attributes>
-<!-- 指定方法名称：是业务核心方法
-read-only：是否是只读事务。默认false，不只读。
-isolation：指定事务的隔离级别。默认值是使用数据库的默认隔离级别。
-propagation：指定事务的传播行为。
-timeout：指定超时时间。默认值为：-1。永不超时。
-rollback-for：用于指定一个异常，当执行产生该异常时，事务回滚。产生其他异常，事务不回滚。
-没有默认值，任何异常都回滚。
-no-rollback-for：用于指定一个异常，当产生该异常时，事务不回滚，产生其他异常时，事务回
-滚。没有默认值，任何异常都回滚。
--->
-<tx:method name="*" read-only="false" propagation="REQUIRED"/>
-<tx:method name="find*" read-only="true" propagation="SUPPORTS"/>
-</tx:attributes>
-
-~~~
-
-**7.配置事务的AOP切入点表达式**
-
-~~~xml
-<!-- 配置aop -->
-<aop:config>
-<!-- 配置切入点表达式-->
-<aop:pointcut expression="execution(* com.itheima.service.impl.*.*(..))"
-id="pt1"/>
-</aop:config>
-~~~
-
-**8.配置切入点表达式和事务通知的关系**
-
-~~~xml
-<!-- 在aop:config标签内部：建立事务的通知和切入点表达式的关系-->
-<aop:advisor advice-ref="txAdvice" pointcut-ref="pt1"/>
-~~~
-
-## 7.4 基于注解的配置方式
-
-步骤
-
-123步与上述相同
-
-**4.配置事务管理器并注入数据源**
-
-~~~xml
-<!-- 配置事务管理器-->
-<bean id="transactionManager"
-class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
-<property name="dataSource" ref="dataSource"></property>
-</bean>
-~~~
-
-**5.在业务层使用@Transactional**
-
-~~~java
-@Service("accountService")
-@Transactional(readOnly=true,propagation=Propagation.SUPPORTS)
-public class AccountServiceImpl implements IAccountService {
-    @Autowired
-    private IAccountDao accountDao;
-    @Override
-    public Account findAccountById(Integer id) {
-    	return accountDao.findAccountById(id);
-    }
-    @Override
-    @Transactional(readOnly=false,propagation=Propagation.REQUIRED)
-    public void transfer(String sourceName, String targeName, Float money) {
-        //1.根据名称查询两个账户
-        Account source = accountDao.findAccountByName(sourceName);
-        Account target = accountDao.findAccountByName(targeName);
-        //2.修改两个账户的金额
-        source.setMoney(source.getMoney()-money);//转出账户减钱
-        target.setMoney(target.getMoney()+money);//转入账户加钱
-        //3.更新两个账户
-        accountDao.updateAccount(source);
-        accountDao.updateAccount(target);
-    }
-}
-该注解的属性和xml中的属性含义一致。该注解可以出现在接口上，类上和方法上。
-出现接口上，表示该接口的所有实现类都有事务支持。
-出现在类上，表示类中所有方法有事务支持
-出现在方法上，表示方法有事务支持。
-以上三个位置的优先级：方法>类>接口
-~~~
-
-**6.在配置文件中开启事务注解的支持**
-
-~~~xml
-<!-- 开启spring对注解事务的支持-->
-<tx:annotation-driven transaction-manager="transactionManager"/>
-~~~
-
-# 八. Spring5中的新内容
-
-**Junit5的支持**
-
-完全支持JUnit 5 Jupiter，所以可以使用JUnit 5 来编写测试以及扩展。此外还提供了一个编程以及
-扩展模型，Jupiter 子项目提供了一个测试引擎来在Spring 上运行基于Jupiter 的测试。
-另外，Spring Framework 5 还提供了在Spring TestContext Framework 中进行并行测试的扩展。
-针对响应式编程模型，spring-test 现在还引入了支持Spring WebFlux 的WebTestClient 集成测
-试的支持，类似于MockMvc，并不需要一个运行着的服务端。使用一个模拟的请求或者响应，WebTestClient
-就可以直接绑定到WebFlux 服务端设施。
-你可以在这里找到这个激动人心的TestContext 框架所带来的增强功能的完整列表。
-当然，Spring Framework 5.0 仍然支持我们的老朋友JUnit! 在我写这篇文章的时候，JUnit 5 还
-只是发展到了GA 版本。对于JUnit4，Spring Framework 在未来还是要支持一段时间的。
+
+
 
 
 
