@@ -1137,11 +1137,17 @@ public class SpringConfiguration {
 
 在理解了IOC和AOP思想之后，根据银行转账案例我们逐步分析，并一步步手写IOC和AOP。
 
-> 由于要手写IOC和AOP所以就只使用原生的Servlet，以及mybatis。就不引入Spring和SpringMVC了。
+> 由于要手写IOC和AOP所以就只使用原生的Servlet，以及jdbc。就不引入Spring和SpringMVC以及mybatis了。
 
 ## 4.1 银行转账案例
 
 
+
+**案例问题分析**
+
+
+
+**问题解决思路**
 
 
 
