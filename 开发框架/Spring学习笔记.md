@@ -1141,13 +1141,137 @@ public class SpringConfiguration {
 
 ## 4.1 银行转账案例
 
-
+案例代码地址[Github](https://github.com/Loserfromlazy/MY_IOC_AOP/blob/main/TestBank.rar)     [Gitee](https://gitee.com/yhr520/MY_IOC_AOP/blob/main/TestBank.rar)
 
 **案例问题分析**
 
+Servlet部分代码
 
+![image-20211124113927774](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211124113927774.png)
+
+Service部分代码
+
+![image-20211124113947769](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211124113947769.png)
+
+问题分析：
+
+1. 代码耦合，在每一层都要实现下一层的实现类，比如，在service层使用dao层时，直接在impl中通过new获得了dao层对象，然而new关键字将ServiceImpl和DaoImpl耦合在一起，如果技术框架发生变动，譬如dao改成mybatis就需要修改源代码重新编译。
+2. service层代码没有事务控制。
 
 **问题解决思路**
+
+在上述代码中我们使用new来实例化对象，除了new以外还可以通过反射来实例化对象。如`Class.forName("com.learn.dao.XXXImpl")`,当然可以使用配置文件来存储全限定类名。
+
+关于代码耦合方面，我们可以使用工厂模式去解耦合。
+
+综上，可以使用工厂通过反射技术来生产对象，也就是说，**工厂类解析xml存的全限定类名，然后通过反射技术实例化对象。工厂类同时给外部提供获取对象的接口方法。**
+
+## 4.2 案例修改-解耦合
+
+增加beans.xml
+
+~~~xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--根标签，里面配置了一个又一个的bean子标签，每一个子标签都代表一个类的配置-->
+<beans>
+<!--id标识对象，class是类的全限定名称-->
+    <bean id="accountDao" class="com.learn.dao.Impl.AccountDaoImpl"></bean>
+    <bean id="accountService" class="com.learn.service.Impl.AccountServiceImpl">
+        <!-- names属性：用于定位set方法 setAccountDao即set方法名 ref属性：需要传入的值-->
+        <property name="AccountDao" ref="accountDao"></property>
+    </bean>
+</beans>
+~~~
+
+增加BeanFactory
+
+~~~java
+public class BeanFactory {
+    /*
+    * BeanFactory首先需要读取解析xml，通过反射技术实例化对象存储map中待用
+    * 然后对外提供获取实例对象的接口
+    * */
+    private static Map<String,Object> map = new HashMap<>();
+
+    static {
+        //加载xml
+        InputStream resourceAsStream = BeanFactory.class.getClassLoader().getResourceAsStream("beans.xml");
+        //解析xml
+        SAXReader saxReader = new SAXReader();
+        try {
+            Document read = saxReader.read(resourceAsStream);
+            Element rootElement = read.getRootElement();
+            List<Element> beanList = rootElement.selectNodes("//bean");
+            for (Element element : beanList) {
+                //获取每个元素的id和class
+                String id = element.attributeValue("id");
+                String clazz = element.attributeValue("class");
+                //反射创建对象。
+                Class<?> aClass = Class.forName(clazz);
+                Object o = aClass.newInstance();
+                map.put(id, o);
+            }
+            //实例化完成后维护对象的依赖关系，检查哪些对象需要传值，根据配置传值
+            //有property元素就有传值需求
+            List<Element> propertyList = rootElement.selectNodes("//property");
+            for (Element element : propertyList) {
+                String name = element.attributeValue("name");
+                String ref = element.attributeValue("ref");
+
+                //找到需要处理依赖关系的bean
+                Element parent = element.getParent();
+                //调用父元素反射
+                String parentId = parent.attributeValue("id");
+                Object parentObject = map.get(parentId);
+                //遍历父元素所有方法，找到"set"+name值的方法
+                Method[] methods = parentObject.getClass().getMethods();
+                for (Method method : methods) {
+                    if (method.getName().equalsIgnoreCase("set" + name)) {
+                        method.invoke(parentObject, map.get(ref));
+                    }
+                }
+                //把处理之后的parentObject重新放入map
+                map.put(parentId,parentObject);
+            }
+
+
+        } catch (DocumentException | ClassNotFoundException e) {
+            e.printStackTrace();
+        } catch (InstantiationException e) {
+            e.printStackTrace();
+        } catch (IllegalAccessException e) {
+            e.printStackTrace();
+        } catch (InvocationTargetException e) {
+            e.printStackTrace();
+        }
+    }
+    //对外提供获取实例对象的接口
+    public static Object getBean(String id){
+        return map.get(id);
+    }
+}
+~~~
+
+将Servlet和Service中的new实例对象进行修改。
+
+~~~java
+在Servlet中进行修改
+//    private AccountService accountService = new AccountServiceImpl();
+    private AccountService accountService = (AccountService) BeanFactory.getBean("accountService");
+在Service中进行修改
+//    private AccountDao accountDao = new AccountDaoImpl();
+    private AccountDao accountDao;
+
+    public void setAccountDao(AccountDao accountDao) {
+        this.accountDao = accountDao;
+    }
+~~~
+
+## 4.3 案例修改-事务控制
+
+
+
+
 
 
 
