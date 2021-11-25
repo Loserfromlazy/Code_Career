@@ -1156,7 +1156,16 @@ Service部分代码
 问题分析：
 
 1. 代码耦合，在每一层都要实现下一层的实现类，比如，在service层使用dao层时，直接在impl中通过new获得了dao层对象，然而new关键字将ServiceImpl和DaoImpl耦合在一起，如果技术框架发生变动，譬如dao改成mybatis就需要修改源代码重新编译。
+
 2. service层代码没有事务控制。
+
+   缺少事务控制的原因是两次更新提交了两次事务不属于同一个事务，换句话说事务控制在dao层而不是service层，如果两次更新之间有异常就会造成，一次成功一次未成功。
+
+   ~~~java
+   accountDao.updateByCardNo(fromNo);
+   //int i = 1/0;
+   accountDao.updateByCardNo(toNo);
+   ~~~
 
 **问题解决思路**
 
@@ -1165,6 +1174,10 @@ Service部分代码
 关于代码耦合方面，我们可以使用工厂模式去解耦合。
 
 综上，可以使用工厂通过反射技术来生产对象，也就是说，**工厂类解析xml存的全限定类名，然后通过反射技术实例化对象。工厂类同时给外部提供获取对象的接口方法。**
+
+**事务问题解决思路**
+
+让两次update使用同一个connection连接，把事务控制在service层。
 
 ## 4.2 案例修改-解耦合
 
@@ -1269,19 +1282,190 @@ public class BeanFactory {
 
 ## 4.3 案例修改-事务控制
 
+在4.2代码的基础上进行修改
 
+增加工具类获取当前线程
 
+```java
+public class ConnectionUtil {
 
+    private ConnectionUtil(){}
+    //饿汉式单例
+    private static ConnectionUtil connectionUtil = new ConnectionUtil();
 
+    public static ConnectionUtil getInstance(){
+        return connectionUtil;
+    }
+    //使用ThreadLocal存储Connection
+    ThreadLocal<Connection> threadLocal = new ThreadLocal<>();
 
+    public Connection getCurrentThreadConn() throws SQLException {
+        Connection connection = threadLocal.get();
+        if (connection ==null){
+            connection = DruidUtils.getInstance().getConnection();
+            threadLocal.set(connection);
+        }
+        return connection;
+    }
+}
+```
 
+增加工具类事务管理
 
+```java
+public class TransactionManager {
 
+    private TransactionManager(){}
+    //饿汉式单例模式
+    private static TransactionManager transactionManager = new TransactionManager();
 
+    public static TransactionManager getInstance(){
+        return transactionManager;
+    }
 
+    public void begin() throws SQLException {
+        ConnectionUtil.getInstance().getCurrentThreadConn().setAutoCommit(false);
+    }
+    public void commit() throws SQLException {
+        ConnectionUtil.getInstance().getCurrentThreadConn().commit();
+    }
+    public void rollback() throws SQLException {
+        ConnectionUtil.getInstance().getCurrentThreadConn().rollback();
+    }
+}
+```
 
+对dao层代码修改
 
+注释掉原来的connection，转而从工具类中获取当前线程的Connection
 
+```java
+    @Override
+    public BankInfo findByCardNo(String cardNo) throws Exception {
+//        Connection connection = DruidUtils.getInstance().getConnection();
+        Connection currentThreadConn = ConnectionUtil.getInstance().getCurrentThreadConn();
+        String sql = "select * from bank_info where card_no=?";
+        PreparedStatement preparedStatement = currentThreadConn.prepareStatement(sql);
+        preparedStatement.setString(1,cardNo);
+        ResultSet resultSet = preparedStatement.executeQuery();
+        BankInfo account = new BankInfo();
+        while(resultSet.next()) {
+            account.setCardNo(resultSet.getString("card_no"));
+            account.setName(resultSet.getString("name"));
+            account.setMoney(resultSet.getInt("money"));
+        }
+        resultSet.close();
+        preparedStatement.close();
+        //connection.close();
+        return account;
+    }
+```
+
+对service层代码修改
+
+```java
+@Override
+public void transfer(String fromCardNo, String toCardNo, int money) throws Exception {
+    try {
+        TransactionManager.getInstance().begin();
+        BankInfo fromNo = accountDao.findByCardNo(fromCardNo);
+        BankInfo toNo = accountDao.findByCardNo(toCardNo);
+        System.out.println(fromNo.toString());
+        System.out.println(toNo.toString());
+        fromNo.setMoney(fromNo.getMoney() - money);
+        toNo.setMoney(toNo.getMoney() + money);
+        accountDao.updateByCardNo(fromNo);
+        int i = 1/0;
+        accountDao.updateByCardNo(toNo);
+        TransactionManager.getInstance().commit();
+    }catch (Exception e){
+        e.printStackTrace();
+        TransactionManager.getInstance().rollback();
+        //抛出异常便于上层controller层捕获异常
+        throw e;
+    }
+}
+```
+
+以上完成了事务控制的功能，但是每个业务代码都加上try-catch控制很麻烦很冗余，所以使用动态代理解决。
+
+下面通过[动态代理技术](https://www.cnblogs.com/yhr520/p/15601620.html)（链接为我的另一篇博客Java代理）以在不改变原有业务代码的逻辑上实现事务控制。
+
+首先增加代理工厂类
+
+```java
+public class ProxyFactory {
+
+    private ProxyFactory() {
+    }
+
+    //饿汉式单例
+    private static ProxyFactory proxyFactory = new ProxyFactory();
+
+    public ProxyFactory getInstance() {
+        return proxyFactory;
+    }
+
+    /**
+     * 获取JDK代理对象
+     *
+     * @author Yuhaoran
+     * @date 2021/11/25 11:15
+     */
+    public Object getJDKProxy(Object target) {
+        return Proxy.newProxyInstance(target.getClass().getClassLoader(), target.getClass().getInterfaces(), new InvocationHandler() {
+            @Override
+            public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                Object result;
+                try {
+                    TransactionManager.getInstance().begin();
+                    result = method.invoke(args);
+                    TransactionManager.getInstance().commit();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    TransactionManager.getInstance().rollback();
+                    //抛出异常便于上层controller层捕获异常
+                    throw e;
+                }
+                return result;
+            }
+        });
+    }
+
+    /**
+     * 获取Cglib代理对象
+     *
+     * @author Yuhaoran
+     * @date 2021/11/25 11:16
+     */
+    public Object getCglibProxy(Object target) {
+        return Enhancer.create(target.getClass(), (net.sf.cglib.proxy.InvocationHandler) (o, method, objects) -> {
+            Object result;
+            try {
+                TransactionManager.getInstance().begin();
+                result = method.invoke(objects);
+                TransactionManager.getInstance().commit();
+            } catch (Exception e) {
+                e.printStackTrace();
+                TransactionManager.getInstance().rollback();
+                //抛出异常便于上层controller层捕获异常
+                throw e;
+            }
+            return result;
+        });
+    }
+}
+```
+
+对Servlet中业务对象改造，使用代理对象，这样就可以实现增强事务控制，避免事务代码和业务代码混合。
+
+```java
+//private AccountService accountService = (AccountService) BeanFactory.getBean("accountService");
+//从工厂中获取代理对象，通过代理对象对事物进行控制
+private AccountService accountService = (AccountService) ProxyFactory.getInstance().getCglibProxy(BeanFactory.getBean("accountService"));
+```
+
+这样就完成了事务的增强控制，但是由于上面完成了IOC工厂，所以我们可以将这些工具类放入IOC工厂中，替我们创建对象。
 
 
 

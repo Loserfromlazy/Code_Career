@@ -4,7 +4,7 @@
 
 代理模式给某一个对象提供一个**代理对象**，并由代理对象控制对原对象的引用。同时代理对象可以调用被代理对象的方法，并对其进行增强。可以总结为**代理对象 = 增强代码 + 目标对象（原对象）**
 
-比如张三去买房子，大致的步骤是找房子，商量价钱，然后交钱办手续，但是张三每天要上班没有那么多时间和精力，所以他找了一个中介，代理他去办这件事，这个中介不仅做了上面的那些事，而且
+比如张三去买房子，大致的步骤是找房子，商量价钱，然后交钱办手续，但是张三每天要上班没有那么多时间和精力，所以他找了一个中介，代理他去办这件事，这个中介不仅做了上面的那些事，而且还会完成其他的事。
 
 # 二、Java静态代理
 
@@ -117,9 +117,9 @@ public class Test {
 
 由上图可见，创建一个对象最主要的是得到对应的Class对象。Class对象包含了一个类的所有信息，而代理类和被代理类（也就是接口实现类）实现类同一个接口，接口拥有代理对象和目标对象共同的类信息。所以，我们可以从接口那得到理应由代理类提供的信息。
 
-JDK提供了java.lang.reflect.InvocationHandler接口和 java.lang.reflect.Proxy类，这两个类相互配合，完成jdk的动态代理。
+JDK提供了`java.lang.reflect.InvocationHandler`接口和` java.lang.reflect.Proxy`类，这两个类相互配合，完成jdk的动态代理。
 
-Proxy有个静态方法：getProxyClass(ClassLoader, interfaces)，只要你给它传入类加载器和一组接口，它就给你返回代理Class对象。根据代理Class的构造器创建对象时，需要传入InvocationHandler。每次调用代理对象的方法，最终都会调用InvocationHandler的invoke()方法。
+Proxy有个静态方法：`getProxyClass(ClassLoader, interfaces)`，只要你给它传入类加载器和一组接口，它就给你返回代理Class对象。根据代理Class的构造器创建对象时，需要传入`InvocationHandler`。每次调用代理对象的方法，最终都会调用`InvocationHandler`的`invoke()`方法。
 
 
 
@@ -328,6 +328,8 @@ Enhancer.create(Class[] argumentTypes, Object[] arguments);
 ### 4.1.2 Callback
 
 Callback是一个空的接口，在Cglib中它的实现类有以下几种：
+
+最常用的就是第一种
 
 1. `MethodInterceptor`
 2. `NoOp`
