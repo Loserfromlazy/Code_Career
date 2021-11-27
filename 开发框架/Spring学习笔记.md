@@ -388,11 +388,42 @@ id属性：对象的唯一标识。
 class属性：指定要创建对象的全限定类名
 -->
 <!-- 配置service -->
-<bean id="accountService" class="com.itheima.service.impl.AccountServiceImpl">
+<bean id="accountService" class="com.learn.service.impl.AccountServiceImpl">
 </bean>
 <!-- 配置dao -->
-<bean id="accountDao" class="com.itheima.dao.impl.AccountDaoImpl"></bean>
+<bean id="accountDao" class="com.learn.dao.impl.AccountDaoImpl"></bean>
+
+
+
+
+ <!--Spring ioc 实例化Bean的三种方式-->
+    <!--方式一：使用无参构造器（推荐）-->
+    <bean id="connectionUtils" class="com.learn.utils.ConnectionUtils"></bean>
+
+    <!--另外两种方式是为了我们自己new的对象加入到SpringIOC容器管理-->
+    <!--方式二：静态方法-->
+    <!--<bean id="connectionUtils" class="com.learn.factory.CreateBeanFactory" factory-method="getInstanceStatic"/>-->
+    <!--方式三：实例化方法-->
+    <!--<bean id="createBeanFactory" class="com.learn.factory.CreateBeanFactory"></bean>
+    <bean id="connectionUtils" factory-bean="createBeanFactory" factory-method="getInstance"/>-->
 ~~~
+
+方式一、二和三对应的java方法：
+
+```java
+public class CreateBeanFactory {
+    //方式一可以将下面两个构造方法去掉，使用默认无参构造器
+    
+    //方式二
+    public static ConnectionUtil getInstanceStatic() {
+        return new ConnectionUtil();
+    }
+    //方式三
+    public ConnectionUtil getInstance() {
+        return new ConnectionUtil();
+    }
+}
+```
 
 ### 2.5.2基于xml的IOC
 
@@ -1632,15 +1663,95 @@ private AccountService accountService = (AccountService) ProxyFactory.getInstanc
 
 使用Spring替代我们本身的案例，从中深入体会Spring的用法
 
+首先引入Spring和SpringWeb（注意不是SpringMVC）的依赖：
 
+```xml
+<!--        Spring-->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>5.2.12.RELEASE</version>
+        </dependency>
+<!--        Spring Web-->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+            <version>5.2.12.RELEASE</version>
+        </dependency>
+    </dependencies>
+```
+
+去除原有beans.xml,使用applicationContext.xml代替，其实两者无区别只是我们惯用applicationContext这个名字罢了。
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+http://www.springframework.org/schema/beans/spring-beans.xsd">
+    <bean id="accountDao" class="com.learn.dao.Impl.AccountDaoImpl">
+        <property name="ConnectionUtil" ref="connectionUtil"> </property>
+    </bean>
+    <bean id="accountService" class="com.learn.service.Impl.AccountServiceImpl">
+        <property name="AccountDao" ref="accountDao"> </property>
+    </bean>
+    <!--    连接工具类-->
+    <bean id="connectionUtil" class="com.learn.util.ConnectionUtil"></bean>
+    <!--    事务管理器-->
+    <bean id="transactionManager" class="com.learn.util.TransactionManager">
+        <property name="ConnectionUtil" ref="connectionUtil"> </property>
+    </bean>
+    <!--    代理对象工厂-->
+    <bean id="proxyFactory" class="com.learn.factory.ProxyFactory">
+        <property name="TransactionManager" ref="transactionManager"> </property>
+    </bean>
+</beans>
+```
+
+去除我们自定义的BeanFactory，并在Servlet中配置上Spring的Bean工厂，由于我们是Web应用，所以使用WebApplicationContext，代码如下
+
+```java
+//从工厂中获取代理对象，通过代理对象对事物进行控制
+private AccountService accountService = null;
+
+@Override
+public void init() throws ServletException {
+    WebApplicationContext webApplicationContext = WebApplicationContextUtils.getWebApplicationContext(this.getServletContext());
+    ProxyFactory proxyFactory = (ProxyFactory)webApplicationContext.getBean("proxyFactory");
+    accountService = (AccountService) proxyFactory.getJDKProxy(webApplicationContext.getBean("accountService"));
+}
+```
+
+最后在web.xml中配置启动器类即可
+
+```xml
+<display-name>Archetype Created Web Application</display-name>
+<!--配置Spring ioc容器的配置⽂件-->
+<context-param>
+    <param-name>contextConfigLocation</param-name>
+    <param-value>classpath:applicationContext.xml</param-value>
+</context-param>
+<!--使⽤监听器启动Spring的IOC容器-->
+<listener>
+    <listener-class>org.springframework.web.context.ContextLoaderListener</listener-class>
+</listener>
+```
+
+以上我们就算是使用Spring纯XML方式替代掉了我们自己手写的IOC代码
+
+4.4代码地址     [GitHub](https://github.com/Loserfromlazy/MY_IOC_AOP/blob/main/TestBankWithXML.rar)          [Gitee](https://gitee.com/yhr520/MY_IOC_AOP/blob/main/TestBankWithXML.rar)
 
 ## 4.5 使用Spring的XML+注解方式改造案例
+
+当然实际上最常用的还是XML+注解方式，所以我们以这种方式将4.4代码继续改造。
+
+使用这种方式的Spring工程，一般我们将三方jar包配置在xml中（如Durid数据连接池），将自己开发的bean（如Service层代码）使用注解。
 
 
 
 ## 4.6 使用Spring的纯注解模式改造案例
 
-
+使用纯注解方式得启动类，不在是xml，而是一个Config配置类。
 
 
 
