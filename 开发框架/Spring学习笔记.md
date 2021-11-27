@@ -143,11 +143,100 @@ Spring IoC容器使用一种形式的配置元数据如下图所示。此配置�
 
 Spring中主要采用三种方式配置元数据：
 
-> 基于xml的方式
+> 基于xml的方式：
 >
-> 基于注释的方式：从Spring2.5后可以基于注解配置
+> - JavaSE应用 
+>
+>   ~~~java
+>   ApplicationContext applicationContext = new ClassPathXmlApplicationContext("beans.xml");
+>   或者
+>   ApplicationContext applicationContext = new FileSystemXmlApplicationContext("C:/beans.xml");
+>   ~~~
+>
+> - JavaWeb应用
+>
+>   ~~~xml
+>   <!DOCTYPE web-app PUBLIC
+>   "-//Sun Microsystems, Inc.//DTD Web Application 2.3//EN"
+>   "http://java.sun.com/dtd/web-app_2_3.dtd" >
+>   <web-app>
+>    <display-name>Archetype Created Web Application</display-name>
+>    <!--配置Spring ioc容器的配置⽂件-->
+>    <context-param>
+>    <param-name>contextConfigLocation</param-name>
+>    <param-value>classpath:applicationContext.xml</param-value>
+>    </context-param>
+>    <!--使⽤监听器启动Spring的IOC容器-->
+>    <listener>
+>    <listener-class>org.springframework.web.context.ContextLoaderListener</listener-class>
+>    </listener>
+>   </web-app>
+>   ~~~
+>
+> 基于注解的方式：从Spring2.5后可以基于注解配置。
+>
+> 在此时有了XML+注解方式实现IOC，此时启动方式与xml方式相同：
+>
+> - JavaSE应用 
+>
+>   ~~~java
+>   ApplicationContext applicationContext = new ClassPathXmlApplicationContext("beans.xml");
+>   或者
+>   ApplicationContext applicationContext = new FileSystemXmlApplicationContext("C:/beans.xml");
+>   ~~~
+>
+> - JavaWeb应用
+>
+>   ~~~xml
+>   <!DOCTYPE web-app PUBLIC
+>   "-//Sun Microsystems, Inc.//DTD Web Application 2.3//EN"
+>   "http://java.sun.com/dtd/web-app_2_3.dtd" >
+>   <web-app>
+>    <display-name>Archetype Created Web Application</display-name>
+>    <!--配置Spring ioc容器的配置⽂件-->
+>    <context-param>
+>    <param-name>contextConfigLocation</param-name>
+>    <param-value>classpath:applicationContext.xml</param-value>
+>    </context-param>
+>    <!--使⽤监听器启动Spring的IOC容器-->
+>    <listener>
+>    <listener-class>org.springframework.web.context.ContextLoaderListener</listener-class>
+>    </listener>
+>   </web-app>
+>   ~~~
 >
 > 基于Java的配置：从Spring3.0开始，Spring JavaConfig项目提供的许多功能成为了Spring核心框架的一部分。因此，您可以使用Java而不是XML文件来定义应用程序类外部的bean。
+>
+> - JavaSE
+>
+>   ~~~java
+>   ApplicationContext applicationContext = new AnnotationConfigApplicationContext(SpringConfig.class);
+>   ~~~
+>
+> - JavaWeb
+>
+>   ~~~xml
+>   <!DOCTYPE web-app PUBLIC "-//Sun Microsystems, Inc.//DTD Web Application 2.3//EN"
+>   "http://java.sun.com/dtd/web-app_2_3.dtd" >
+>   <web-app>
+>    <display-name>Archetype Created Web Application</display-name>
+>    <!--告诉ContextloaderListener知道我们使⽤注解的⽅式启动ioc容器-->
+>    <context-param>
+>    <param-name>contextClass</param-name>
+>    <param-value>org.springframework.web.context.support.AnnotationConfigWebAppli
+>   cationContext</param-value>
+>    </context-param>
+>     <!--配置启动类的全限定类名-->
+>    <context-param>
+>    <param-name>contextConfigLocation</param-name>
+>    <param-value>com.learn.SpringConfig</param-value>
+>    </context-param>
+>    <!--使⽤监听器启动Spring的IOC容器-->
+>    <listener>
+>    <listener-class>org.springframework.web.context.ContextLoaderListener</listener-class>
+>    </listener>
+>   </web-app>
+>   ~~~
 
 Spring配置由容器必须管理的至少一个（通常是一个以上）bean定义组成。基于XML的配置元数据将这些bean配置`<bean/>`放在`<beans/>`元素内。Java配置通常为`@Bean`在`@Configuration`类中使用带注释的方法。
 
@@ -270,9 +359,9 @@ factory-method="createAccountService"></bean>
 
 
 
-## 2.4 基于XML的IOC配置
+## 2.5 基于XML的IOC配置
 
-### 2.4.1 IOC入门
+### 2.5.1 IOC入门
 
 此入门是解决账户的业务层和持久层的依赖关系。
 
@@ -305,11 +394,11 @@ class属性：指定要创建对象的全限定类名
 <bean id="accountDao" class="com.itheima.dao.impl.AccountDaoImpl"></bean>
 ~~~
 
-### 2.4.2基于xml的IOC
+### 2.5.2基于xml的IOC
 
 #### spring中的工厂的类结构图
 
-![img](http://img2018.cnblogs.com/i-beta/1598493/202002/1598493-20200215151523468-1242212011.png)
+![img](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/1598493-20200215151523468-1242212011.png)
 
 BeanFactory才是Spring容器中的顶层接口。ApplicationContext是它的子接口。
 BeanFactory和ApplicationContext的区别：
@@ -365,13 +454,13 @@ destroy-method：指定类中销毁方法名称。
 > 对象活着：只要对象在使用中，就一直活着。
 > 对象死亡：当对象长时间不用时，被java的垃圾回收器回收了。
 
-## 2.5 依赖注入
+## 2.6 依赖注入
 
 依赖注入：Dependency Injection。它是spring框架核心ioc的具体实现。IOC和DI描述的是同⼀件事情，只不过⻆度不⼀样罢了。
 我们的程序在编写时，通过控制反转，把对象的创建交给了spring，但是代码中不可能出现没有依赖的情况。
 ioc解耦只是降低他们的依赖关系，但不会消除。例如：我们的业务层仍会调用持久层的方法。那这种业务层和持久层的依赖关系，在使用spring之后，就让spring来维护了。简单的说，就是坐等框架把持久层对象传入业务层，而不用我们自己去获取。
 
-#### 2.5.1 构造函数注入
+#### 2.6.1 构造函数注入
 
 eg：
 
@@ -414,7 +503,7 @@ ref:它能赋的值是其他bean类型，也就是说，必须得是在配置文
 <bean id="now" class="java.util.Date"></bean>
 ~~~
 
-#### 2.5.2 set方法注入
+#### 2.6.2 set方法注入
 
 ~~~java
 public class AccountServiceImpl implements IAccountService {
@@ -554,11 +643,11 @@ map,entry,props,prop
 </bean>
 ~~~
 
-## 2.6 基于注解的IOC配置
+## 2.7 基于注解的IOC配置
 
 注解配置和xml 配置要实现的功能都是一样的，都是要降低程序间的耦合。只是配置的形式不一样。
 
-### 2.6.1常用注释
+### 2.7.1常用注释
 
 用于创建对象相当于< bean id="" class="">
 
@@ -585,6 +674,13 @@ value：指定bean的id。如果不指定value属性，默认bean的id是当前�
 作用：
 自动按照类型注入。当使用注解注入属性时，set方法可以省略。它只能注入其他bean类型。当有多个类型匹配时，使用要注入的对象变量名称作为bean的id，在spring容器查找，找到了也可以注入成功。找不到就报错。
 
+~~~java
+//在这里@Autowired按照AccountDao类型进行注入，如果有多个AccountDao类型的bean那么则使用@Qualifier注解表明AccountDao类型的bean的id
+@Autowired
+//@Qualifier("accountDao1")
+private AccountDao accountDao;
+~~~
+
 **@Qualifier**
 
 作用：
@@ -599,6 +695,16 @@ value：指定bean的id。
 属性：
 name：指定bean的id。
 
+> 在JDK11中删除了，如果想使用需要添加依赖
+>
+> ~~~xml
+> <dependency>
+>  <groupId>javax.annotation</groupId>
+>  <artifactId>javax.annotation-api</artifactId>
+>  <version>1.3.2</version>
+> </dependency>
+> ~~~
+
 **@Value**
 
 作用：
@@ -606,9 +712,9 @@ name：指定bean的id。
 属性：
 value：用于指定值
 
-用于改变作用范围的 相当于：< bean id="" class="" scope="">
-
 **@Scope**
+
+用于改变作用范围的 相当于：< bean id="" class="" scope="">
 
 作用：
 指定bean的作用范围。
@@ -616,14 +722,67 @@ value：用于指定值
 value：指定范围的值。
 取值：singleton prototype request session globalsession
 
-和生命周期相关的 相当于：< bean id="" class="" init-method="" destroy-method="" />
+
 
  **@PostConstruct**
+
+和生命周期相关的 相当于：< bean id="" class="" init-method="" destroy-method="" />
+
 作用：
 用于指定初始化方法。
+
  **@PreDestroy**
+
+和生命周期相关的 相当于：< bean id="" class="" init-method="" destroy-method="" />
+
 作用：
 用于指定销毁方法。
+
+**@Configuration**
+
+从Spring3.0，@Configuration用于定义配置类，可替换xml配置文件，被注解的类内部包含有一个或多个被@Bean注解的方法，这些方法将会被AnnotationConfigApplicationContext或AnnotationConfigWebApplicationContext类进行扫描，并用于构建bean定义，初始化Spring容器。
+
+**注意**：@Configuration注解的配置类有如下要求：
+
+1. @Configuration不可以是final类型；
+2. @Configuration不可以是匿名类；
+3. 嵌套的configuration必须是静态类。
+
+**@Bean**
+
+@Bean是一个方法级别上的注解，主要用在@Configuration注解的类里，也可以用在@Component注解的类里。添加的bean的id为方法名
+
+eg:
+
+下面是@Configuration里的一个例子,配置Durid数据源
+
+```java
+@Configuration
+public class AppConfig {
+    @Bean
+    public DataSource createDataSource() {
+        DruidDataSource druidDataSource = new DruidDataSource();
+        druidDataSource.setDriverClassName("xxx");
+        druidDataSource.setUrl("xxx");
+        druidDataSource.setUserName("xxx");
+        druidDataSource.setPassWord("xxx");
+        return druidDataSource;
+    }
+}
+```
+
+这个配置就等同于之前在xml里的配置
+
+```xml
+<beans>
+    <bean id="dataSource" class="com.alibaba.druid.pool.DruidDataSource">
+        <property name="driverClassName" value="${db.driverClassName}"></property>
+        <property name="url" value="${db.url}"></property>
+        <property name="username" value="${db.username}"></property>
+        <property name="password" value="${db.password}"></property>
+    </bean>
+</beans>
+```
 
 # 三 、AOP
 
@@ -1467,11 +1626,19 @@ private AccountService accountService = (AccountService) ProxyFactory.getInstanc
 
 这样就完成了事务的增强控制，但是由于上面完成了IOC工厂，所以我们可以将这些工具类放入IOC工厂中，替我们创建对象。
 
-最终案例地址，[My_IOC_AOP](https://github.com/Loserfromlazy/MY_IOC_AOP)
+最终案例地址，[My_IOC_AOP](https://github.com/Loserfromlazy/MY_IOC_AOP/blob/main/TestBank_IOC_AOP.rar)         [Gitee地址](https://gitee.com/yhr520/MY_IOC_AOP/blob/main/TestBank_IOC_AOP.rar)
+
+## 4.4 使用Spring纯XML模式改造案例
+
+使用Spring替代我们本身的案例，从中深入体会Spring的用法
 
 
 
+## 4.5 使用Spring的XML+注解方式改造案例
 
+
+
+## 4.6 使用Spring的纯注解模式改造案例
 
 
 
