@@ -114,9 +114,7 @@ Spring Cloud Alibaba是阿里巴巴公司基于Spring Cloud标准实现一套微
 
 ### 3.1 微服务场景模拟
 
-
-
-
+见4.2案例
 
 ## 四、服务发现Nacos
 
