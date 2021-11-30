@@ -1747,11 +1747,250 @@ public void init() throws ServletException {
 
 使用这种方式的Spring工程，一般我们将三方jar包配置在xml中（如Durid数据连接池），将自己开发的bean（如Service层代码）使用注解。
 
+首先我们可以将xml中只配置三方jar包，删除其余的内容，然后配置包扫描，因为我们要使用注解
 
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:aop="http://www.springframework.org/schema/aop"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+http://www.springframework.org/schema/beans/spring-beans.xsd
+       http://www.springframework.org/schema/context
+        https://www.springframework.org/schema/context/spring-context.xsd
+        http://www.springframework.org/schema/aop
+        https://www.springframework.org/schema/aop/spring-aop.xsd">
+    <context:component-scan base-package="com.learn"> </context:component-scan>
+    <context:property-placeholder location="classpath:jdbc.properties"/>
+    <!--第三方jar中的bean定义在xml中-->
+    <bean id="dataSource" class="com.alibaba.druid.pool.DruidDataSource">
+        <property name="driverClassName" value="${jdbc.driver}"/>
+        <property name="url" value="${jdbc.url}"/>
+        <property name="username" value="${jdbc.username}"/>
+        <property name="password" value="${jdbc.password}"/>
+    </bean>
+</beans>
+```
+
+然后我们将之前的删掉的自己的类用注解表示，并用@Autowire维护依赖关系，以AccountDaoImpl为例：
+
+![image-20211129141332798](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211129141332798.png)
+
+所有的类以此维护即可，但注意ServiceImpl需要标注ID，因为我们需要代理类帮我们处理事务。
+
+![image-20211129141516739](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211129141516739.png)
+
+BankServlet#init()：
+
+```java
+@Override
+public void init() throws ServletException {
+    WebApplicationContext webApplicationContext = WebApplicationContextUtils.getWebApplicationContext(this.getServletContext());
+    ProxyFactory proxyFactory = (ProxyFactory)webApplicationContext.getBean("proxyFactory");
+    accountService = (AccountService) proxyFactory.getJDKProxy(webApplicationContext.getBean("accountService"));
+}
+```
+
+项目代码4.5 ： [GitHub](https://github.com/Loserfromlazy/MY_IOC_AOP/blob/main/TestBankWitnXMLANNO.rar)          [Gitee](https://gitee.com/yhr520/MY_IOC_AOP/blob/main/TestBankWitnXMLANNO.rar)
 
 ## 4.6 使用Spring的纯注解模式改造案例
 
-使用纯注解方式得启动类，不在是xml，而是一个Config配置类。
+使用纯注解方式得启动类，不在是xml，而是一个Config配置类。主要修改是将启动xml修改到启动类中：
+
+![image-20211130101331228](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211130101331228.png)
+
+同时在web.xml中配置为启动java类
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="http://xmlns.jcp.org/xml/ns/javaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://xmlns.jcp.org/xml/ns/javaee http://xmlns.jcp.org/xml/ns/javaee/web-app_4_0.xsd"
+         version="4.0">
+    <display-name>Archetype Created Web Application</display-name>
+    <!--告诉ContextloaderListener知道我们使用注解的方式启动ioc容器-->
+    <context-param>
+        <param-name>contextClass</param-name>
+        <param-value>org.springframework.web.context.support.AnnotationConfigWebApplicationContext</param-value>
+    </context-param>
+    <!--配置Spring ioc容器的配置⽂件-->
+    <context-param>
+        <param-name>contextConfigLocation</param-name>
+        <param-value>com.learn.SpringConfig</param-value>
+    </context-param>
+    <!--使⽤监听器启动Spring的IOC容器-->
+    <listener>
+        <listener-class>org.springframework.web.context.ContextLoaderListener</listener-class>
+    </listener>
+</web-app>
+```
+
+4.6代码：   [Github](https://github.com/Loserfromlazy/MY_IOC_AOP/blob/main/TestBankWithAnno.rar)       [Gitee](https://gitee.com/yhr520/MY_IOC_AOP/blob/main/TestBankWithAnno.rar)
+
+# 五、Spring声明式事务
+
+**编程式事务：**在业务代码中添加事务控制代码，这样的事务控制机制就叫做编程式事务
+
+**声明式事务：**通过xml或者注解配置的⽅式达到事务控制的⽬的，叫做声明式事务
+
+## 5.1 事务
+
+事务指逻辑上的⼀组操作，组成这组操作的各个单元，要么全部成功，要么全部不成功。从⽽确保了数据的准确与安全。
+
+例如A向B转账，那么需要更新A的钱减少，然后更新B的钱增加，这两条语句，要么一起成功，要么一起失败。
+
+### 5.1.1 特性
+
+事务有四大特性：
+
+**原⼦性（Atomicity）**
+
+原⼦性是指事务是⼀个不可分割的⼯作单位，事务中的操作要么都发⽣，要么都不发⽣。从操作的⻆度来描述，事务中的各个操作要么都成功要么都失败。
+
+**⼀致性（Consistency）** 
+
+事务必须使数据库从⼀个⼀致性状态变换到另外⼀个⼀致性状态。例如转账前A有1000，B有1000。转账后A+B也得是2000。⼀致性是从数据的⻆度来说的，（1000，1000） （900，1100），不应该出现（900，1000）。
+
+**隔离性（Isolation）**
+
+事务的隔离性是多个⽤户并发访问数据库时，数据库为每⼀个⽤户开启的事务，每个事务不能被其他事务的操作数据所⼲扰，多个并发事务之间要相互隔离。⽐如：事务1给员⼯涨⼯资2000，但是事务1尚未被提交，员⼯发起事务2查询⼯资，发现⼯资涨了2000块钱，读到了事务1尚未提交的数据（脏读）。
+
+**持久性（Durability）**
+
+持久性是指⼀个事务⼀旦被提交，它对数据库中数据的改变就是永久性的，接下来即使数据库发⽣故障也不应该对其有任何影响。
+
+### 5.1.2 事务隔离级别
+
+如果不考虑隔离性引发的安全性问题
+
+**读问题：**
+
+脏读：一个事务读到另一个事务未提交的数据
+
+不可重复读：一个事务读到另一个事务已经提交的update的数据，导致一个事务中多次查询结果不一致。
+
+虚读、幻读：一个事务读到另一个事务已经提交的insert数据，导致一个事务中多次查询结果不一致。
+
+**写问题：**丢失更新
+
+**设置事务的隔离级别：**
+
+Read uncommitted：未提交读，任何读问题都解决不了
+
+Read committed：已读提交，解决脏读，但是不可重复读和虚读有可能发生（Oracle）
+
+Repeatable read：重复读，解决脏读和不可重复读，但是虚读有可能发生（Mysql）
+
+Serializable：解决所有读问题
+
+MySQL的默认隔离级别是：REPEATABLE READ
+
+查询当前使⽤的隔离级别： select @@tx_isolation;
+
+设置MySQL事务的隔离级别： set session transaction isolation level xxx; （设置的是当前mysql连接会话的，并不是永久改变的）
+
+### 5.1.3 事务的传播行为
+
+**Spring中传播行为用途：**
+
+```
+保证多个操作在同一个事务中
+PROPAGATION_REQUIRED :默认值，如果A中有事务，使用A中的事务，如果A没有，创建事务将操作包含起来
+
+PRQPAGATION_SUPPORTS：支持事务，如果A中有事务，使用A中的事务，如果A没有事务，不使用事务
+
+PROPAGATION_MANDATORY：如果A中有事务，使用A中的事务，如果A没有事务，抛出异常
+```
+
+```
+保证多个操作不在同一个事务中：
+PROPAGATION_REQUIRES_NEW：如果A中有事务，将A中事务挂起（暂停），创建新事务，只包含自身操作。如果A中没有事务，创建新事务，包含自身操作
+
+PROPAGATION_NOT_SUPPORTED：如果A中有事务，将A的事务挂起，不使用事务管理
+
+PROPAGATION_NEVER：如果A中有事务，抛出异常
+```
+
+```
+嵌套式事务
+PROPAGATION_NESTED：嵌套事务，若果A中有事务，按照A的执行，执行完成后，设置A的保存点，执行B的操作，若果没有异常，执行通过，若果有异常，可以选择回滚到最初始位置，也可以回滚到保存点。
+```
+
+## 5.2 Spring中声明式事务配置
+
+### 5.2.1 纯XML
+
+~~~xml
+<dependency>
+     <groupId>org.springframework</groupId>
+     <artifactId>spring-context</artifactId>
+     <version>5.1.12.RELEASE</version>
+</dependency>
+<dependency>
+     <groupId>org.aspectj</groupId>
+     <artifactId>aspectjweaver</artifactId>
+     <version>1.9.4</version>
+</dependency>
+<dependency>
+     <groupId>org.springframework</groupId>
+     <artifactId>spring-jdbc</artifactId>
+     <version>5.1.12.RELEASE</version>
+</dependency>
+<dependency>
+     <groupId>org.springframework</groupId>
+     <artifactId>spring-tx</artifactId>
+     <version>5.1.12.RELEASE</version>
+</dependency>
+~~~
+
+~~~xml
+<tx:advice id="txAdvice" transaction-manager="transactionManager">
+     <!--定制事务细节，传播⾏为、隔离级别等-->
+     <tx:attributes>
+         <!--⼀般性配置-->
+         <tx:method name="*" read-only="false"
+        propagation="REQUIRED" isolation="DEFAULT" timeout="-1"/>
+         <!--针对查询的覆盖性配置-->
+         <tx:method name="query*" read-only="true"
+        propagation="SUPPORTS"/>
+     </tx:attributes>
+ </tx:advice>
+ <aop:config>
+     <!--advice-ref指向增强=横切逻辑+⽅位-->
+     <aop:advisor advice-ref="txAdvice" pointcut="execution(*
+    com.lagou.edu.service.impl.TransferServiceImpl.*(..))"/>
+ </aop:config>
+~~~
+
+
+
+### 5.2.2 XML+注解
+
+~~~xml
+<!--配置事务管理器-->
+<bean id="transactionManager"
+class="org.springframework.jdbc.datasource.DataSourceTransactionManage
+r">
+     <property name="dataSource" ref="dataSource"></property>
+</bean>
+<!--开启spring对注解事务的⽀持-->
+<tx:annotation-driven transaction-manager="transactionManager"/>
+~~~
+
+然后在类或方法上添加@Transactional注解
+
+### 5.2.3 纯注解
+
+在 Spring 的配置类上添加 @EnableTransactionManagement 注解即可
+
+
+
+
+
+
+
+
 
 
 
