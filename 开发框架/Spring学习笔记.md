@@ -79,16 +79,17 @@ Expert One-to-One J2EE Development without EJB(2004)
 > 业务层调用持久层，并且此时业务层在依赖持久层的接口和实现类。如果此时没有持久层实现类，编译
 > 将不能通过。这种编译期依赖关系，应该在我们开发中杜绝。我们需要优化代码解决。再假如
 >
+> ~~~java
 > public static void main(String[] args) throws Exception {
-> 1.注册驱动
-> //DriverManager.registerDriver(new com.mysql.jdbc.Driver());
-> Class.forName("com.mysql.jdbc.Driver");
-> 2.获取连接
-> 3.获取预处理sql语句对象
-> 4.获取结果集
-> 5.遍历结果集
+>     //1.注册驱动
+>     //DriverManager.registerDriver(new com.mysql.jdbc.Driver());
+>     Class.forName("com.mysql.jdbc.Driver");
+>     //2.获取连接
+>     //3.获取预处理sql语句对象
+>     //4.获取结果集
+>     //5.遍历结果集
 > }
-> }
+> ~~~
 >
 > 我们的类依赖了数据库的具体驱动类（MySQL），如果这时候更换了数据库品牌（比如Oracle），需要
 > 修改源码来重新数据库驱动。这显然不是我们想要的。
@@ -814,6 +815,26 @@ public class AppConfig {
     </bean>
 </beans>
 ```
+
+## 2.8 IOC的lazy-Init懒加载
+
+ApplicationContext容器默认是在启动服务时将所有的singleton bean提前实例化，但如果设置为懒加载，那么这个bean只有在用到的时候才会实例化。
+
+但是一个bean设置成多例，那么即使设置了lazy-init="false",容器启动也不会实例化bean，⽽是调⽤ getBean ⽅法实例化的。
+
+设置方式
+
+~~~java
+<bean id="testBean" calss="com.learn.LazyBean" lazy-init="true" />
+~~~
+
+
+
+## 2.9 FactoryBean和BeanFactory
+
+BeanFactory接⼝是容器的顶级接⼝，定义了容器的⼀些基础⾏为，负责⽣产和管理Bean的⼀个⼯⼚，具体使⽤它下⾯的⼦接⼝类型，⽐如ApplicationContext。
+
+
 
 # 三 、AOP
 
