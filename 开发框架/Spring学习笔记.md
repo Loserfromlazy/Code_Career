@@ -818,9 +818,7 @@ public class AppConfig {
 
 ## 2.8 IOC的lazy-Init懒加载
 
-ApplicationContext容器默认是在启动服务时将所有的singleton bean提前实例化，但如果设置为懒加载，那么这个bean只有在用到的时候才会实例化。
-
-但是一个bean设置成多例，那么即使设置了lazy-init="false",容器启动也不会实例化bean，⽽是调⽤ getBean ⽅法实例化的。
+ApplicationContext容器默认是在启动服务时将所有的singleton bean提前实例化，但如果设置为懒加载，那么这个bean只有在用到的时候才会实例化。但是一个bean设置成多例，那么即使设置了lazy-init="false",容器启动也不会实例化bean，⽽是调⽤ getBean ⽅法实例化的。
 
 设置方式
 
@@ -834,7 +832,101 @@ ApplicationContext容器默认是在启动服务时将所有的singleton bean提
 
 BeanFactory接⼝是容器的顶级接⼝，定义了容器的⼀些基础⾏为，负责⽣产和管理Bean的⼀个⼯⼚，具体使⽤它下⾯的⼦接⼝类型，⽐如ApplicationContext。
 
+而FactoryBean是一种工厂类，Spring中的Bean有两种：一种是普通Bean，一种是工厂Bean就是FactoryBean，他可以生成某一个类的实例，也就是说我们可以借助它自定义Bean的创建过程。
 
+Bean创建的三种⽅式中的静态⽅法和实例化⽅法和FactoryBean作⽤类似，FactoryBean使⽤较多，尤其在Spring框架⼀些组件中会使⽤，还有其他框架和Spring框架整合时使⽤。
+
+我们可以通过一个例子了解FactoryBean：
+
+首先创建一个实体类：
+
+```java
+public class Person {
+    private String name;
+    private Integer age;
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public Integer getAge() {
+        return age;
+    }
+
+    public void setAge(Integer age) {
+        this.age = age;
+    }
+
+    @Override
+    public String toString() {
+        return "Person{" +
+                "name='" + name + '\'' +
+                ", age=" + age +
+                '}';
+    }
+}
+```
+
+然后创建一个FactoryBean
+
+```java
+@Component("factoryBean")
+public class PersonFactoryBean implements FactoryBean<Person> {
+
+    @Value("123,12")
+    private String persionInfo;
+
+    public void setPersionInfo(String persionInfo) {
+        this.persionInfo = persionInfo;
+    }
+
+    @Override
+    public Person getObject() throws Exception {
+        String[] split = this.persionInfo.split(",");
+        //模拟创建复杂对象Person
+        Person person = new Person();
+        person.setName(split[0]);
+        person.setAge(Integer.valueOf(split[1]));
+
+        return person;
+    }
+
+    @Override
+    public Class<?> getObjectType() {
+        return Person.class;
+    }
+}
+```
+
+然后编写测试方法，查看结果：
+
+```java
+@Test
+public void testIOC() {
+    ApplicationContext applicationContext = new AnnotationConfigApplicationContext(SpringConfig.class);
+    Object factoryBean = applicationContext.getBean("factoryBean");
+    System.out.println("bean:"+factoryBean);
+}
+```
+
+结果：bean:Person{name='123', age=12}
+
+可见，FactoryBean可以直接获取我们需要的bean，而不是获取Factory本身。如果我们获取FactoryBean，需要在id之前添加“&。
+
+```java
+@Test
+public void testIOC() {
+    ApplicationContext applicationContext = new AnnotationConfigApplicationContext(SpringConfig.class);
+    Object factoryBean = applicationContext.getBean("&factoryBean");
+    System.out.println("bean:"+factoryBean);
+}
+```
+
+结果：bean:com.learn.pojo.PersonFactoryBean@687e99d8
 
 # 三 、AOP
 
