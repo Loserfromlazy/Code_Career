@@ -272,6 +272,394 @@ public class TestPool {
 //        httpGet.setConfig(requestConfig);
 ~~~
 
+## 2.4 案例HttpClient分段下载
+
+需求：需要下载一些库里的文件，文件以url形式存储，然后通过httpclient将其下载出来使用，但由于服务器很慢，导致一个300M左右的文件需要下载一个小时左右，非常慢，所以采用多线程分段下载对原有httpclient单线程下载进行修改。
+
+原有httpclient单线程下载代码
+
+~~~java
+//查询数据库的数据，获取文件地址
+List<TbData> tbData = tbDataMapper.selectList(null);
+//创建网络请求
+CloseableHttpClient httpClient = HttpClients.createDefault();
+//创建计数器
+AtomicInteger integer = new AtomicInteger(1);
+//批量处理
+tbData.forEach(data -> {
+    //判断文件路径是否为空
+    if (StringUtils.isBlank(data.getFileUrl())) {
+        System.out.println("路径为空");
+    }
+    //构建所需的对象
+    HttpGet httpGet = new HttpGet(data.getFileUrl());
+    CloseableHttpResponse response = null;
+    InputStream content = null;
+    FileOutputStream fileOutputStream = null;
+    try {
+        //执行请求进行下载
+        System.out.println("正在下载" + data.getName());
+        response = httpClient.execute(httpGet);
+        //判断响应码为200,即下载成功
+        if (response.getStatusLine().getStatusCode() == 200) {
+            //将文件保存到本地
+            HttpEntity entity = response.getEntity();
+            content = entity.getContent();
+            File file = new File("D:\\test");
+            fileOutputStream = new FileOutputStream(file + "\\" + data.getName() + "_vid" + data.getId() + ".apk");
+            byte[] bytes = new byte[1024];
+            while (true) {
+                int read = content.read(bytes);
+                if (read == -1) {
+                    break;
+                }
+                fileOutputStream.write(bytes, 0, read);
+            }
+            System.out.println("第" + integer + "个文件下载完成");
+        } else {
+            System.out.println("第" + integer + "个文件获取连接失败,文件名" + adatapp.getName());
+        }
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+    integer.addAndGet(1);
+});
+~~~
+
+经了解，在http请求中，可以使用Range进行分段下载，所以可以创建多个线程，来分段下载。
+
+> Range，是在 HTTP/1.1（http://www.w3.org/Protocols/rfc2616/rfc2616.html）里新增的一个 header field，也是现在众多号称多线程下载工具（如 FlashGet、迅雷等）实现多线程下载的核心所在。
+>
+> **Range**
+>
+> 用于请求头中，指定第一个字节的位置和最后一个字节的位置，一般格式：
+>
+> Range:(unit=first byte pos)-[last byte pos]
+>
+> **Content-Range**
+>
+> 用于响应头，指定整个实体中的一部分的插入位置，他也指示了整个实体的长度。在服务器向客户返回一个部分响应，它必须描述响应覆盖的范围和整个实体长度。一般格式：
+>
+> Content-Range: bytes (unit first byte pos) - [last byte pos]/[entity legth]
+>
+> **请求下载整个文件:**
+>
+> 1. GET /test.rar HTTP/1.1
+> 2. Connection: close
+> 3. Host: 116.1.219.219
+> 4. Range: bytes=0-801 //一般请求下载整个文件是bytes=0- 或不用这个头
+>
+> **一般正常回应**
+>
+> 1. HTTP/1.1 200 OK
+> 2. Content-Length: 801
+> 3. Content-Type: application/octet-stream
+> 4. Content-Range: bytes 0-800/801 //801:文件总大小
+>
+> 所以如果想多线程现在，可以像下面一样：
+>
+> 表示头500个字节：Range: bytes=0-499
+> 表示第二个500字节：Range: bytes=500-999
+>
+> .......
+
+代码实现：
+
+首先创建DownloadUtil类
+
+```java
+/**
+ * <p>
+ * DownloadUtil
+ * </p>
+ *
+ * @author Loserfromlazy
+ * @since 2021/12/6
+ */
+public class DownloadUtil {
+	//服务器地址
+    private String serverUrl;
+	//线程池
+    private ExecutorService threadPool;
+	//下载的文件存储的本地路径
+    private String fileName;
+    //线程下载成功标志
+    private static int flag = 0;
+    //线程计数同步辅助
+    private CountDownLatch latch;
+
+    public DownloadUtil(String serverPath, String localPath,String fileName) {
+        this.serverUrl = serverPath;
+        this.localUrl = localPath;
+        this.fileName=fileName;
+    }
+
+    public DownloadUtil() {
+    }
+	/**
+	* 下载方法
+	*/
+    public boolean executeDownload() throws IOException {
+        try {
+            //创建网络请求
+            CloseableHttpClient httpClient = HttpClients.createDefault();
+            //创建请求配置
+            RequestConfig requestConfig = RequestConfig.custom()
+                    .setConnectionRequestTimeout(5000).build();
+            HttpGet httpGet = new HttpGet(serverUrl);
+            httpGet.setHeader("Connection", "Keep-Alive");
+            httpGet.setConfig(requestConfig);
+            //获取请求状态
+            CloseableHttpResponse response = httpClient.execute(httpGet);
+            int code = response.getStatusLine().getStatusCode();
+            if (code != 200 && code != 206) {
+                System.out.println("路径为空");
+                return false;
+            }
+            //获取文件大小
+            long contentLength = response.getEntity().getContentLength();
+            //创建RandomAccessFile，采用rwd模式
+            RandomAccessFile raf = new RandomAccessFile(fileName, "rwd");
+            //指定创建的文件的长度
+            raf.setLength(contentLength);
+            raf.close();
+            //分割文件
+            //当前线程池中线程数目，这里暂时写死
+            int partCount = 10;
+            //每一个线程下载的长度
+            int partSize = (int) (contentLength / partCount);
+            latch = new CountDownLatch(partCount);
+            //获取线程池
+            threadPool = ThreadPool.getInstance();
+            for (int threadId = 1; threadId <= partCount; threadId++) {
+                // 每一个线程下载的开始位置
+                long startIndex = (threadId - 1) * partSize;
+                // 每一个线程下载的开始位置
+                long endIndex = startIndex + partSize - 1;
+                if (threadId == partCount) {
+                    //最后一个线程下载的长度稍微长一点
+                    endIndex = contentLength;
+                }
+                System.out.println("线程" + threadId + "下载:" + startIndex + "字节~" + endIndex + "字节");
+                //新建线程，通过线程池执行
+                threadPool.execute(new DownLoadThread(threadId, startIndex, endIndex, latch,fileName));
+            }
+            //等待线程执行完毕
+            latch.await();
+            if (flag == 0) {
+                return true;
+            }
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return false;
+    }
+
+    /**
+     * 内部线程类
+     *
+     * @author Loserfromlazy
+     * @date 2021/12/6 14:44
+     */
+    public class DownLoadThread implements Runnable {
+        //线程ID
+        private int threadId;
+        //下载起始位置
+        private long startIndex;
+        //下载结束位置
+        private long endIndex;
+		//下载的文件存储的本地路径
+        private String fileName;
+		//线程计数辅助
+        private CountDownLatch latch;
+
+        public DownLoadThread(int threadId, long startIndex, long endIndex, CountDownLatch latch, String fileName) {
+            this.threadId = threadId;
+            this.startIndex = startIndex;
+            this.endIndex = endIndex;
+            this.latch = latch;
+            this.fileName = fileName;
+        }
+
+        @Override
+        public void run() {
+            try {
+                System.out.println("线程" + threadId + "正在下载...");
+                //创建网络请求
+                CloseableHttpClient httpClient = HttpClients.createDefault();
+                //创建请求配置
+                RequestConfig requestConfig = RequestConfig.custom()
+                        .setConnectionRequestTimeout(5000).build();
+                HttpGet httpGet = new HttpGet(serverUrl);
+                httpGet.setHeader("Connection", "Keep-Alive");
+                //请求服务器下载部分的文件的指定位置
+                httpGet.setHeader("Range", "bytes=" + startIndex + "-" + endIndex);
+                httpGet.setConfig(requestConfig);
+                CloseableHttpResponse response = httpClient.execute(httpGet);
+                int code = response.getStatusLine().getStatusCode();
+                System.out.println("线程" + threadId + "请求返回code=" + code);
+                InputStream is = response.getEntity().getContent();//返回资源
+                RandomAccessFile raf = new RandomAccessFile(fileName, "rwd");
+                //随机写文件的时候从哪个位置开始写
+                raf.seek(startIndex);//定位文件
+                int len = 0;
+                byte[] buffer = new byte[1024];
+                while ((len = is.read(buffer)) != -1) {
+                    raf.write(buffer, 0, len);
+                }
+                is.close();
+                raf.close();
+                System.out.println("线程" + threadId + "下载完毕");
+            } catch (Exception e) {
+                //线程下载出错
+                DownloadUtil.flag = 1;
+                System.out.println(e.getMessage());
+            } finally {
+                //计数值减一
+                latch.countDown();
+            }
+        }
+    }
+
+    /**
+     * 下载文件执行器
+     */
+    public synchronized static boolean downLoad(String serverPath, String localPath,String fileName) {
+        ReentrantLock lock = new ReentrantLock();
+        lock.lock();
+        DownloadUtil m = new DownloadUtil(serverPath, localPath,fileName);
+        long startTime = System.currentTimeMillis();
+        boolean flag = false;
+        try {
+            flag = m.executeDownload();
+            long endTime = System.currentTimeMillis();
+            if (flag) {
+                System.out.println("文件下载结束,共耗时" + (endTime - startTime) + "ms");
+                return true;
+            }
+            System.out.println("文件下载失败");
+            return false;
+        } catch (Exception ex) {
+            System.out.println(ex.getMessage());
+            return false;
+        } finally {
+            DownloadUtil.flag = 0; // 重置下载状态
+            if (!flag) {
+                File file = new File(localPath);
+                file.delete();
+            }
+            lock.unlock();
+        }
+    }
+}
+```
+
+获取线程池工具类：
+
+```java
+/**
+ * <p>
+ * ThreadPool
+ * </p>
+ *
+ * @author Loserfromlzy
+ * @since 2021/12/6
+ */
+public class ThreadPool {
+	//创建固定大小线程池
+    private static final ExecutorService executorService = Executors.newFixedThreadPool(10);
+
+    private ThreadPool(){}
+	//饿汉式单例
+    public static ExecutorService getInstance(){
+        return executorService;
+    }
+}
+```
+
+### 拓展CountDownLatch和RandomAccessFile
+
+**`CountDownLatch`**
+
+CountDownLatch是在java1.5被引入，存在于java.util.cucurrent包下。
+
+CountDownLatch这个类使一个线程等待其他线程各自执行完毕后再执行。它是通过一个计数器来实现的，计数器的初始值是线程的数量。每当一个线程执行完毕后，计数器的值就-1，当计数器的值为0时，表示所有线程都执行完毕，然后在闭锁上等待的线程就可以恢复工作了。
+
+它其中最主要使用的方法源码如下：
+
+总的来说就是调用await进行等待，直到count降为0，而countDown可以使count减一。
+
+```java
+/**
+ * Causes the current thread to wait until the latch has counted down to
+ * zero, unless the thread is {@linkplain Thread#interrupt interrupted}.
+ *
+ * <p>If the current count is zero then this method returns immediately.
+ *
+ * <p>If the current count is greater than zero then the current
+ * thread becomes disabled for thread scheduling purposes and lies
+ * dormant until one of two things happen:
+ * <ul>
+ * <li>The count reaches zero due to invocations of the
+ * {@link #countDown} method; or
+ * <li>Some other thread {@linkplain Thread#interrupt interrupts}
+ * the current thread.
+ * </ul>
+ *
+ * <p>If the current thread:
+ * <ul>
+ * <li>has its interrupted status set on entry to this method; or
+ * <li>is {@linkplain Thread#interrupt interrupted} while waiting,
+ * </ul>
+ * then {@link InterruptedException} is thrown and the current thread's
+ * interrupted status is cleared.
+ *
+ * @throws InterruptedException if the current thread is interrupted
+ *         while waiting
+ */
+public void await() throws InterruptedException {
+    sync.acquireSharedInterruptibly(1);
+}
+/**
+     * Decrements the count of the latch, releasing all waiting threads if
+     * the count reaches zero.
+     *
+     * <p>If the current count is greater than zero then it is decremented.
+     * If the new count is zero then all waiting threads are re-enabled for
+     * thread scheduling purposes.
+     *
+     * <p>If the current count equals zero then nothing happens.
+     */
+    public void countDown() {
+        sync.releaseShared(1);
+    }
+```
+
+**`RandomAccessFile`**
+
+> RandomAccessFile既可以读取文件内容，也可以向文件输出数据。同时，RandomAccessFile支持“随机访问”的方式，程序快可以直接跳转到文件的任意地方来读写数据。
+>
+> 由于RandomAccessFile可以自由访问文件的任意位置，**所以如果需要访问文件的部分内容，而不是把文件从头读到尾，使用RandomAccessFile将是更好的选择。**
+>
+> 与OutputStream、Writer等输出流不同的是，RandomAccessFile允许自由定义文件记录指针，RandomAccessFile可以不从开始的地方开始输出，因此RandomAccessFile可以向已存在的文件后追加内容。**如果程序需要向已存在的文件后追加内容，则应该使用RandomAccessFile。**
+>
+> RandomAccessFile的方法虽然多，但它有一个最大的局限，就是只能读写文件，不能读写其他IO节点。
+>
+> **RandomAccessFile的一个重要使用场景就是网络请求中的多线程下载及断点续传。**
+
+RandomAccessFile一共有4种模式。
+
+> **"r" : **   以只读方式打开。调用结果对象的任何 write 方法都将导致抛出 IOException。
+>  **"rw":**    打开以便读取和写入。
+>  **"rws":**  打开以便读取和写入。相对于 "rw"，"rws" 还要求对“文件的内容”或“元数据”的每个更新都同步写入到基础存储设备。
+>  **"rwd" :**  打开以便读取和写入，相对于 "rw"，"rwd" 还要求对“文件的内容”的每个更新都同步写入到基础存储设备。
+
+RandomAccessFile既可以读文件，也可以写文件，所以类似于InputStream的read()方法，以及类似于OutputStream的write()方法，RandomAccessFile都具备。除此之外，RandomAccessFile具备两个特有的方法，来支持其随机访问的特性。
+
+> long getFilePointer( )：返回文件记录指针的当前位置
+>
+> void  seek(long pos )：将文件指针定位到pos位置
+
 # 三、 Jsoup
 
 ​	jsoup 是一款Java 的HTML解析器，可直接解析某个URL地址、HTML文本内容。它提供了一套非常省力的API，可通过DOM，CSS以及类似于jQuery的操作方法来取出和操作数据。
