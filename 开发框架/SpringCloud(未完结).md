@@ -464,11 +464,13 @@ Eureka 包含两个组件：Eureka Server 和 Eureka Client，Eureka Client是�
 
 下面我们通过以下顺序完成Eureka的学习：
 
-首先创建单实例EurekaServer，然后在搭建EurekaServer集群，之后我们改造案例注册到集群完成调用。
+首先创建单实例EurekaServer，然后在搭建EurekaServer集群，之后我们改造入门案例注册到集群完成调用。
 
 #### 创建单实例EurekaServer注册中心
 
 在例子中创建eurekaserver8761工程，因为我们之后需要扩展集群，所以在项目名上加上端口号用来区分。
+
+![image-20211210132912095](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211210132912095.png)
 
 然后增加springcloud的eureka的依赖
 
@@ -529,9 +531,274 @@ Eureka 包含两个组件：Eureka Server 和 Eureka Client，Eureka Client是�
 > <!--引⼊Jaxb，结束-->
 > ~~~
 
+编写启动类和配置文件：
+
+```yaml
+server:
+  port: 8761
+spring:
+  application:
+    name: cloud-eureka-server #应用名称，会在eureka中作为server的唯一ID
+eureka:
+  instance:
+    hostname: localhost #当前eureka实例的主机名
+  client:
+    service-url: 
+    # 客户端与EurekaServer交互的地址，如果是集群，也需要写其它Server的地址
+      defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+    register-with-eureka: false # 自己就是服务不需要注册自己
+    fetch-registry: false #从Eureka Server获取服务信息,默认为true，置为false。自己就是服务不需要
+```
+
+```java
+@SpringBootApplication
+@EnableEurekaServer
+public class EurekaServerApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(EurekaServerApplication.class,args);
+    }
+}
+```
+
+启动启动类访问127.0.0.1:8761看到以下页面说明EurekaServer发布成功。
+
+![image-20211210133341167](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211210133341167.png)
+
+#### 搭建Eureka Server HA高可用集群
+
+互联网应用中服务实例很少单个，因为如果只有一个实例，如果他挂掉而且微服务消费者的本地缓存列表也不可用，那么整个系统都会受到影响。
+
+在生产环境中，我们可以配置Eureka Server集群，它的集群通过P2P通信的方式共享服务注册表，我们可以在这里开启两台Server来搭建集群。集群的架构与单体类似：
+
+![Eureka集群架构20211210](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/Eureka%E9%9B%86%E7%BE%A4%E6%9E%B6%E6%9E%8420211210.png)
+
+下面进行集群配置:
+
+由于是在本地进⾏测试，很难模拟多主机的情况，Eureka配置server集群时需要执⾏host地址。 所以需要修改个⼈电脑中host地址。
+
+~~~
+127.0.0.1       CloudEurekaServerA
+127.0.0.1       CloudEurekaServerB
+~~~
+
+因为eureka server本身也可以看作一个客户端，所以配置文件这样配即可，（可以看作是在其他server中注册自己）
+
+```yaml
+server:
+  port: 8761
+spring:
+  application:
+    name: cloud-eureka-server #应用名称，会在eureka中作为server的唯一ID
+eureka:
+  instance:
+    hostname: CloudEurekaServerA #当前eureka实例的主机名
+  client:
+    service-url:
+      # 客户端与EurekaServer交互的地址，如果是集群，也需要写其它Server的地址
+      # 集群模式下，指向其他的Eureka Server ，如果有更多的实例逗号拼接即可
+      defaultZone: http://CloudEurekaServerB:8762/eureka/
+    register-with-eureka: true # 集群模式下可以改成true
+    fetch-registry: true #集群模式下可以改成true
+```
+
+```yaml
+server:
+  port: 8762
+spring:
+  application:
+    name: cloud-eureka-server #应用名称，会在eureka中作为server的唯一ID
+eureka:
+  instance:
+    hostname: CloudEurekaServerB #当前eureka实例的主机名
+  client:
+    service-url:
+      # 客户端与EurekaServer交互的地址，如果是集群，也需要写其它Server的地址
+      defaultZone: http://CloudEurekaServerA:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+```
+
+启动两个服务，http://CloudEurekaServerA:8761和http://CloudEurekaServerB:8762
+
+可以看到两个服务的信息，且实例数为2，代表配置成功。
+
+![image-20211210144312988](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211210144312988.png)
+
+#### 微服务注册到Eureka Server集群
+
+在入门案例中有user工程作为服务提供者，autodeliver作为服务消费者，现在我们进行配置将服务提供者和服务消费者注册到Server集群。
+
+**服务提供者User工程配置：**
+
+首先在common工程中增加依赖
+
+```xml
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-commons</artifactId>
+</dependency>
+```
+
+然后在user工程中增加依赖
+
+```xml
+<!--eureka client客户端-->
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+</dependency>
+```
+
+然后在user工程中增加eureka配置,注释掉的配置可以不配，主要作用是修改实例名。
+
+```yaml
+#注册到Eureka服务中心
+eureka:
+  client:
+    service-url:
+      # 注册到集群，把多个server地址用逗号连接即可。如果Eureka Server是单实例就写一个就行。
+      defaultZone: http://CloudEurekaServerA:8761/eureka/,http://CloudEurekaServerB:8762/eureka/
+#  instance:
+#    #使⽤ip注册，否则会使⽤主机名注册了（此处考虑到对⽼版本的兼容，新版本经过实验都是ip）
+#    prefer-ip-address: true
+#    #⾃定义实例显示格式，加上版本号，便于多版本管理，注意是ip-address，早期版本是ipAddress
+#    instance-id: ${spring.cloud.client.ip.address}:${spring.application.name}:${server.port}:@project.version@
+```
+
+最后增加注解
+
+```java
+@SpringBootApplication
+@MapperScan("com.learn.mapper")
+//@EnableEurekaClient  //开启Eureka Client
+@EnableDiscoveryClient  //开启注册中心客户端（通用型注解，比如注册到Eureka、Nacos等）
+public class UserApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(UserApplication.class,args);
+    }
+}
+```
+
+打开Eureka Server看User工程（服务提供者）是否能注册成功，如图现在已经注册成功
+
+![image-20211213161010856](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211213161010856.png)
+
+然后我们可以参照以上配置完成User工程的集群。
+
+**服务消费者AutoDeliver工程配置：**
+
+增加依赖
+
+~~~xml
+<!--eureka client客户端-->
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+</dependency>
+~~~
+
+编写配置文件：
+
+```yaml
+server:
+  port: 8070
+#注册到Eureka服务中心
+eureka:
+  client:
+    service-url:
+      # 注册到集群，把多个server地址用逗号连接即可。如果Eureka Server是单实例就写一个就行。
+      defaultZone: http://CloudEurekaServerA:8761/eureka/,http://CloudEurekaServerB:8762/eureka/
+#  instance:
+#    #使⽤ip注册，否则会使⽤主机名注册了（此处考虑到对⽼版本的兼容，新版本经过实验都是ip）
+#    prefer-ip-address: true
+#    #⾃定义实例显示格式，加上版本号，便于多版本管理，注意是ip-address，早期版本是ipAddress
+#    instance-id: ${spring.cloud.client.ip.address}:${spring.application.name}:${server.port}:@project.version@
+spring:
+  application:
+    name: autodeliver
+```
+
+启动类增加注解：
+
+```java
+@SpringBootApplication(exclude= {DataSourceAutoConfiguration.class})
+@EnableDiscoveryClient
+public class AutoDeliverApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(AutoDeliverApplication.class,args);
+    }
+
+    @Bean
+    public RestTemplate getRestTemplate(){
+        return new RestTemplate();
+    }
+}
+```
+
+然后我们启动工程看是否注册成功
+
+![image-20211213163332117](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211213163332117.png)
+
+然后我们可以参照以上配置完成AutoDeliver工程的集群。
+
+#### 服务消费者调用服务提供者
+
+改造Controller：
+
+```java
+@Autowired
+private DiscoveryClient discoveryClient;
+
+@GetMapping("/findOpenStatusByUid")
+public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+    /*1.从Eureka Server中获取关注的那个服务的实力信息*/
+    List<ServiceInstance> user = discoveryClient.getInstances("user");
+    /*2.如果有多个实例选择一个来使用(负载均衡)*/
+    ServiceInstance serviceInstance = user.get(0);
+    /*3.从元数据信息获取host port*/
+    String host = serviceInstance.getHost();
+    int port = serviceInstance.getPort();
+    String url = "http://"+host+":"+port+"/user/findUserById?id="+uid;
+    System.out.println("############URL##########:"+url);
+    UserInfo forObject = restTemplate.getForObject(url, UserInfo.class);
+    return forObject.getOpen();
+}
+```
+
+调用查看结果：
+
+![image-20211213164822717](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211213164822717.png)
+
+### 4.1.4 Eureka的元数据
+
+Eureka的元数据有两种：标准元数据和自定义元数据
+
+**标准元数据：**主机名、IP地址、端⼝号等信息，这些信息都会被发布在服务注册表中，⽤于服务之间的调⽤。
+
+**⾃定义元数据：**可以使⽤eureka.instance.metadata-map配置，符合KEY/VALUE的存储格式。这 些元数据可以在远程客户端中访问。在程序中可以使⽤DiscoveryClient 获取指定微服务的所有元数据信息。自定义元数据如下：
+
+~~~yml
+eureka:
+  client:
+    service-url:
+      # 注册到集群，把多个server地址用逗号连接即可。如果Eureka Server是单实例就写一个就行。
+      defaultZone: http://CloudEurekaServerA:8761/eureka/,http://CloudEurekaServerB:8762/eureka/
+  instance:
+    metadata-map:
+      testkey: testvalue
+      myname: haha
+~~~
+
+### 4.1.5 Eureka的客户端
+
+服务提供者（也是Eureka客户端）要向EurekaServer注册服务，并完成服务续约等⼯作。
 
 
 
+### 4.1.6 Eureka的服务端
+
+## 4.2 Ribbon负载均衡
 
 # 五、SpringCloud高级组件
 
