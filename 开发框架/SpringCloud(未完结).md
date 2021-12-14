@@ -684,7 +684,8 @@ public class UserApplication {
 
 ![image-20211213161010856](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211213161010856.png)
 
-然后我们可以参照以上配置完成User工程的集群。
+> 如果想集群可以参照以上配置完成User工程的集群。
+>
 
 **服务消费者AutoDeliver工程配置：**
 
@@ -740,7 +741,8 @@ public class AutoDeliverApplication {
 
 ![image-20211213163332117](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211213163332117.png)
 
-然后我们可以参照以上配置完成AutoDeliver工程的集群。
+> 如果想集群可以参照以上配置完成User工程的集群。
+>
 
 #### 服务消费者调用服务提供者
 
@@ -794,13 +796,254 @@ eureka:
 
 服务提供者（也是Eureka客户端）要向EurekaServer注册服务，并完成服务续约等⼯作。
 
+**服务注册（服务提供者）**
 
+1. 当我们导⼊了eureka-client依赖坐标，配置Eureka服务注册中心地址
+2. 服务在启动时会向注册中心发起注册请求，携带服务元数据信息
+3. Eureka注册中心会把服务的信息保存在Map中。
+
+**服务续约（服务提供者）**
+
+每隔30s会向注册中心续约（心跳）一次，如果没有心跳，租约会在90s后到期，然后服务会被失效。
+
+~~~yml
+eureka: 
+ instance:
+   #发心跳间隔时间，默认30s
+   lease-renewal-interval-in-seconds: 30
+   #租约到期服务失效时间，默认90s
+   lease-expiration-duration-in-seconds: 90
+~~~
+
+**获取服务列表（服务消费者）**
+
+每隔30秒服务会从注册中⼼中拉取⼀份服务列表，这个时间可以通过配置修改。往往不需要我们调整。
+
+~~~yml
+eureka: 
+ instance: 
+  #每隔多久拉取一次服务
+  registry-fetch-interval-seconds: 30
+~~~
 
 ### 4.1.6 Eureka的服务端
 
+**服务下线**
+
+当服务正常关闭操作时，会发送服务下线的REST请求给EurekaServer。
+
+服务中⼼接受到请求后，将该服务置为下线状态。
+
+**失效剔除**
+
+Eureka Server会定时（间隔值是eureka.server.eviction-interval-timer-in-ms，默认60s）进⾏检查，如果发现实例在在⼀定时间（此值由客户端设置的eureka.instance.lease-expiration-duration-in-seconds定义，默认值为90s）内没有收到⼼跳，则会注销此实例。
+
+**自我保护：**
+
+服务提供者 —> 注册中⼼定期的续约（服务提供者和注册中⼼通信），假如服务提供者和注册中⼼之间的⽹络有点问题，不代表服务提供者不可⽤，不代表服务消费者⽆法访问服务提供者。
+
+如果在15分钟内超过85%的客户端节点都没有正常的⼼跳，那么Eureka就认为客户端与注册中⼼出现了⽹络故障，Eureka Server⾃动进⼊⾃我保护机制。
+
+> 为什么会有⾃我保护机制？
+>
+> 默认情况下，如果Eureka Server在⼀定时间内（默认90秒）没有接收到某个微服务实例的⼼跳，Eureka Server将会移除该实例。但是当⽹络分区故障发⽣时，微服务与Eureka Server之间⽆法正常通信，⽽微服务本身是正常运⾏的，此时不应该移除这个微服务，所以引⼊了⾃我保护机制。
+
+当处于⾃我保护模式时
+
+1. 不会剔除任何服务实例（可能是服务提供者和EurekaServer之间⽹络问题），保证了⼤多数服务依然可⽤
+2. Eureka Server仍然能够接受新服务的注册和查询请求，但是不会被同步到其它节点上，保证当前节点依然可⽤，当⽹络稳定时，当前Eureka Server新的注册信息会被同步到其它节点中。
+3. 在Eureka Server⼯程中通过eureka.server.enable-self-preservation配置可⽤关停⾃我保护，默认值是打开。
+
 ## 4.2 Ribbon负载均衡
 
+负载均衡⼀般分为**服务器端负载均衡**和**客户端负载均衡**
+
+所谓**服务器端负载均衡**，⽐如Nginx、F5这些，请求到达服务器之后由这些负载均衡器根据⼀定的算法将请求路由到⽬标服务器处理。
+
+所谓**客户端负载均衡**，⽐如我们要说的Ribbon，服务消费者客户端会有⼀个服务器地址列表，调⽤⽅在请求前通过⼀定的负载均衡算法选择⼀个服务器进⾏访问，负载均衡算法的执⾏是在请求客户端进⾏。
+
+Ribbon是Netflflix发布的负载均衡器。Eureka⼀般配合Ribbon进⾏使⽤，Ribbon利⽤从Eureka中读取到服务信息，在调⽤服务提供者提供的服务时，会根据⼀定的算法进⾏负载。
+
+### 4.2.1 Ribbon的应用
+
+在服务消费者中，也就是入门案例中的autodeliver工程进行改造。eureka-client中会引入Ribbon的相关jar包，所以我们不需要引入jar包，直接使用。
+
+测试前需要复制一份user工程做集群以便查看负载均衡效果。
+
+![image-20211214111153065](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211214111153065.png)
+
+下面进行Ribbon的使用，使用时，只需要加一个注解即可：
+
+```java
+@SpringBootApplication(exclude= {DataSourceAutoConfiguration.class})
+@EnableDiscoveryClient
+public class AutoDeliverApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(AutoDeliverApplication.class,args);
+    }
+
+    @Bean
+    //Ribbon负载均衡
+    @LoadBalanced
+    public RestTemplate getRestTemplate(){
+        return new RestTemplate();
+    }
+}
+```
+
+修改controller：
+
+```java
+@GetMapping("/findOpenStatusByUid")
+public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+    /*使用Ribbon负载均衡*/
+    String url = "http://user/user/findUserById?id="+uid;
+    System.out.println("############URL##########:"+url);
+    UserInfo forObject = restTemplate.getForObject(url, UserInfo.class);
+    return forObject.getOpen();
+}
+```
+
+![image-20211214101914021](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211214101914021.png)
+
+
+
+> 可以在服务提供者即User工程中返回当前的端口号，这样可以更好的查看负载均衡的效果。也可以加上日志如以下代码：
+>
+> ```java
+> @GetMapping("/findUserById")
+> public UserInfo findUserById(@RequestParam("id") Integer id) {
+>     System.out.println("当前是8090，目前请求到这里了"+new Date());
+>     return userInfoService.findUserById(id);
+> }
+> ```
+
+### 4.2.2 Ribbon负载均衡的策略
+
+Ribbon内置了多种负载均衡策略，内部负责复杂均衡的顶级接⼝com.netflflix.loadbalancer.IRule
+
+![image-20211214103817604](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211214103817604.png)
+
+| 策略                                            | 描述                                                         |
+| ----------------------------------------------- | ------------------------------------------------------------ |
+| RoundRobinRule：轮询策略                        | 默认超过10次获取到的server都不可⽤，会返回⼀个空的server     |
+| RandomRule：随机策略                            | 如果随机到的server为null或者不可⽤的话，会while不停的循环选取 |
+| RetryRule：重试策略                             | ⼀定时限内循环重试。默认继承RoundRobinRule，也⽀持⾃定义注⼊，RetryRule会在每次选取之后，对选举的server进⾏判断，是否为null，是否alive，并且在500ms内会不停的选取判断。⽽RoundRobinRule失效的策略是超过10次，RandomRule是没有失效时间的概念，只要serverList没都挂。 |
+| BestAvailableRule：最小连接数策略               | 遍历serverList，选取出可⽤的且连接数最⼩的⼀个server。该算法⾥⾯有⼀个LoadBalancerStats的成员变量，会存储所有server的运⾏状况和连接数。如果选取到的server为null，那么会调⽤RoundRobinRule重新选取。 |
+| AvailabilityFilteringRule：可⽤过滤策略         | 扩展了轮询策略，会先通过默认的轮询选取⼀个server，再去判断该server是否超时可⽤，当前连接数是否超限，都成功再返回 |
+| ZoneAvoidanceRule：区域权衡策略**（默认策略）** | 扩展了轮询策略，继承了2个过滤器：ZoneAvoidancePredicate和AvailabilityPredicate，除了过滤超时和链接数过多的server，还会过滤掉不符合要求的zone区域⾥⾯的所有节点，AWS --ZONE 在⼀个区域/机房内的服务实例中轮询 |
+
+## 4.3 Hystrix熔断器
+
+### 4.3.1 微服务中的雪崩效应及解决方案
+
+微服务中一个请求可能要多个微服务接口才能实现，会形成复杂的调用链路
+
+![雪崩效应20211214](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/%E9%9B%AA%E5%B4%A9%E6%95%88%E5%BA%9420211214.png)
+
+如上图，站在微服务B的角度上来说，上游微服务对它的调用是扇入，它对下游微服务的调用叫扇出。
+
+扇⼊：代表着该微服务被调⽤的次数，扇⼊⼤，说明该模块复⽤性好
+
+扇出：该微服务调⽤其他微服务的个数，扇出⼤，说明业务逻辑复杂
+
+在微服务架构中，⼀个应⽤可能会有多个微服务组成，微服务之间的数据交互通过远程过程调⽤完成。这就带来⼀个问题，假设微服务A调⽤微服务B和微服务C，微服务B和微服务C⼜调⽤其它的微服务，这就是所谓的“扇出”。如果扇出的链路上某个微服务的调⽤响应时间过⻓或者不可⽤，对微服务A的调⽤就会占⽤越来越多的系统资源，进⽽引起系统崩溃，所谓的“雪崩效应”。
+
+如图中所示，最下游**微服务C**响应时间过⻓，⼤量请求阻塞，⼤量线程不会释放，会导致服务器资源耗尽，最终导致上游服务甚⾄整个系统瘫痪
+
+解决雪崩效应主要有三种方法：
+
+1. 服务熔断
+
+   熔断机制是应对雪崩效应的⼀种微服务链路保护机制。当扇出链路的某个微服务不可⽤或者响应时间太⻓时，熔断该节点微服务的调⽤，进⾏服务的降级，快速返回错误的响应信息。当检测到该节点微服务调⽤响应正常后，恢复调⽤链路。
+
+   > 服务熔断重点在**断**，切断对下游服务的调⽤
+   >
+   > 服务熔断和服务降级往往是⼀起使⽤的，Hystrix就是这样。
+
+2. 服务降级
+
+   通俗讲就是整体资源不够⽤了，先将⼀些不关紧的服务停掉（调⽤我的时候，给你返回⼀个预留的值，也叫做**兜底数据**），待渡过难关⾼峰过去，再把那些服务打开。服务降级⼀般是从整体考虑，就是当某个服务熔断之后，服务器将不再被调⽤，此刻客户端可以⾃⼰准备⼀个本地的fallback回调，返回⼀个缺省值，这样做，虽然服务⽔平下降，但好⽍可⽤，⽐直接挂掉要强。
+
+3. 服务限流
+
+   服务降级是当服务出问题或者影响到核⼼流程的性能时，暂时将服务屏蔽掉，待⾼峰或者问题解决后再打开；但是有些场景并不能⽤服务降级来解决，⽐如秒杀业务这样的核⼼功能，这个时候可以结合服务限流来限制这些场景的并发/请求量。
+
+   > 限流措施也很多，⽐如
+   >
+   > - 限制总并发数（⽐如数据库连接池、线程池）
+   > - 限制瞬时并发数（如nginx限制瞬时并发连接数）
+   > - 限制时间窗⼝内的平均速率（如Guava的RateLimiter、nginx的limit_req模块，
+   > - 限制每秒的平均速率）
+   > - 限制远程接⼝调⽤速率、限制MQ的消费速率等
+
+### 4.3.2 Hystrix简介
+
+是由Netflflix开源的⼀个延迟和容错库，⽤于隔离访问远程系统、服务或者第三⽅库，防⽌级联失败，从⽽提升系统的可⽤性与容错性。Hystrix主要通过以下⼏点实现延迟和容错：
+
+- 包裹请求：使⽤HystrixCommand包裹对依赖的调⽤逻辑。
+- 跳闸机制：当某服务的错误率超过⼀定的阈值时，Hystrix可以跳闸，停⽌请求
+  该服务⼀段时间。
+- 资源隔离：Hystrix为每个依赖都维护了⼀个⼩型的线程池(舱壁模式)（或者信号量）。如果该线程池已满， 发往该依赖的请求就被⽴即拒绝，⽽不是排队等待，从⽽加速失败判定。
+- 监控：Hystrix可以近乎实时地监控运⾏指标和配置的变化，例如成功、失败、超时、以及被拒绝 的请求等。
+- 回退机制：当请求失败、超时、被拒绝，或当断路器打开时，执⾏回退逻辑。回退逻辑由开发⼈员 ⾃⾏提供，例如返回⼀个缺省值。
+- ⾃我修复：断路器打开⼀段时间后，会⾃动进⼊“半开”状态。
+
+### 4.3.3 Hystrix应用
+
+如果我们的User工程长时间没有响应，服务消费者——自动投递微服务将快速失败给用户提示。下面我们进行修改：
+
+首先在user工程（user8090和user8091都要修改）中进行线程休眠来模拟访问超时：
+
+```java
+@GetMapping("/findUserById")
+public UserInfo findUserById(@RequestParam("id") Integer id) {
+    //模拟访问超时
+    try {
+        Thread.sleep(10000000);
+    }catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+    System.out.println("当前是8091，目前请求到这里了"+new Date());
+    return userInfoService.findUserById(id);
+}
+```
+
+然后在autodeliver工程中导入hystrix依赖：
+
+```xml
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-netflix-hystrix</artifactId>
+</dependency>
+```
+
+启动类增加注解
+
+```java
+@SpringBootApplication(exclude= {DataSourceAutoConfiguration.class})
+@EnableDiscoveryClient
+//@EnableHystrix  //开启Hystrix功能
+@EnableCircuitBreaker //开启熔断器功能
+//@SpringCloudApplication //等价于@SpringBootApplication + @EnableDiscoveryClient + @EnableCircuitBreaker
+public class AutoDeliverApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(AutoDeliverApplication.class,args);
+    }
+
+    @Bean
+    @LoadBalanced//Ribbon负载均衡
+    public RestTemplate getRestTemplate(){
+        return new RestTemplate();
+    }
+}
+```
+
+
+
 # 五、SpringCloud高级组件
+
+
 
 # 六、SpringCloudAlibaba核心组件
 
