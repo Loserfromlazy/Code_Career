@@ -204,7 +204,7 @@ address VARCHAR ( 255 )
 );
 ~~~
 
-创建函数插入五百万条左右数据
+创建函数插入一千万条左右数据
 
 ~~~mysql
 CREATE PROCEDURE test_insert () BEGIN
@@ -513,7 +513,7 @@ GROUP BY
 >
 > Using temporary：说明使用了临时表
 >
-> Using where：没有索引下推，在Server层进行了全表扫描和过滤
+> Using where：用户要的字段不完全覆盖，在Server层进行了全表扫描和过滤
 >
 > Using join buffer(Block Nested Loop)：关联没有索引，有关联优化
 
@@ -529,13 +529,15 @@ GROUP BY
 
 ![image-20211109193558396](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211109193558396.png)
 
-> type：index ，说明用到了索引 ： 覆盖索引
+> Using index ，说明用到了索引 ： 覆盖索引
 >
 > Using temporary ：有临时表
 >
-> Using where ：没有索引下推，在Server层进行了全表扫描和过滤
+> Using where ：用户要的字段不完全覆盖，在Server层进行了全表扫描和过滤
 
 **第二次优化**
+
+因为address有索引，所以使用or。
 
 ~~~mysql
 SELECT
@@ -566,7 +568,7 @@ GROUP BY
 
 **第三次优化**
 
-从第二次优化的explain可以看出，索引只是使用了覆盖索引，rows=908万多，说明还是使用了全表扫描。
+从第二次优化的explain可以看出，索引只是使用了覆盖索引，rows=908万多，说明还是几乎进行了全表扫描。
 
 所以我们可以利用address做关联，过滤数据
 
@@ -657,9 +659,31 @@ GROUP BY
 
 可以看到仅需要0.022s就可以查询到结果。
 
+> PS：可以使用straight_join强行指定驱动表，因为我重启mysql再次执行第三次优化的sql语句发现内连接查询时，mysql自动使用大表做了驱动表，导致sql语句执行了26s，如下：
+>
+> ![image-20211215110052557](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215110052557.png)
+>
+> ![image-20211215110159370](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215110159370.png)
+>
+> 所以我强制使用小表做驱动表才解决这个问题。
+>
+> ![image-20211215110251314](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215110251314.png)
+
 **优化总结：**
 
 开启慢查询日志，定位运行慢的SQL语句
+
+> 1.使用`SHOW VARIABLES LIKE 'slow_query_log'`查看是否开启慢查询日志
+>
+> ![image-20211215110422304](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215110422304.png)
+>
+> 2.设置慢查询日志的位置`set global slow_query_log_file=' /usr/share/mysql/sql_log/mysql-slow.log' `
+>
+> 
+>
+> 3.开启慢查询日志`set global slow_query_log=1;`关闭则设置为0
+>
+> 
 
 利用explain执行计划，查看SQL执行情况
 
@@ -676,3 +700,4 @@ GROUP BY
 复杂SQL可以做成视图，视图在MySQL内部有优化，而且开发也比较友好
 
 对于复杂的SQL要逐一分析，找到比较费时的SQL语句片段进行优化
+
