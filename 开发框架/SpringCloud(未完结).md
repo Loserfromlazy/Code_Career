@@ -1041,9 +1041,274 @@ public class AutoDeliverApplication {
 
 然后修改Controller代码
 
-
+```java
+//使用HystrixCommand注解进行熔断控制
+@HystrixCommand(
+        //commandProperties：熔断的一些细节属性配置其中的每一个属性都是HystrixProperty
+        commandProperties = {
+                //设置服务超时时间
+                @HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds",value = "2000")
+        }
+)
+@GetMapping("/findOpenStatusByUid")
+public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+    /*使用Ribbon负载均衡*/
+    // String url = "http://"+host+":"+port+"/user/findUserById?id="+uid;
+    String url = "http://user/user/findUserById?id="+uid;
+    System.out.println("############URL##########:"+url);
+    UserInfo forObject = restTemplate.getForObject(url, UserInfo.class);
+    return forObject.getOpen();
+}
+```
 
 > HystrixProperty的所有属性都在HystrixCommandProperties类中进行了配置。
+>
+> ![image-20211215113826902](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215113826902.png)
+
+我们调用方法，因为我们只在一个服务提供者增加了休眠，所以我们会发现请求时一个会成功而另一个会超时熔断返回错误信息。
+
+![image-20211215131432443](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215131432443.png)
+
+服务提供者处理超时熔断会返回错误信息，或者抛出异常信息，这些信息都会返回到服务消费者这里，但是有时候我们不想将收集到的异常或者错误信息抛到它的上游，比如以下业务场景：
+
+![example20211215](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/example20211215.png)
+
+用户注册领取优惠卷，但优惠卷微服务返回了错误或异常信息，这时注册微服务直接返回给上游用户微服务很不好，所以我们可以返回一个默认数据（服务降级）。我们可以如下配置：
+
+```java
+@RestController
+@RequestMapping("/autoDeliver")
+public class AutoDeliverController {
+
+    @Autowired
+    private RestTemplate restTemplate;
+
+    @Autowired
+    private DiscoveryClient discoveryClient;
+
+    //使用HystrixCommand注解进行熔断控制
+    @HystrixCommand(
+            //commandProperties：熔断的一些细节属性配置其中的每一个属性都是HystrixProperty
+            commandProperties = {
+                    //设置服务超时时间
+                    @HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds",value = "2000")
+            },
+            fallbackMethod = "myFallBack"
+    )
+    @GetMapping("/findOpenStatusByUid")
+    public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+        /*使用Ribbon负载均衡*/
+        // String url = "http://"+host+":"+port+"/user/findUserById?id="+uid;
+        String url = "http://user/user/findUserById?id="+uid;
+        System.out.println("############URL##########:"+url);
+        UserInfo forObject = restTemplate.getForObject(url, UserInfo.class);
+        return forObject.getOpen();
+    }
+    //回退方法，返回默认值
+    public Integer myFallBack(Integer uid){
+        return -1;//默认数据\兜底数据
+    }
+}
+```
+
+> 降级方法的形参和返回值必须与原方法相同
+>
+> 也可以在类上使⽤@DefaultProperties注解统⼀指定整个类中共⽤的降级⽅法
+
+这时我们可以看到超时后会返回我们设置的-1
+
+![image-20211215133314571](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215133314571.png)
+
+### 4.3.4 Hystrix舱壁模式（线程池隔离策略）
+
+默认Hystrix有一个线程池有10个线程，如果某一个请求比如下图的请求1发了十二个请求请求A服务，那么其他请求只能等待或者拒绝连接，比如请求2，这并不是B服务不可用，而是线程不够的原因。
+
+![舱壁模式20211215](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/%E8%88%B1%E5%A3%81%E6%A8%A1%E5%BC%8F20211215.png)
+
+为了避免问题服务请求过多导致正常服务⽆法访问，Hystrix 不是采⽤增加线程数，⽽是单独的为每⼀个控制⽅法创建⼀个线程池的⽅式，这种模式叫做“舱壁模式"，也是线程隔离的⼿段。如下图：
+
+![舱壁模式二20211215](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/%E8%88%B1%E5%A3%81%E6%A8%A1%E5%BC%8F%E4%BA%8C20211215.png)
+
+我们可以通过jps命令查看当前运行的Java进程，如图可以看到我们正在运行的五个进程：
+
+![image-20211215144723971](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215144723971.png)
+
+我们通过postman批量发请求发送20个请求，等待请求完成。
+
+> postman的文件夹可以使用RUN collectin创建批量请求：
+>
+> ![image-20211215150737607](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215150737607.png)
+
+然后我们可以使用jstack+pid 查看进程的线程信息可以通过grep过滤（windows下可以使用findstr代替）如下图：
+
+![image-20211215150613760](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215150613760.png)
+
+可以看到，虽然有20个请求，但是只有10个线程，所以如果不进⾏任何设置，所有熔断⽅法使⽤⼀个Hystrix线程池（10个线程），那么这样的话会因为我们的Hystrix的线程机制造成问题。
+
+下面我们进行舱壁模式的修改，只需要设置线程池标识，并且唯一就可以每个方法使用自己的线程池，然后我们复制一个方法做对比：
+
+```java
+@RestController
+@RequestMapping("/autoDeliver")
+public class AutoDeliverController {
+
+    @Autowired
+    private RestTemplate restTemplate;
+
+    @Autowired
+    private DiscoveryClient discoveryClient;
+
+
+    @HystrixCommand(
+            // 线程池标识，要保持唯一，不唯一的话就共用了
+            threadPoolKey = "findOpenStatusByUid",
+            // 线程池细节属性配置
+            threadPoolProperties = {
+                    @HystrixProperty(name="coreSize",value = "2"),// 线程数
+                    @HystrixProperty(name="maxQueueSize",value="20") // 等待队列长度
+            },
+            commandProperties = {
+                    @HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds",value = "2000")
+            },
+            fallbackMethod = "myFallBack"
+    )
+    @GetMapping("/findOpenStatusByUid")
+    public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+        String url = "http://user/user/findUserById?id="+uid;
+        System.out.println("############URL##########:"+url);
+        UserInfo forObject = restTemplate.getForObject(url, UserInfo.class);
+        return forObject.getOpen();
+    }
+
+    @HystrixCommand(
+            // 线程池标识，要保持唯一，不唯一的话就共用了
+            threadPoolKey = "findOpenStatusByUid1",
+            // 线程池细节属性配置
+            threadPoolProperties = {
+                    @HystrixProperty(name="coreSize",value = "2"),// 线程数
+                    @HystrixProperty(name="maxQueueSize",value="20") // 等待队列长度
+            },
+            commandProperties = {
+                    @HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds",value = "2000")
+            },
+            fallbackMethod = "myFallBack"
+    )
+    @GetMapping("/findOpenStatusByUid1")
+    public Integer findOpenStatusByUid1(@RequestParam("uid") Integer uid){
+        String url = "http://user/user/findUserById?id="+uid;
+        System.out.println("############URL##########:"+url);
+        UserInfo forObject = restTemplate.getForObject(url, UserInfo.class);
+        return forObject.getOpen();
+    }
+    //回退方法，返回默认值
+    public Integer myFallBack(Integer uid){
+        return -1;//默认数据\兜底数据
+    }
+}
+```
+
+启动postman发10次请求，再查看线程情况，可以发现跟我们设置的是一致的，每个方法两个线程且不共用。
+
+![image-20211215151911699](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215151911699.png)
+
+### 4.3.5 Hystrix工作流程及配置
+
+如下图，当出现调用问题开一个默认10s的时间窗进行判断，如果达到阈值则跳闸，跳闸后开一个默认5s的活动窗口判断远程服务是否调用成功，调用成功则再开一个时间窗口重复流程。
+
+![Hystrix流程20211215](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/Hystrix%E6%B5%81%E7%A8%8B20211215.png)
+
+下面我们对上述条件进行配置
+
+```java
+@HystrixCommand(
+        threadPoolKey = "findOpenStatusByUid",
+        threadPoolProperties = {
+                @HystrixProperty(name="coreSize",value = "2"),// 线程数
+                @HystrixProperty(name="maxQueueSize",value="20") // 等待队列长度
+        },
+        commandProperties = {
+                @HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds",value = "2000"),
+                //配置一个8s内请求次数达到2个失败率达到50%就跳闸的熔断器，跳闸后的活动窗口设置为3s
+                @HystrixProperty(name = "metrics.rollingStats.timeInMilliseconds",value = "8000"),
+                @HystrixProperty(name = "circuitBreaker.requestVolumeThreshold",value = "2"),
+                @HystrixProperty(name = "circuitBreaker.errorThresholdPercentage",value = "50"),
+                @HystrixProperty(name = "circuitBreaker.sleepWindowInMilliseconds",value = "3000")
+
+        },
+        fallbackMethod = "myFallBack"
+)
+@GetMapping("/findOpenStatusByUid")
+public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+    String url = "http://user/user/findUserById?id="+uid;
+    System.out.println("############URL##########:"+url);
+    UserInfo forObject = restTemplate.getForObject(url, UserInfo.class);
+    return forObject.getOpen();
+}
+```
+
+下面我们对验证Hystrix的章台，首先我们在autodeliver工程的配置文件中增加健康检查状态的配置，可以使用`localhost:8070/actuator/health`查看状态
+
+~~~yaml
+# springboot中暴露健康检查等断点接⼝
+management:
+  endpoints:
+   web:
+    exposure:
+     include: "*"
+  # 暴露健康接⼝的细节
+  endpoint:
+   health:
+    show-details: always
+~~~
+
+我们首先启动项目访问健康检查接口，查看hystrix的状态：
+
+![image-20211215154932143](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215154932143.png)
+
+然后我们跟之前一样使用postman执行5次请求，在请求过程中一直访问健康检查接口，可以看到它的跳闸状态，然后在活动窗口时间内可以自我修复。下图为跳闸状态：
+
+![image-20211215155148461](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211215155148461.png)
+
+这些配置也可以配置在配置文件中：我们将代码中的配置注释掉然后在配置文件中编写，重启项目再次验证即可。
+
+```yaml
+#Hystrix熔断策略
+hystrix:
+  command:
+    default:
+      circuitBreaker:
+        # 强制打开熔断器，如果该属性设置为true，强制断路器进⼊打开状态，将会拒绝所有的请求。 默认false关闭的
+        forceOpen: false
+        # 触发熔断错误⽐例阈值，默认值50%
+        errorThresholdPercentage: 50
+        # 熔断后休眠时⻓，默认值5秒
+        sleepWindowInMilliseconds: 3000
+        # 熔断触发最⼩请求次数，默认值是20
+        requestVolumeThreshold: 2
+      execution:
+        isolation:
+         thread:
+          # 熔断超时设置，默认为1秒
+          timeoutInMilliseconds: 2000
+```
+
+## 4.4 Feign远程调用
+
+### 4.4.1 Feign简介
+
+之前服务消费者调用服务提供者时使用RestTemplate技术，但它存在不便，首先需要我们拼接URL，其次需要我们模板化的使用restTemplate。所以有了Feign来解决这个问题。
+
+Feign是Netflflix开发的⼀个轻量RESTful的HTTP服务客户端（⽤它来发起请求，远程调⽤的），是以Java接口注解的⽅式调⽤Http请求，而不用像Java中通过封装HTTP请求报文的方式直接调用，Feign被⼴泛应⽤在Spring Cloud 的解决⽅案中。它类似于Dubbo，服务消费者拿到服务提供者的接⼝，然后像调⽤本地接口⽅法⼀样去调⽤，实际发出的是远程的请求。
+
+SpringCloud对Feign进⾏了增强，使Feign⽀持了SpringMVC注解(OpenFeign)。
+
+> Feign = RestTemplate + Ribbon + Hystrix
+
+### 4.4.2 Feign的应用
+
+
+
+
 
 # 五、SpringCloud高级组件
 
