@@ -870,6 +870,8 @@ Ribbon是Netflflix发布的负载均衡器。Eureka⼀般配合Ribbon进⾏使�
 
 测试前需要复制一份user工程做集群以便查看负载均衡效果。
 
+> 实际开发中，我们只需要部署在不同服务器即可，不需要复制项目来做集群。
+
 ![image-20211214111153065](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211214111153065.png)
 
 下面进行Ribbon的使用，使用时，只需要加一个注解即可：
@@ -1306,9 +1308,297 @@ SpringCloud对Feign进⾏了增强，使Feign⽀持了SpringMVC注解(OpenFeign)
 
 ### 4.4.2 Feign的应用
 
+**feign的应用只需要建立一个feignClient然后将服务提供者的接口放入feignClient即可**，下面结合入门案例进行演示。
 
+之前是用RestTemplate+Ribbon的方式进行远程调用的，为了与之区分我们新建一个工程：
 
+![image-20211217105330650](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211217105330650.png)
 
+我们导入依赖，不需要导入Ribbon和Hystrix，因为Feign = RestTemplate + Ribbon + Hystrix。
+
+```xml
+<dependencies>
+    <dependency>
+        <artifactId>common</artifactId>
+        <groupId>com.learn</groupId>
+        <version>1.0-SNAPSHOT</version>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-starter-openfeign</artifactId>
+    </dependency>
+</dependencies>
+```
+
+然后将配置文件导入：
+
+```yaml
+server:
+  port: 8071
+#注册到Eureka服务中心
+eureka:
+  client:
+    service-url:
+      # 注册到集群，把多个server地址用逗号连接即可。如果Eureka Server是单实例就写一个就行。
+      defaultZone: http://CloudEurekaServerA:8761/eureka/,http://CloudEurekaServerB:8762/eureka/
+  instance:
+    metadata-map:
+      testkey: testvalue
+      myname: haha
+spring:
+  application:
+    name: autodeliver
+# springboot中暴露健康检查等断点接⼝
+management:
+  endpoints:
+   web:
+    exposure:
+     include: "*"
+  # 暴露健康接⼝的细节
+  endpoint:
+   health:
+    show-details: always
+```
+
+然后编写入口类，加入feign的注解：
+
+```java
+@SpringBootApplication
+@EnableDiscoveryClient
+@EnableFeignClients //开启Feign客户端功能
+public class AutoDeliverFeignApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(AutoDeliverFeignApplication.class, args);
+    }
+}
+```
+
+然后我们先把原来的controller拿过来，去掉之前的东西，如下：
+
+```java
+@RestController
+@RequestMapping("/autoDeliverFeign")
+public class AutoDeliverFeignController {
+
+    @GetMapping("/findOpenStatusByUid")
+    public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+        return null;
+    }
+}
+```
+
+现在我们的项目结构如下：
+
+![image-20211217110755709](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211217110755709.png)
+
+现在我们编写Feign的代码：
+
+首先我们创建FeignClient：在controller下建立一个feign的包，然后建立feign客户端接口，如下：
+
+![image-20211217111939330](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211217111939330.png)
+
+```java
+//FeignClient表明当前类是一个FeignClient客户端；value指定要请求的服务名称，本项目中指的是user微服务
+@FeignClient(name = "user")
+@RequestMapping("/user")
+public interface UserServiceFeignClient {
+
+    @GetMapping("/findUserById")
+    UserInfo findUserById(@RequestParam("id") Integer id);
+}
+```
+
+然后我们在controller中调用feign方法即可，feign会自动帮我们访问远程接口
+
+```java
+@RestController
+@RequestMapping("/autoDeliverFeign")
+public class AutoDeliverFeignController {
+
+    @Autowired
+    private UserServiceFeignClient userServiceFeignClient;
+
+    @GetMapping("/findOpenStatusByUid")
+    public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+        //表面上是调用本地方法，实际上feign帮我们拼接url访问远程方法
+        UserInfo userById = userServiceFeignClient.findUserById(uid);
+        return userById.getOpen();
+    }
+}
+```
+
+> 当然，上述过程需要我们访问一个微服务就需要在自己的微服务中建立一个feignClient。
+>
+> 其实我们可以为每一个服务提供者（本例中就是user工程）创建一个api工程，在这个api工程中编写FeignClient，这样就可以把服务提供者的接口暴露出来，供服务消费者调用。
+>
+> 比如创建一个userApi工程，然后将需要别人调用的接口编写成FeignClient，这样别人只需要导入userApi工程的feignClient即可，不需要在自己的项目中编写feignClient。
+
+### 4.4.3 Feign对Ribbon的支持
+
+Feign本身已经集成了Ribbon依赖和自动配置，以此不需要引入额外的依赖，可以通过ribbon.xx进行全局配置或者通过服务名对执行微服务进行配置。
+
+```yaml
+#针对的被调用的微服务名称,不加就是对所有调用的微服务生效
+user:
+  ribbon:
+    #请求连接超时时间
+    ConnectTimeout: 2000
+    #请求处理超时时间
+    ReadTimeout: 5000
+    #对所有操作都进⾏重试
+    OkToRetryOnAllOperations: true
+    ####根据如上配置，当访问到故障请求的时候，它会再尝试访问1次当前实例（次数由MaxAutoRetries配置），
+    ####如果不⾏，就换⼀个实例进⾏访问，如果还不⾏，再换1次实例访问（更换次数由MaxAutoRetriesNextServer配置），
+    ####如果依然不⾏，返回失败信息。
+    MaxAutoRetries: 0 #对当前选中实例重试次数，不包括第⼀次调⽤
+    MaxAutoRetriesNextServer: 0 #切换实例的重试次数
+    NFLoadBalancerRuleClassName: com.netflix.loadbalancer.RoundRobinRule #负载策略调整
+```
+
+### 4.4.4 Feign日志输出
+
+feign是http请求的客户端，它可以打印出一些详细信息，如果我们想看到Feign请求时的⽇志，我们可以进⾏配置，默认情况下Feign的⽇志没有开启。
+
+首先开启Feign日志的功能和级别：
+
+```java
+@Configuration
+public class FeignLogConfig {
+// Feign的⽇志级别（Feign请求过程信息）
+// NONE：默认的，不显示任何⽇志----性能最好
+// BASIC：仅记录请求⽅法、URL、响应状态码以及执⾏时间----⽣产问题追踪
+// HEADERS：在BASIC级别的基础上，记录请求和响应的header
+// FULL：记录请求和响应的header、body和元数据----适⽤于开发及测试环境定位问题
+    @Bean
+    Logger.Level feignLevel(){
+        return Logger.Level.FULL;
+    }
+}
+```
+
+然后配置log日志级别是debug：
+
+```yml
+logging:
+  level:
+    #Feign日志只会对日志级别为debug做出响应
+    com.learn.controller.feign.UserServiceFeignClient: debug
+```
+
+### 4.4.5 Feign对熔断的支持
+
+首先我们在配置文件中开启熔断
+
+```yml
+# 开启Feign的熔断功能
+feign:
+  hystrix:
+   enabled: true
+```
+
+然后编写一个类继承feignClient接口，返回降级数据
+
+```java
+@Component
+public class UserServiceFeignFallback implements UserServiceFeignClient{
+    @Override
+    public UserInfo findUserById(Integer id) {
+        UserInfo userInfo = new UserInfo();
+        userInfo.setOpen(-7);
+        return userInfo;
+    }
+}
+```
+
+最后在feignClien指定降级实现类即可：
+
+```java
+//FeignClient表明当前类是一个FeignClient客户端；value指定要请求的服务名称，本项目中指的是user微服务
+@FeignClient(name = "user", fallback = UserServiceFeignFallback.class, path = "/user")
+//@RequestMapping("/user") //使用fallback时接口上的RequestMapping应该配置path属性中
+public interface UserServiceFeignClient {
+
+    @GetMapping("/findUserById")
+    UserInfo findUserById(@RequestParam("id") Integer id);
+}
+```
+
+这时我们开启服务用postman测试会发现很快就会熔断，这是因为hystrix的熔断超时时长远远小于我们之前4.4.3配置的feign的超时时长，所以会熔断。两者都能配置超时时长，生效取决于最短的时间，来进行熔断。
+
+![image-20211217133306955](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211217133306955.png)
+
+我们可以使用以下配置来修改hystrix的超时时长
+
+```yaml
+#配置hystrix的超时时长
+hystrix:
+ command:
+  default:
+   execution:
+    isolation:
+     thread:
+      timeoutInMilliseconds: 15000
+```
+
+当前也可以使用FallBackFactory，我们创建一个类继承FallbackFactory接口，泛型是我们定义的FeignCclient。
+
+```java
+@Component
+public class UserServiceFeignFallbackFactory implements FallbackFactory<UserServiceFeignClient> {
+
+    @Override
+    public UserServiceFeignClient create(Throwable throwable) {
+        return new UserServiceFeignClient() {
+            @Override
+            public UserInfo findUserById(Integer id) {
+                System.out.println(throwable.getMessage());
+                UserInfo userInfo = new UserInfo();
+                userInfo.setOpen(-7);
+                return userInfo;
+            }
+        };
+    }
+}
+```
+
+然后FeignClient指定工厂：
+
+```java
+@FeignClient(name = "user", fallbackFactory = UserServiceFeignFallbackFactory.class, path = "/user")
+//@RequestMapping("/user") //使用fallback时接口上的RequestMapping应该配置path属性中
+public interface UserServiceFeignClient {
+
+    @GetMapping("/findUserById")
+    UserInfo findUserById(@RequestParam("id") Integer id);
+}
+```
+
+> FallBackFactory与FallBack的区别就是FallBackFactory可以获取到失败原因
+>
+> ![image-20211217170355359](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211217170355359.png)
+
+### 4.4.6 Feign的请求压缩
+
+Feign ⽀持对请求和响应进⾏GZIP压缩，以减少通信过程中的性能损耗。通过下⾯的参数即可开启请求与响应的压缩功能：
+
+```yaml
+feign:
+  hystrix:
+   enabled: true
+  compression:
+    request:
+      enabled: true
+      min-request-size: 2048
+      mime-types: text/html,application/xml,application/json
+    response:
+      enabled: true
+```
+
+## 4.5 GateWay
 
 # 五、SpringCloud高级组件
 
