@@ -1948,7 +1948,120 @@ spring:
 
 ### 4.5.5 过滤器Filter
 
+过滤器的生命周期主要有两个
 
+| 生命周期 | 作用                                                         |
+| -------- | ------------------------------------------------------------ |
+| pre      | 这种过滤器在请求被路由之前调⽤。我们可利⽤这种过滤器实现身份验证、在集群中选择请求的微服务、记录调试信息等 |
+| post     | 这种过滤器在路由到微服务以后执⾏。这种过滤器可⽤来为响应添加标准的HTTP Header、收集统计信息和指标、将响应从微服务发送给客户端等。 |
+
+从过滤器类型的角度。SpringCloudGateway分为GateWayFilter和GlobalFilter两种
+
+| 类型          | 影响范围           |
+| ------------- | ------------------ |
+| GateWayFilter | 应用到单个路由器上 |
+| GlobalFilter  | 应用到所有路由器上 |
+
+首先是GateWayFilter,我们可以配置到单个路由之下，对当前路由使用。
+
+~~~yml
+predicates:
+- Path=/user/name/getname # 断言，路径相匹配的进行路由
+  filters: 
+  - StripPrefix=1 
+~~~
+
+StripPrefix过滤器可以去掉当前的第一个路由，比如我们之前的路径是`localhost:8080/user/name/getname`在加上过滤器之后就变成了`localhost:8080/name/getname`。
+
+当然实际上GlobalFilter的使用频率更高，我们下面对GlobalFilter进行自定义配置。（PS：GateWayFilter也可以自定义，但是一般只用默认配置）
+
+我们通过实现自定义全局过滤器实现IP访问限制的例子来进行GlobalFilter进行配置。
+
+在gateway8060中新建类：
+
+```java
+package com.learn.filter;
+
+import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import org.springframework.cloud.gateway.filter.GlobalFilter;
+import org.springframework.core.Ordered;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.http.server.reactive.ServerHttpResponse;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ServerWebExchange;
+import reactor.core.publisher.Mono;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+
+@Component
+public class BlackListFilter implements GlobalFilter, Ordered {
+    //模拟黑名单，实际可以存入redis或mysql
+    private static List<String> blackList = new ArrayList<>();
+
+    static {
+        blackList.add("0:0:0:0:0:0:0:1");//模拟本地地址
+    }
+
+    /**
+     * 过滤器的核心方法
+     *
+     * @param exchange 封装了request和response对象的上下文
+     * @param chain    网关过滤器链（包含全局和单路由过滤器）
+     * @return
+     */
+    @Override
+    public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        //获取客户端ip，判断是否在黑名单中，在的话拒绝，不在就放行
+        ServerHttpRequest request = exchange.getRequest();
+        ServerHttpResponse response = exchange.getResponse();
+        String clientIp = request.getRemoteAddress().getHostString();
+        if (blackList.contains(clientIp)) {
+            response.setStatusCode(HttpStatus.UNAUTHORIZED);
+            System.out.println("在黑名单中，拒绝访问，clientIP="+clientIp);
+            DataBuffer wrap = response.bufferFactory().wrap("Request be refused".getBytes(StandardCharsets.UTF_8));
+            return response.writeWith(Mono.just(wrap));
+        }
+        return chain.filter(exchange);
+    }
+
+    /**
+     * 返回值表示当前过滤器的优先级（顺序），数值越小优先级越高
+     *
+     * @return
+     */
+    @Override
+    public int getOrder() {
+        return 0;
+    }
+}
+```
+
+因为网关在微服务体系十分重要，所以需要实现高可用，我们可以通过集群的方式通过上游用Nginx完成负载均衡即可。
+
+## 4.6 Spring Cloud Config
+
+### 4.6.1 简介
+
+在项目中我们需要配置文件进行一些配置，在单体应用中，配置信息的管理不会很麻烦，因为就一个工程，但是在微服务体系下有很多工程，我们不可能一个个的去配置重启然后生效，有时候我们还需要在运行期间动态调整配置信息。所以我们需要对配置文件进行集中式管理，这就是分布式配置中心的作用。
+
+Spring Cloud Conﬁg是⼀个分布式配置管理⽅案，包含了Server端和Client端两个部分。
+
+Server 端：提供配置⽂件的存储、以接⼝的形式将配置⽂件的内容提供出去，通过使⽤@EnableConﬁgServer注解在Spring boot 应⽤中⾮常简单的嵌⼊
+Client 端：通过接⼝获取配置数据并初始化自己的应用。
+
+## 4.7 Spring Cloud Stream消息驱动组件
+
+Spring Cloud Stream 消息驱动组件帮助我们更快速，更⽅便，更友好的去构建消息驱动微服务。
+
+### 4.7.1 Stream简介
+
+MQ消息中间件广泛用在应用解耦合，异步消息处理，流量削峰等场景中。不同的MQ消息中间件内部机制会有不同，比如RabbitMQ中有Exchange概念，kafka有Topic、Partition分区等概念，MQ的差异性不利于我们上层开发，因为可能应用程序和具体的MQ耦合了，当我们想切换MQ产品时，我们发现比较困难，很多需要重写。
+
+Spring Cloud Stream就进行了很好的上层抽象，可以让我们与具体的消息中间件解耦合，屏蔽掉了底层具体MQ消息中间件的细节差异，就像Hibernate屏蔽掉了具体数据库，目前Spring Cloud Stream支持RabbitMQ和KafKa。
 
 # 五、SpringCloud高级组件
 
