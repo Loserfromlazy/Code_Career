@@ -1600,6 +1600,356 @@ feign:
 
 ## 4.5 GateWay
 
+Spring Cloud GateWay是Spring Cloud的⼀个全新项⽬，⽬标是取代Netflflix Zuul，它基于Spring5.0+SpringBoot2.0+WebFlux（基于⾼性能的Reactor模式响应式通信框架Netty，异步⾮阻塞模型）等技术开发，性能⾼于Zuul，官⽅测试，GateWay是Zuul的1.6倍，旨在为微服务架构提供⼀种简单有效的统⼀的API路由管理⽅式。
+
+### 4.5.1 GateWay工作流程
+
+Spring Cloud GateWay不仅提供统⼀的路由⽅式（反向代理）并且基于 Filter(定义过滤器对请求过滤，完成⼀些功能) 链的⽅式提供了⽹关基本的功能，例如：鉴权、流量控制、熔断、路径重写、⽇志监控等。
+
+![gateway20211221](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/gateway20211221.png)
+
+Spring Cloud GateWay是天生异步非阻塞的基于Reactor模型，一个请求打到网关，网关需要根据一定的条件匹配，然后将请求转发到指定的服务地址，在这个转发的过程中我们可以进行一些具体的控制，比如限流、日志、黑白名单等。
+
+1. 路由（route）： ⽹关最基础的部分，也是⽹关⽐较基础的⼯作单元。路由由⼀个ID、⼀个⽬标URL（最终路由到的地址）、⼀系列的断⾔（匹配条件判断）和Filter过滤器（精细化控制）组成。如果断⾔为true，则匹配该路由。
+2. 断⾔（predicates）：参考了Java8中的断⾔java.util.function.Predicate，开发⼈员可以匹配Http请求中的所有内容（包括请求头、请求参数等）（类似于nginx中的location匹配⼀样），如果断⾔与请求相匹配则路由。
+3. 过滤器（fifilter）：⼀个标准的Spring webFilter，使⽤过滤器，可以在请求之前或者之后执⾏业务逻辑。
+
+![image-20211221150512460](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211221150512460.png)
+
+上图来自官网客户端向Spring Cloud GateWay发出请求，然后在GateWay Handler Mapping中找到与请求相匹配的路由，将其发送到GateWay Web Handler；Handler再通过指定的过滤器链来将请求发送到我们实际的服务执⾏业务逻辑，然后返回。过滤器之间⽤虚线分开是因为过滤器可能会在发送代理请求之前（pre）或者之后（post）执⾏业务逻辑。
+
+Filter在“pre”类型过滤器中可以做参数校验、权限校验、流量监控、⽇志输出、协议转换等，在“post”类型的过滤器中可以做响应内容、响应头的修改、⽇志的输出、流量监控等。GateWay核⼼逻辑：路由转发+执⾏过滤器链。
+
+### 4.5.2 GateWay应用
+
+我们在案例中的应用主要是通过网关对自动投递微服务进行代理（相当于隐藏了具体微服务的信息，对外暴露网关）
+
+我们创建gateway8060项目，注意不继承父工程因为gateway使用的是webflux，但父工程引入了web模块，然后编辑pom文件，增加依赖。
+
+> PS：也可以自行改变项目结构，将web从父模块移除，因为很麻烦所以这里直接不继承父工程，直接导入依赖。
+
+![image-20211221155111019](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211221155111019.png)
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--spring boot ⽗启动器依赖-->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>2.3.3.RELEASE</version>
+        <relativePath/><!--项目报错可以加上这个-->
+    </parent>
+    <groupId>com.learn</groupId>
+    <artifactId>gateway8060</artifactId>
+    <version>1.0-SNAPSHOT</version>
+
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>Hoxton.RELEASE</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-commons</artifactId>
+        </dependency>
+        <!--eureka client客户端-->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+        <!--gateway-->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-gateway</artifactId>
+        </dependency>
+        <!--webflux-->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-logging</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+            <version>1.18.20</version>
+        </dependency>
+        <!--热部署-->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>
+```
+
+> 如果报错'parent.relativePath' of POM com.learn:gateway8060:1.0-SNAPSHOT可以加上`<relativePath/>`有一解释说报错原因是本身在父项目中，但是`<parent>`不是父项目
+
+然后我们编辑启动类：
+
+```java
+@SpringBootApplication
+@EnableDiscoveryClient  //开启注册中心客户端（通用型注解，比如注册到Eureka、
+public class GateWay8060 {
+    public static void main(String[] args) {
+        SpringApplication.run(GateWay8060.class,args);
+    }
+}
+```
+
+最后编写配置文件：
+
+```yaml
+server:
+  port: 8060
+#注册到Eureka服务中心
+eureka:
+  client:
+    service-url:
+      # 注册到集群，把多个server地址用逗号连接即可。如果Eureka Server是单实例就写一个就行。
+      defaultZone: http://CloudEurekaServerA:8761/eureka/,http://CloudEurekaServerB:8762/eureka/
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      routes:
+        - id: cloud-autodeliver # 路由的id,没有规定规则但要求唯一,建议配合服务名
+          #匹配后提供服务的路由地址
+          uri: http://127.0.0.1:8071
+          predicates:
+            - Path=/autoDeliverFeign/** # 断言，路径相匹配的进行路由
+        - id: cloud-user # 路由的id,没有规定规则但要求唯一,建议配合服务名
+            #匹配后提供服务的路由地址
+          uri: http://127.0.0.1:8091
+          predicates:
+            - Path=/user/** # 断言，路径相匹配的进行路由
+```
+
+然后我们可以启动工程，访问网关，可以看到访问结果成功：
+
+![image-20211221162808629](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211221162808629.png)
+
+### 4.5.3 GatwWay路由规则
+
+**时间匹配**
+
+Spring Cloud Gateway支持设置一个时间，在请求进行转发的时候，可以通过判断在这个时间之前或者之后或者之间进行转发
+
+~~~yml
+server:
+  port: 8080
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      routes:
+      - id: route
+        uri: lb://test
+        predicates:
+        - Path=/user/**
+        - After=2020-01-09T00:00:00+08:00[Asia/Shanghai]
+        #- Before=2020-01-09T00:00:00+08:00[Asia/Shanghai]
+        #- Between=2020-01-01T00:00:00+08:00[Asia/Shanghai],2020-01-09T00:00:00+08:00[Asia/Shanghai]
+      - id: oss-route
+        uri: lb://test-OSS
+        predicates:
+        - Path=/oss/**
+~~~
+
+**Cookie匹配**
+
+例子如下：带上cookies访问，且userCode为123456，则正常返回。
+
+~~~yml
+server:
+  port: 8080
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      routes:
+      - id: route
+        uri: lb://test
+        predicates:
+        - Path=/user/**
+        - Cookie=userCode,123456
+~~~
+
+**Header匹配**
+
+Header 匹配 和 Cookie 匹配 一样，也是接收两个参数，一个 header 中属性名称和一个正则表达式，这个属性值和正则表达式匹配则执行。例子：上面的匹配规则，就是请求头要有token属性，并且值必须为数字和字母组合的正则表达式。
+
+~~~yml
+server:
+  port: 8080
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      routes:
+      - id: route
+        uri: lb://test
+        predicates:
+        - Path=/user/**
+        - Header=token,^(?!\d+$)[\da-zA-Z]+$
+~~~
+
+**Host匹配**
+
+Host匹配 接收一组参数，一组匹配的域名列表，它通过参数中的主机地址作为匹配规则。
+
+~~~yml
+server:
+  port: 8080
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      routes:
+      - id: route
+        uri: lb://test
+        predicates:
+        - Host=**.baidu.com
+~~~
+
+**请求方式匹配**
+
+~~~yml
+server:
+  port: 8080
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      routes:
+      - id: route
+        uri: lb://test
+        predicates:
+        - Method=GET //或者POST，PUT
+~~~
+
+**请求路径匹配**
+
+~~~yml
+server:
+  port: 8080
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      routes:
+      - id: route
+        uri: lb://test
+        predicates:
+        - Path=/user/{segment}
+~~~
+
+**请求参数匹配**
+
+Query匹配 支持传入两个参数，一个是属性名，一个为属性值，属性值可以是正则表达式。
+
+~~~yml
+predicates:
+ - Query=token, \d+
+~~~
+
+**请求地址匹配**
+
+通过设置某个 ip 区间号段的请求才会路由。
+
+~~~yml
+predicates:
+ - RemoteAddr=192.168.1.1/24
+~~~
+
+### 4.5.4 动态路由
+
+在4.5.2中我们直接写死了实例地址，但如果我们有集群的话就不是很好，所以我们可以使用动态路由，从注册中心拿。动态路由可以通过`lb://服务名称`写。
+
+修改配置文件：
+
+```yaml
+server:
+  port: 8060
+#注册到Eureka服务中心
+eureka:
+  client:
+    service-url:
+      # 注册到集群，把多个server地址用逗号连接即可。如果Eureka Server是单实例就写一个就行。
+      defaultZone: http://CloudEurekaServerA:8761/eureka/,http://CloudEurekaServerB:8762/eureka/
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      routes:
+        - id: cloud-autodeliver # 路由的id,没有规定规则但要求唯一,建议配合服务名
+          #匹配后提供服务的路由地址
+          uri: lb://autodeliver
+          predicates:
+            - Path=/autoDeliverFeign/** # 断言，路径相匹配的进行路由
+        - id: cloud-user # 路由的id,没有规定规则但要求唯一,建议配合服务名
+          #匹配后提供服务的路由地址
+          uri: lb://user
+          predicates:
+            - Path=/user/** # 断言，路径相匹配的进行路由
+```
+
+我们测试user服务来进行测试是否是动态路由（因为autodeliver看不出来）
+
+我们postman发送请求
+
+![image-20211221164842669](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211221164842669.png)
+
+然后看user的两个服务
+
+![image-20211221164913775](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211221164913775.png)
+
+![image-20211221164925613](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211221164925613.png)
+
+可以看到可以进行动态路由。
+
+### 4.5.5 过滤器Filter
+
+
+
 # 五、SpringCloud高级组件
 
 
