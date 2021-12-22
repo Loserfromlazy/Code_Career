@@ -2503,7 +2503,43 @@ hystrix:
 >
 > 配置完后需要创建对应的数据库，同时在数据库的表中需要执行conf文件夹下的nacos-mysql.sql文件。
 
+启动后我们可以看到
 
+![image-20211222161923827](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222161923827.png)
+
+刚启动节点的状态会变成CANDIDATE，也就是大家都在竞争leader
+
+![image-20211222160625303](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222160625303.png)
+
+等一会后再刷新我么可以看到nacos已经竞争出了leader和follower
+
+![image-20211222161804590](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222161804590.png)
+
+这种leader和follower的模式我们是需要3台以上的机器来搭建集群。
+
+客户端访问到集群跟Eureka类似，逗号分隔即可：
+
+```yml
+spring:
+  application:
+    name: autodeliver
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 192.168.22.162:8848,192.168.22.162:8849,192.168.22.162:8850
+      config:
+        server-addr: 192.168.22.162:8848,192.168.22.162:8849,192.168.22.162:8850
+        file-extension: yml
+        namespace: autodeliver
+        extension-configs[0]:
+          data-id: test.yml
+          group: DEFAULT_GROUP
+          refresh: true
+        extension-configs[1]:
+          data-id: test.properties
+          group: DEFAULT_GROUP
+          refresh: true
+```
 
 ### 5.1.6 nacos作为配置中心
 
