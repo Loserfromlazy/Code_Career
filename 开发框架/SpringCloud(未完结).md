@@ -1967,11 +1967,15 @@ spring:
 ~~~yml
 predicates:
 - Path=/user/name/getname # 断言，路径相匹配的进行路由
-  filters: 
-  - StripPrefix=1 
+filters: 
+- StripPrefix=1 
 ~~~
 
-StripPrefix过滤器可以去掉当前的第一个路由，比如我们之前的路径是`localhost:8080/user/name/getname`在加上过滤器之后就变成了`localhost:8080/name/getname`。
+StripPrefix过滤器可以去掉当前的第一个路由，比如我们之前的路径是`localhost:8080/user/name/getname`在加上过滤器之后就变成了`localhost:8080/name/getname`。测试结果：
+
+![image-20211222091828406](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222091828406.png)
+
+![image-20211222091842158](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222091842158.png)
 
 当然实际上GlobalFilter的使用频率更高，我们下面对GlobalFilter进行自定义配置。（PS：GateWayFilter也可以自定义，但是一般只用默认配置）
 
@@ -2040,7 +2044,11 @@ public class BlackListFilter implements GlobalFilter, Ordered {
 }
 ```
 
-因为网关在微服务体系十分重要，所以需要实现高可用，我们可以通过集群的方式通过上游用Nginx完成负载均衡即可。
+我们通过postman测试，测试结果：
+
+![image-20211222091552276](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222091552276.png)
+
+> 因为网关在微服务体系十分重要，所以需要实现高可用，我们可以通过集群的方式通过上游用Nginx完成负载均衡即可。
 
 ## 4.6 Spring Cloud Config
 
@@ -2050,8 +2058,216 @@ public class BlackListFilter implements GlobalFilter, Ordered {
 
 Spring Cloud Conﬁg是⼀个分布式配置管理⽅案，包含了Server端和Client端两个部分。
 
-Server 端：提供配置⽂件的存储、以接⼝的形式将配置⽂件的内容提供出去，通过使⽤@EnableConﬁgServer注解在Spring boot 应⽤中⾮常简单的嵌⼊
+Server 端：提供配置⽂件的存储、以接⼝的形式将配置⽂件的内容提供出去，通过使⽤@EnableConﬁgServer注解在Spring boot 应⽤中非常简单的嵌⼊
 Client 端：通过接⼝获取配置数据并初始化自己的应用。
+
+![CloudConfig20121222](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/CloudConfig20121222.png)
+
+### 4.6.2 Config配置中心应用
+
+首先我们在Gitee上创建一个仓库然后增加一个测试用的配置文件：
+
+![image-20211222093957001](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222093957001.png)
+
+创建configserver工程引入依赖
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>MyGirl</artifactId>
+        <groupId>com.learn</groupId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <artifactId>serverConfig</artifactId>
+
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-config-server</artifactId>
+        </dependency>
+    </dependencies>
+</project>
+```
+
+然后创建启动类：注意需要注解@EnableConfigServer
+
+```java
+@SpringBootApplication
+@EnableDiscoveryClient
+@EnableConfigServer
+public class ServerConfigApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(ServerConfigApplication.class,args);
+    }
+}
+```
+
+编写配置文件：
+
+```yml
+server:
+  port: 8050
+#注册到Eureka服务中心
+eureka:
+  client:
+    service-url:
+      # 注册到集群，把多个server地址用逗号连接即可。如果Eureka Server是单实例就写一个就行。
+      defaultZone: http://CloudEurekaServerA:8761/eureka/,http://CloudEurekaServerB:8762/eureka/
+spring:
+  application:
+    name: serverconfig
+  cloud:
+    config:
+      server:
+        git:
+          uri: https://gitee.com/yhr520/config-server.git #git地址
+          username: #git用户名
+          password: #git密码
+          search-paths:
+            - config-server
+      label: master #分支
+# springboot中暴露健康检查等断点接⼝
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  # 暴露健康接⼝的细节
+  endpoint:
+    health:
+      show-details: always
+```
+
+![image-20211222094630180](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222094630180.png)
+
+搭建完工程后我们启动工程然后访问`http://localhost:8050/master/test-dev.yml`
+
+第一个master是分支名称，第二个是文件名称，测试结果如下：可以获取配置文件信息
+
+![image-20211222093718227](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222093718227.png)
+
+### 4.6.3 Config客户端应用
+
+我们在入门案例的autodeliver工程进行修改，其他工程几乎一样，可以自己完成修改。
+
+首先在项目中增加依赖
+
+~~~xml
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-config-client</artifactId>
+</dependency>
+~~~
+
+然后将application.yml改为bootstrap.yml,然后增加config客户端的配置
+
+```yml
+spring:
+  application:
+    name: autodeliver
+  cloud:
+    config:
+      name: test #配置文件名文件名可以配多个逗号分隔
+      profile: dev #后缀名
+      label: master #分支名
+      uri: http://localhost:8050
+```
+
+然后我们创建一个Controller，测试能否拿到配置中心的配置
+
+```java
+@RestController
+@RequestMapping("config")
+public class ConfigTestController {
+
+    @Value("${testname.namestr}")
+    private String testStr;
+
+    @RequestMapping("testGetConfig")
+    public String testGetConfig(){
+        return testStr;
+    }
+}
+```
+
+打开postman进行测试，测试结果：
+
+![image-20211222095948355](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222095948355.png)
+
+> 其实我们可以将全部配置信息都放入Condig远端，然后本地只留一个bootstrap拉取其他配置，这样所有配置信息都在远端管理，但是本例只是学习用所以并没有那么做。
+>
+> 即bootstrap只留以下信息：
+>
+> ```yml
+> spring:
+>   application:
+>     name: autodeliver
+>   cloud:
+>     config:
+>       name: test #配置文件名文件名可以配多个逗号分隔
+>       profile: dev #后缀名
+>       label: master #分支名
+>       uri: http://localhost:8050
+> #注册到Eureka服务中心
+> eureka:
+>   client:
+>     service-url:
+>       # 注册到集群，把多个server地址用逗号连接即可。如果Eureka Server是单实例就写一个就行。
+>       defaultZone: http://CloudEurekaServerA:8761/eureka/,http://CloudEurekaServerB:8762/eureka/
+> ```
+
+### 4.6.4 Spring Cloud Config的配置文件刷新
+
+我们修改远端仓库的值：
+
+![image-20211222100922362](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222100922362.png)
+
+在访问配置中心的端口：
+
+![image-20211222101001238](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222101001238.png)
+
+发现配置中心能够实时获取配置的修改。然后我们在访问配置的客户端（即Autodeliver）的接口
+
+![image-20211222101107079](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222101107079.png)
+
+发现客户端会有缓存。这时我们可以手动刷新。
+
+**手动刷新**
+
+首先在boostrap中加上如下配置
+
+```yml
+management:
+  endpoints:
+   web:
+    exposure:
+     include: "*" #暴露的端口也可以指定refresh只暴露刷新端口
+```
+
+然后再客户端使用到配置信息的类上添加@RefreshScope
+
+然后手动发起请求`http://localhost:8071/actuator/refresh`
+
+测试前将远端仓库重新修改为haha222，因为添加@RefreshScope需要重启工程。
+
+然后我们发起请求，测试结果如下：
+
+![image-20211222101738006](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222101738006.png)
+
+![image-20211222101759550](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222101759550.png)
 
 ## 4.7 Spring Cloud Stream消息驱动组件
 
@@ -2063,9 +2279,329 @@ MQ消息中间件广泛用在应用解耦合，异步消息处理，流量削峰
 
 Spring Cloud Stream就进行了很好的上层抽象，可以让我们与具体的消息中间件解耦合，屏蔽掉了底层具体MQ消息中间件的细节差异，就像Hibernate屏蔽掉了具体数据库，目前Spring Cloud Stream支持RabbitMQ和KafKa。
 
-# 五、SpringCloud高级组件
+# 五、SpringCloudAlibaba核心组件
+
+## 5.1 Nacos服务发现和配置中心
+
+Nacos （Dynamic Naming and Confifiguration Service）是阿⾥巴巴开源的⼀个针对微服务架构中服务发现、配置管理和服务管理平台。Nacos就是注册中心+配置中心的组合Nacos=Eureka+Config+Bus
+
+### 5.1.1 Nacos单例服务部署
+
+官网下载安装包，解压。然后将 startup.cmd记事本打开，修改mode为单机模式，如下图：
+
+![image-20211222104600489](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222104600489.png)
+
+然后双击启动即可。linux在解压后执行命令即可
+
+~~~sh
+sh startup.sh -m standalone
+~~~
+
+输入`localhost://127.0.0.1:8848/nacos`账号密码都是nacos
+
+### 5.1.2 服务提供者注册到Nacos
+
+首先我们创建user8092nacos工程，这是为了与之前eureka做区分，所以新建一个工程然后在这里进行修改。
+
+![image-20211222124941202](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222124941202.png)
+
+我们在父pom中增加阿里的微服务依赖
+
+```xml
+<dependency>
+    <groupId>com.alibaba.cloud</groupId>
+    <artifactId>spring-cloud-alibaba-dependencies</artifactId>
+    <version>2.2.2.RELEASE</version>
+    <type>pom</type>
+    <scope>import</scope>
+</dependency>
+```
+
+然后再user8092nacos工程的pom中增加nacos注册中心依赖
+
+```xml
+<!--nacos client客户端-->
+<dependency>
+    <groupId>com.alibaba.cloud</groupId>
+    <artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId>
+</dependency>
+```
+
+然后编辑application.yml
+
+```yml
+server:
+  port: 8092
+spring:
+  application:
+    name: user
+  #配置注册到nacos服务端
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/my_girl?allowMultiQueries=true&useUnicode=true&characterEncoding=UTF-8
+    username: root
+    password: 123456
+# springboot中暴露健康检查等断点接⼝
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  # 暴露健康接⼝的细节
+  endpoint:
+    health:
+      show-details: always
+```
+
+然后登录nacos页面查看
+
+![image-20211222125538669](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222125538669.png)
+
+点击详情查看
+
+![image-20211222132225160](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222132225160.png)
+
+服务已经注册上来了，然后我们以同样的方式在创建一个工程，做一下集群（**再强调一遍，正常情况下是同一个工程在不同服务器上实现集群，目前因为是学习项目，所以才这样做集群**）：
+
+![image-20211222125911769](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222125911769.png)
+
+启动注册到nacos上，这时我们发现
+
+![image-20211222125949222](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222125949222.png)
+
+> 保护阈值：这实际上是一个0-1的浮点数，其实是一个比例值：当前服务健康实例数/当前服务总实例数。
+>
+> 一般情况下，nacos在服务为消费者获取一个服务的实例信息时，会把健康的实例信息返回，但在高并发的情况下会出现问题，比如A服务有100个实例，但是95个事不健康的，如果nacos只返回那五个健康的实例的话，流量洪峰会让这5个实例也扛不住，如果这5个也挂了，就会造成雪崩。
+>
+> 所以当一个服务的健康实例数/总实例数<保护阈值时，说明健康实例不多了，这时候保护阈值就会触发（状态改为true），nacos会把健康的不健康的都返回给消费者，这样虽然会造成请求失败，但是比雪崩会好，因为这样时牺牲了一些请求来保证整个系统的可用。
+
+### 5.1.3 服务消费者注册到Nacos
+
+同样的，为了与eureka做对比，我们也给autodeliver也新建一个工程切换到nacos上，配置方式与上面相同。
+
+![image-20211222131357946](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222131357946.png)
+
+配置文件：
+
+```yml
+server:
+  port: 8072
+spring:
+  application:
+    name: autodeliver
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+# springboot中暴露健康检查等断点接⼝
+management:
+  endpoints:
+   web:
+    exposure:
+     include: "*"
+  # 暴露健康接⼝的细节
+  endpoint:
+   health:
+    show-details: always
+#针对的被调用的微服务名称,不加就是对所有调用的微服务生效
+user:
+  ribbon:
+    #请求连接超时时间
+    ConnectTimeout: 2000
+    #请求处理超时时间
+    ReadTimeout: 8000
+    #对所有操作都进行重试
+    OkToRetryOnAllOperations: true
+    ####根据如上配置，当访问到故障请求的时候，它会再尝试访问1次当前实例（次数由MaxAutoRetries配置），
+    ####如果不行，就换一个实例进行访问，如果还不行，再换1次实例访问（更换次数由MaxAutoRetriesNextServer配置），
+    ####如果依然不行，返回失败信息。
+    MaxAutoRetries: 0 #对当前选中实例重试次数，不包括第一次调用
+    MaxAutoRetriesNextServer: 0 #切换实例的重试次数
+    NFLoadBalancerRuleClassName: com.netflix.loadbalancer.RoundRobinRule #负载策略调整
+logging:
+  level:
+    #Feign日志只会对日志级别为debug做出响应
+    com.learn.controller.feign.UserServiceFeignClient: debug
+# 开启Feign的熔断功能
+feign:
+  hystrix:
+   enabled: true
+  compression:
+    request:
+      enabled: true #开启请求压缩
+      min-request-size: 2048 #出发压缩的大小下限
+      mime-types: text/html,application/xml,application/json #设置压缩的数据类型
+    response:
+      enabled: true #开启响应压缩
+#配置hystrix的超时时长
+hystrix:
+ command:
+  default:
+   execution:
+    isolation:
+     thread:
+      timeoutInMilliseconds: 8000
+```
+
+> Nacos客户端引⼊的时候，会关联引⼊Ribbon的依赖包，我们使⽤OpenFiegn的时候也会引⼊Ribbon的依赖，Ribbon包括Hystrix都按原来⽅式进⾏配置即可。
+
+创建完启动工程，查看nacos：
+
+![image-20211222131523774](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222131523774.png)
+
+我们可以通过postman进行测试：可以看到访问成功且进行了负载均衡
+
+![image-20211222132424499](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222132424499.png)
+
+![image-20211222132611233](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222132611233.png)
+
+![image-20211222132622606](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222132622606.png)
+
+### 5.1.4数据模型
+
+![nacosmodel20211222](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/nacosmodel20211222.png)
+
+> Namespace：命名空间，对不同的环境进⾏隔离，比如隔离开发环境、测试环境和⽣产环境
+>
+> Group：分组，将若⼲个服务或者若⼲个配置集归为⼀组，通常习惯⼀个系统归为⼀个组
+>
+> Service：某⼀个服务，⽐如简历微服务
+>
+> DataId：配置集或者可以认为是⼀个配置⽂件
+>
+> Namespace + Group + Service如同Maven中的GAV坐标，GAV坐标是为了锁定Jar，而这里是为了锁定服务
+>
+> Namespace + Group + DataId是为了锁定配置⽂件
+
+### 5.1.5 nacos集群
+
+安装3个或以上nacos，修改nacos的application.properties配置文件中的server.port属性8848、8849、8850，然后修改ip地址为127.0.0.1，三个nacos都要改，如下图
+
+![image-20211222141735736](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222141735736.png)
+
+然后我们创建cluster.conf在文件中输入集群中的全部ip和端口，然后拷贝到每一个nacos的conf文件夹中。
+
+~~~
+#it is ip
+#example
+127.0.0.1:8848
+127.0.0.1:8849
+127.0.0.1:8850
+~~~
+
+将三个nacos都启动即可。
+
+> 我的nacos版本是1.3.2，集群启动会报错，需要配置数据库才能启动。
+>
+> 配置数据库在applicatin.properties中配置数据库连接和密码
+>
+> ![image-20211222155242373](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222155242373.png)
+>
+> 配置完后需要创建对应的数据库，同时在数据库的表中需要执行conf文件夹下的nacos-mysql.sql文件。
 
 
 
-# 六、SpringCloudAlibaba核心组件
+### 5.1.6 nacos作为配置中心
+
+nacos作为配置中心非常简单，不再需要git仓库和bus。
+
+跟SpringConfig一样，是可以只留boostrap，其他配置全部从nacos中拉取，因为是学习项目所以只在nacos中建一个简单的配置文件，然后让客户端去拉去配置文件,下面进行配置。
+
+我们在nacos中建立配置文件：
+
+![image-20211222133833803](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222133833803.png)
+
+![image-20211222140824367](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222140824367.png)
+
+![image-20211222140838399](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222140838399.png)
+
+然后我们在微服务中开启nacos作为配置中心。（在autodeliver中演示配置，user同理）
+
+首先添加依赖：
+
+```xml
+<dependency>
+    <groupId>com.alibaba.cloud</groupId>
+    <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+</dependency>
+```
+
+微服务通过 Namespace + Group + dataId 来锁定配置⽂件，Namespace不指定就默认public，Group不指定就默认 DEFAULT_GROUP
+
+DataId的格式：`${prefix}-${spring.profile.active}.${file-extension}`
+
+- prefix默认为spring.applicatin.name的值，也可以通过spring.cloud.nacos.config.prefix来配置
+- spring.profile.active即当前环境的profile，当此项为空时，dataId直接变成`${prefix}.${file-extension}`
+- file-extension为配置内容的数据格式，可以通过file-extension来配置，目前只支持properties和yaml
+
+添加配置：
+
+```yml
+spring:
+  application:
+    name: autodeliver
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+      config:
+        server-addr: 127.0.0.1:8848
+        file-extension: yml
+        namespace: autodeliver
+        extension-configs[0]:
+          data-id: test.yml
+          group: DEFAULT_GROUP
+          refresh: true
+        extension-configs[1]:
+          data-id: test.properties
+          group: DEFAULT_GROUP
+          refresh: true
+```
+
+优先级：根据规则⽣成的dataId > 扩展的dataId（对于扩展的dataId，[n] n越⼤优先级越⾼）
+
+然后我们在需要使用的类上使用@RefreshScope实现配置的自动更新。
+
+```java
+@RestController
+@RequestMapping("config")
+@RefreshScope
+public class ConfigTestController {
+
+    @Value("${test.name}")
+    private String name;
+    @Value("${test.sex}")
+    private String sex;
+
+    @RequestMapping("testGetConfig")
+    public String testGetConfig(){
+        return "name="+name+";sex="+sex;
+    }
+}
+```
+
+使用postman进行测试
+
+![image-20211222140804424](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222140804424.png)
+
+然后我们测试动态刷新：先修改配置
+
+![image-20211222140923969](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222140923969.png)
+
+然后访问postman，发现可以进行动态刷新配置：
+
+![image-20211222141000714](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222141000714.png)
+
+## 5.2 Sentinal服务熔断限流
+
+> 未完结
+
+# 六、SpringCloud高级组件
+
+> 未完结
+>
 
