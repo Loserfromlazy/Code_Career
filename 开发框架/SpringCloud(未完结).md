@@ -2279,6 +2279,8 @@ MQ消息中间件广泛用在应用解耦合，异步消息处理，流量削峰
 
 Spring Cloud Stream就进行了很好的上层抽象，可以让我们与具体的消息中间件解耦合，屏蔽掉了底层具体MQ消息中间件的细节差异，就像Hibernate屏蔽掉了具体数据库，目前Spring Cloud Stream支持RabbitMQ和KafKa。
 
+> 未完结
+
 # 五、SpringCloudAlibaba核心组件
 
 ## 5.1 Nacos服务发现和配置中心
@@ -2632,9 +2634,107 @@ public class ConfigTestController {
 
 ![image-20211222141000714](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222141000714.png)
 
-## 5.2 Sentinal服务熔断限流
+## 5.2 Sentinel服务熔断限流
 
-> 未完结
+Sentinel是一个面向云原生微服务的流量控制、熔断降级组件。主要是用来替代Hystrix，主要针对服务雪崩、服务降级、服务熔断、服务限流等问题。
+
+与Hystrix对比：
+
+- Hystrix需要自己搭建监控平台，而且没有提供UI界面进行服务熔断、降级等配置（Hystrix是通过代码来配置，这入侵了我们的源程序）
+- Sentinel有独立可部署DashBoard的控制台组件，而且减少代码开发，通过UI界面配置既可以完成细粒度控制
+
+Sentinel分为两个部分：
+
+1. 核心库：java客户端，不依赖任何框架，能运行于Java运行时环境，对SpringCloud等框架也有较好的支持
+2. 控制台：基于SpringBoot开发，打包后可以直接运行，不需额外的tomcat等容器。
+
+### 5.2.1 控制台部署
+
+[Github下载地址](https://github.com/alibaba/Sentinel/releases)
+
+启动方式`java -Dserver.port=8080 -jar sentinel-dashboard.jar`
+
+其中 `-Dserver.port=8080` 用于指定 Sentinel 控制台端口为 `8080`。也可以加`&`来后台启动。
+
+启动后就可以登录，账号密码：sentinel/sentinel
+
+![image-20211223162112551](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211223162112551.png)
+
+刚登录什么都没有，需要我们将微服务注册上去。下面我们通过autodeliver工程来实现sentinel配置。
+
+### 5.2.2 Sentinel应用
+
+为了保留之前的配置方式，所以我们按照autodelivernacos复制一份工程，然后删除hystrix的配置，并删除原有OpenFeign的降级配置。
+
+![image-20211223163124477](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211223163124477.png)
+
+然后我们在这个工程进行sentinel的改造，首先导入依赖
+
+```xml
+<!--sentinel-->
+<dependency>
+    <groupId>com.alibaba.cloud</groupId>
+    <artifactId>spring-cloud-starter-alibaba-sentinel</artifactId>
+</dependency>
+```
+
+然后配置Sentinal注册到DashBoard：
+
+```yml
+server:
+  port: 8073
+spring:
+  application:
+    name: autodeliver
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 192.168.22.162:8848,192.168.22.162:8849,192.168.22.162:8850
+      config:
+        server-addr: 192.168.22.162:8848,192.168.22.162:8849,192.168.22.162:8850
+        file-extension: yml
+        namespace: autodeliver
+        extension-configs[0]:
+          data-id: test.yml
+          group: DEFAULT_GROUP
+          refresh: true
+        extension-configs[1]:
+          data-id: test.properties
+          group: DEFAULT_GROUP
+          refresh: true
+    sentinel:
+      transport:
+        dashboard: 127.0.0.1:8080 #dashboard地址
+        port: 8719 #此端口用于与Sentinel控制台交互，如果8719被占用会依次加一
+# springboot中暴露健康检查等断点接⼝
+management:
+  endpoints:
+   web:
+    exposure:
+     include: "*"
+  # 暴露健康接⼝的细节
+  endpoint:
+   health:
+    show-details: always
+user:
+  ribbon:
+    ConnectTimeout: 2000
+    ReadTimeout: 8000
+    OkToRetryOnAllOperations: true
+    MaxAutoRetries: 0 
+    MaxAutoRetriesNextServer: 0
+    NFLoadBalancerRuleClassName: com.netflix.loadbalancer.RoundRobinRule
+```
+
+我们启动并通过postman发送请求，在控制台中查看：
+
+> 如果启动后发现Sentinel控制台什么都没有，那么发送一次请求即可，因为Sentinel是懒加载
+
+![image-20211223164337941](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211223164337941.png)
+
+### 5.2.3 Sentinel中的概念
+
+
 
 # 六、SpringCloud高级组件
 
