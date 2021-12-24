@@ -2734,6 +2734,121 @@ user:
 
 ### 5.2.3 Sentinel中的概念
 
+| 名称 | 描述                                                         |
+| ---- | ------------------------------------------------------------ |
+| 资源 | 它是Java应用程序中的任何内容，例如由应用程序提供的服务，或者是由应用程序调用的其它应用提供的服务，甚至可以是一段代码。（也可以简单的理解为API接口就是资源） |
+| 规则 | 围绕资源的实时状态设定的规则，可以包括流量控制规则，熔断降级规则以及系统保护规则。所有规则可以动态实时调整。 |
+
+![image-20211224093954223](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224093954223.png)
+
+如上图，在簇点链路中我们可以看到现有的资源，当然在右上角切换为列表视图我们可以只看到接口，这样更直观和清晰。
+
+### 5.2.4 Sentinel中的流量规则
+
+在接口的操作中或者在流控规则中都可以新增定义流控规则，如下图： 
+
+![image-20211224094311808](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224094311808.png)
+
+或者流控规则中也可以：
+
+![image-20211224094351623](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224094351623.png)
+
+在Sentinel的流控中有阈值类型、流控模式和流控效果我们点击新增流控规则，即可看到：
+
+![image-20211224094916883](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224094916883.png)
+
+下面对这些进行一一详解。
+
+- 资源名：请求路径
+- 针对来源：Sentinel可以针对调用者进行限流，可以填写微服务名称，如果是default就不区分来源
+- 阈值类型/单机阈值
+  - QPS（每秒钟请求数量）：当调用该资源的QPS达到阈值进行限流
+  - 线程数：当调用该资源的线程数达到阈值进行限流（线程处理请求时，如果业务逻辑很长，当流量洪峰来临时，会消耗很多线程资源，这些线程资源会堆积，最终造成服务的不可用，甚至雪崩）
+- 流控模式
+  - 直接：资源调用达到限流条件时，直接限流。
+  - 关联：关联的资源调用达到阈值时限流自己。
+  - 链路：只记录指定链路上的流量。
+- 流控效果
+  - 快速失败：直接失败，抛出异常
+  - Warm Up：根据冷加载因子（默认3）的值，从阈值或者冷加载因子开始，经过预热时长，才能达到设置的QPS阈值。
+  - 排队等待：匀速排队，让请求匀速通过，阈值类型必须是QPS，否则无效
+
+我们下面进行验证：首先**验证QPS和线程数**
+
+#### 阈值类型应用：QPS和线程数
+
+我们对接口进行限流设置：将其他都默认，将类型设置为QPS，阈值设置为1，然后打开postman进行快速发送请求，我们会发现Sentinel会抛出失败，因为我们点击的速度超过了1QPS，所以会限流：
+
+![image-20211224101958912](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224101958912.png)
+
+然后将流控设置改为：将其他都默认，将类型设置为线程数，阈值设置为1，然后将接口增加以下代码让线程休眠5s：
+
+```java
+@GetMapping("/findOpenStatusByUid")
+public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+    UserInfo userById = userServiceFeignClient.findUserById(uid);
+    return userById.getOpen();
+}
+```
+
+然后postman开两个窗口访问同一个接口，第一个窗口5s后会返回结果，第二个窗口会返回失败，因为同时访问线程达到了2超过阈值进行限流。
+
+![image-20211224102631008](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224102631008.png)
+
+第二个窗口：
+
+![image-20211224102652679](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224102652679.png)
+
+#### 流控模式应用：直接、关联和链路
+
+直接模式略，上面已经试过。
+
+**关联模式**：关联的资源调用达到阈值限流自己
+
+我们以案例来验证此功能，比如我们用户注册接口需要调用身份验证接口，如果身份验证接口请求达到阈值使用关联模式可以直接对用户注册接口进行限流。我们首先在autodeliverSentinel（在这个工程中编写是为了方便，因为这个工程已经注册到Sentinel中了）中编写这两个接口：
+
+```java
+@RestController
+@RequestMapping("/user")
+public class UserController {
+
+    @GetMapping("/register")
+    public String register(){
+        System.out.println("注册成功");
+        return "注册成功";
+    }
+
+    @GetMapping("/validateID")
+    public String validateID(){
+        System.out.println("验证身份成功");
+        return "验证身份成功";
+    }
+}
+```
+
+然后我们进行Sentinel设置，如下图，设置完之后`/validateID`达到阈值后`/register`会被限流：
+
+![image-20211224164741295](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224164741295.png)
+
+我们在postman中每0.5s发一次`/validateID`请求发送20次（使用RunCollection即可，使用方法见4.3.4关于postman的RunCollection介绍），在这期间我们访问`/register`接口，我们发现此接口会被限流，当postman的RunCollection执行完之后，我们再访问就不会被限流了。：
+
+![image-20211224165353732](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211224165353732.png)
+
+**链路模式**
+
+
+
+### 5.2.5 Sentinel中的降级规则
+
+### 5.2.6 自定义兜底数据
+
+### 5.2.7 基于nacos的Sentinel规则持久化
+
 
 
 # 六、SpringCloud高级组件
