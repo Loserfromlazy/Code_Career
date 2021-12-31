@@ -3031,9 +3031,17 @@ public class SentinelFallback {
 
 ### 5.2.7 基于nacos的Sentinel规则持久化
 
-Sentinel的规则数据都是存储在内存中的，所以一旦我们停掉微服务，数据就会消失，因此我们可以将规则数据持久化到nacos上，让微服务获取nacos数据。
+Sentinel的规则数据都是存储在内存中的，所以一旦我们停掉微服务，数据就会消失，因此我们可以将规则数据持久化到nacos上，让微服务获取nacos数据。Sentinel的持久化一共有三种模式：
 
-下面我们在autodeliverSentinel中进行规则数据持久化配置。
+1. 规则存在内存中
+2. 拉模式，规则存在文件中
+3. 推模式，规则存在数据源中
+
+官方文档介绍如下：
+
+![image-20211230112032993](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211230112032993.png)
+
+我们用第三种模式：下面我们在autodeliverSentinel中进行规则数据持久化配置。
 
 首先我们导入依赖：
 
@@ -3070,9 +3078,1107 @@ sentinel:
         rule-type: degrade #类型来自RuleType
 ```
 
+在nacos上的public的DEFAULT_GROUP添加两个配置文件
 
+![image-20211229132615700](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211229132615700.png)
+
+内容分别是：以下规则可以在源码**FlowRule**类和**DegradeRule**类中找到
+
+autodeliver-flow-rules
+
+~~~json
+[
+    {
+        "resource":"/findOpenStatusByUid",
+        "limitApp":"default",
+        "grade":1,
+        "count":1,
+        "strategy":0,
+        "controlBehavior":0,
+        "clusterMode":false
+    }
+]
+~~~
+
+autodeliver-degrade-rules
+
+~~~json
+[
+    {
+        "resource":"/findOpenStatusByUid",
+        "grade":2,
+        "count":1,
+        "timeWindow":5
+    }
+]
+~~~
+
+启动工程就可以在Sentinel中看到我们配置的规则了。这种配置的特点如下：
+
+1. ⼀个资源可以同时有多个限流规则和降级规则，所以配置集中是⼀个json数组。
+2. 这种配置方式在Sentinel控制台中修改规则，仅是内存中⽣效，不会修改Nacos中的配置值，重启后恢复原来的值； Nacos控制台中修改规则，不仅内存中⽣效，Nacos中持久化规则也⽣效，重启后规则依然保持。**也就是说只能在Nacos中对配置进行更改**
+
+> 这部分官方文档写的很不清楚，我查了很多资料按照上面的流程走了一遍，发现并不能完成配置同步，可能是版本是1.8的原因，所以这个版本可以直接去改源码，实现双向配置。
+
+所以如果想实现互相修改都能保存规则，那么可以通过修改源代码的方式实现。
+
+## 5.3 Sentinel源码1.8版本
+
+### 5.3.1 工程搭建
+
+下载Sentinel源码并解压，源码在Github可以下载。解压后用IDEA打开，如下图，可以通过dashboard启动类来启动工程，这时我们就可以使用我们自己的入门案例连接到这个控制台上。
+
+![image-20211231091214016](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231091214016.png)
+
+项目结构：
+
+- sentinel-core 核心模块，限流降级、系统保护等实现
+- sentinel-dashboard控制台模块，可以实现可视化管理
+- sentinel-transport传输模块，提供了基本的监控服务端和客户端的API接口，以及一些基于不同库的实现。
+- sentinel-extension扩展模块，主要对datasource进行了部分扩展
+- sentinel-adapter适配器模块，主要对以下常见框架进行了适配
+- sentinel-demo样例模块，可以参考
+- sentinel-benchmark基准测试模块，对核心代码的精确性提供基准测试。
+
+> 如果控制台打开页面时会一直转圈，可以清除浏览器缓存，缓存会造成打开sentinel页面时一直转圈。
+
+### 5.3.2 入门案例
+
+在[Github的wiki](https://github.com/alibaba/Sentinel/wiki/%E4%BB%8B%E7%BB%8D)上有Sentinel简单的使用案例：
+
+```java
+public static void main(String[] args) {
+    initFlowRules();
+    while (true) {
+        Entry entry = null;
+        try {
+	    entry = SphU.entry("HelloWorld");
+            /*您的业务逻辑 - 开始*/
+            System.out.println("hello world");
+            /*您的业务逻辑 - 结束*/
+	} catch (BlockException e1) {
+            /*流控逻辑处理 - 开始*/
+	    System.out.println("block!");
+            /*流控逻辑处理 - 结束*/
+	} finally {
+	   if (entry != null) {
+	       entry.exit();
+	   }
+	}
+    }
+}
+```
+
+当然上面的代码是对业务有侵入性的所以也提供了注解模式即`@SentinelResource`，我们之前已经介绍过了。
+
+我们下面使用SphU的方式写一个案例，方便我们理解源码：
+
+我们在autodeliverSentinel工程中新建一个OrderController，然后编写如下代码：
+
+```java
+@RestController
+@RequestMapping("/order")
+public class OrderController {
+
+    @RequestMapping("/testFunc")
+    public String testFunc(String application,long id){
+        initFlowRules();
+       
+        ContextUtil.enter("user",application);
+        Entry entry = null;
+        try {
+            //1 SphU.entry
+            entry = SphU.entry("testFunc", EntryType.IN);
+            /*您的业务逻辑 - 开始*/
+            System.out.println("hello world");
+            return getOrderName(id);
+            /*您的业务逻辑 - 结束*/
+        } catch (BlockException e1) {//2 BlockException异常分支
+            /*流控逻辑处理 - 开始*/
+            System.out.println("block!");
+            throw new RuntimeException("系统繁忙");
+            /*流控逻辑处理 - 结束*/
+        } finally {
+            if (entry != null) {
+                entry.exit();
+            }
+        }
+
+    }
+	//用此方法模拟调用其他服务的接口
+    public String getOrderName(long id){
+        Entry entry = null;
+        try {
+            entry = SphU.entry("getOrderName");
+            /*您的业务逻辑 - 开始*/
+            return "BuySomething";
+            /*您的业务逻辑 - 结束*/
+        } catch (BlockException e1) {
+            /*流控逻辑处理 - 开始*/
+            return null;
+            /*流控逻辑处理 - 结束*/
+        } finally {
+            if (entry != null) {
+                entry.exit();
+            }
+        }
+    }
+    private static void initFlowRules(){
+        List<FlowRule> rules = new ArrayList<>();
+        FlowRule rule = new FlowRule();
+        rule.setResource("testFunc");
+        rule.setGrade(RuleConstant.FLOW_GRADE_QPS);
+        // Set limit QPS to 20.
+        rule.setCount(20);
+        rules.add(rule);
+        FlowRuleManager.loadRules(rules);
+    }
+
+}
+```
+
+我们对上面的代码进行解释，部分解释来自源码，注意实际开发不会这么写，目前是为了分析源码：
+
+1. Entry，这时Sentinel的重点，对于`SphU#entry`方法,作用是记录统计信息并对给定资源进行规则检查，它有很多重载，我们这里介绍上面代码中的两个参数
+
+   - 第一个参数是标识资源，通常就是我们的接口标识，对于数据统计、规则控制等，我们一般都是在这个粒度上进行的，**根据这个字符串来唯一标识**，我们跟源码进入会发现，它最后会被包装成ResourceWrapper 实例，ResourceWrapper 的hashCode和equals源码如下，可以证实**资源是根据这个字符串来唯一标识**
+
+     ```java
+     @Override
+     public int hashCode() {
+         return getName().hashCode();
+     }
+     
+     @Override
+     public boolean equals(Object obj) {
+         if (obj instanceof ResourceWrapper) {
+             ResourceWrapper rw = (ResourceWrapper)obj;
+             return rw.getName().equals(getName());
+         }
+         return false;
+     }
+     ```
+
+   - 第二个参数标识资源的类型，我们的代码使用了 `EntryType.IN` 代表这个是入口流量，比如我们的接口对外提供服务，那么我们通常就是控制入口流量；`EntryType.OUT` 代表出口流量，比如上面的 getOrderName方法（没写默认就是 OUT源码，自行查看源码确认），这个流量类型主要在`SystemSlot` 类中实现自适应限流。
+
+2. BlockException：进入 BlockException 异常分支，代表该次请求被流量控制规则限制了，我们一般会让代码走入到熔断降级的逻辑里面。当然，BlockException 其实有好多个子类，如 DegradeException、FlowException 等，我们也可以 catch 具体的子类来进行处理。
+
+### 5.3.3 Sentinel客户端与dashboard通信
+
+在 Sentinel 的源码中，打开 sentinel-transport 工程，可以看到三个子工程，common 是基础包和接口定义。
+
+![image-20211231102115695](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231102115695.png)
+
+如果客户端要接入 dashboard，可以使用 netty-http 或 simple-http 中的一个。我们这里使用http的方式。
+
+我们在使用Sentinel时需要执行`SphU#entry`方法，源码如下：
+
+```java
+public static Entry entry(String name) throws BlockException {
+    return Env.sph.entry(name, EntryType.OUT, 1, OBJECTS0);
+}
+```
+
+这里有一个Env类，这个类是用来与dashboard通信的。
+
+```java
+public class Env {
+
+    public static final Sph sph = new CtSph();
+
+    static {
+        // If init fails, the process will exit.
+        InitExecutor.doInit();
+    }
+
+}
+```
+
+这个类有一个doInit方法，点进去源码如下：
+
+```java
+public static void doInit() {
+    if (!initialized.compareAndSet(false, true)) {
+        return;
+    }
+    try {
+        ServiceLoader<InitFunc> loader = ServiceLoaderUtil.getServiceLoader(InitFunc.class);
+        List<OrderWrapper> initList = new ArrayList<OrderWrapper>();
+        for (InitFunc initFunc : loader) {
+            RecordLog.info("[InitExecutor] Found init func: " + initFunc.getClass().getCanonicalName());
+            insertSorted(initList, initFunc);
+        }
+        for (OrderWrapper w : initList) {
+            //断点
+            w.func.init();
+            RecordLog.info(String.format("[InitExecutor] Executing %s with order %d",
+                w.func.getClass().getCanonicalName(), w.order));
+        }
+    } catch (Exception ex) {
+        RecordLog.warn("[InitExecutor] WARN: Initialization failed", ex);
+        ex.printStackTrace();
+    } catch (Error error) {
+        RecordLog.warn("[InitExecutor] ERROR: Initialization failed with fatal error", error);
+        error.printStackTrace();
+    }
+}
+```
+
+我们在`w.func.init();`这行加入断点，这里使用 SPI 加载 InitFunc 的实现。可以发现这里加载了 `CommandCenterInitFunc` 类和 `HeartbeatSenderInitFunc` 类。
+
+![image-20211231102612027](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231102612027.png)![image-20211231102641295](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231102641295.png)
+
+前者是客户端启动的接口服务，提供给 dashboard 查询数据和规则设置使用的。后者用于客户端主动发送心跳信息给 dashboard。
+
+**客户端服务注册**
+
+我们先看`HeartbeatSenderInitFunc#init`方法
+
+```java
+@Override
+public void init() {
+    //SPI机制，如果我们添加了http的依赖，那么 SimpleHttpHeartbeatSender 就会被加载,可以自行断点查看
+    HeartbeatSender sender = HeartbeatSenderProvider.getHeartbeatSender();
+    if (sender == null) {
+        RecordLog.warn("[HeartbeatSenderInitFunc] WARN: No HeartbeatSender loaded");
+        return;
+    }
+
+    initSchedulerIfNeeded();
+    //设置心跳任务发送的时间间隔，默认10s
+    long interval = retrieveInterval(sender);
+    setIntervalIfNotExists(interval);
+    //启动心跳任务
+    scheduleHeartbeatTask(sender, interval);
+}
+```
+
+我们跟进去查看sendHeartbeat()方法
+
+```java
+    @Override
+    public boolean sendHeartbeat() throws Exception {
+        if (TransportConfig.getRuntimePort() <= 0) {
+            RecordLog.info("[SimpleHttpHeartbeatSender] Command server port not initialized, won't send heartbeat");
+            return false;
+        }
+        //获取Socket连接地址
+        Tuple2<String, Integer> addrInfo = getAvailableAddress();
+        if (addrInfo == null) {
+            return false;
+        }
+        InetSocketAddress addr = new InetSocketAddress(addrInfo.r1, addrInfo.r2);
+        //封装SimpleHttpRequest对象，发送路径/registry/machine
+        SimpleHttpRequest request = new SimpleHttpRequest(addr, TransportConfig.getHeartbeatApiPath());
+        request.setParams(heartBeat.generateCurrentMessage());
+        try {
+            //发送请求，ps：在这行打断点就可以看到发送路径
+            SimpleHttpResponse response = httpClient.post(request);
+            if (response.getStatusCode() == OK_STATUS) {
+                return true;
+            } else if (clientErrorCode(response.getStatusCode()) || serverErrorCode(response.getStatusCode())) {
+                RecordLog.warn("[SimpleHttpHeartbeatSender] Failed to send heartbeat to " + addr
+                    + ", http status code: " + response.getStatusCode());
+            }
+        } catch (Exception e) {
+            RecordLog.warn("[SimpleHttpHeartbeatSender] Failed to send heartbeat to " + addr, e);
+        }
+        return false;
+    }
+```
+
+请求参数截图：
+
+![image-20211231105227885](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231105227885.png)
+
+有了路径后我们可以搜索这个请求，在**dashboard**的MachineRegistryController中可以看见请求最终到达receiverHeartBeat方法。
+
+```java
+@ResponseBody
+@RequestMapping("/machine")
+public Result<?> receiveHeartBeat(String app, @RequestParam(value = "app_type", required = false, defaultValue = "0") Integer appType, Long version, String v, String hostname, String ip, Integer port) {
+    if (app == null) {
+        app = MachineDiscovery.UNKNOWN_APP_NAME;
+    }
+    if (ip == null) {
+        return Result.ofFail(-1, "ip can't be null");
+    }
+    if (port == null) {
+        return Result.ofFail(-1, "port can't be null");
+    }
+    if (port == -1) {
+        logger.info("Receive heartbeat from " + ip + " but port not set yet");
+        return Result.ofFail(-1, "your port not set yet");
+    }
+    String sentinelVersion = StringUtil.isEmpty(v) ? "unknown" : v;
+    version = version == null ? System.currentTimeMillis() : version;
+    try {
+        MachineInfo machineInfo = new MachineInfo();
+        machineInfo.setApp(app);
+        machineInfo.setAppType(appType);
+        machineInfo.setHostname(hostname);
+        machineInfo.setIp(ip);
+        machineInfo.setPort(port);
+        machineInfo.setHeartbeatVersion(version);
+        machineInfo.setLastHeartbeat(System.currentTimeMillis());
+        machineInfo.setVersion(sentinelVersion);
+        //将接收到的信息添加到应用程序管理中
+        appManagement.addMachine(machineInfo);
+        return Result.ofSuccessMsg("success");
+    } catch (Exception e) {
+        logger.error("Receive heartbeat error", e);
+        return Result.ofFail(-1, e.getMessage());
+    }
+}
+```
+
+**客户端处理请求**
+
+在sentinel中数据存储先流规则都是在客户端存储的。实现类CommandCenterInitFunc完成sentinel服务端发送过来的请求相关操作。我们再看`CommandCenterInitFunc#init`方法。
+
+```java
+//命令中心初始化类
+@InitOrder(-1)
+public class CommandCenterInitFunc implements InitFunc {
+
+    @Override
+    public void init() throws Exception {
+        CommandCenter commandCenter = CommandCenterProvider.getCommandCenter();
+
+        if (commandCenter == null) {
+            RecordLog.warn("[CommandCenterInitFunc] Cannot resolve CommandCenter");
+            return;
+        }
+        //注册处理器
+        commandCenter.beforeStart();
+        //启动命令中心
+        commandCenter.start();
+        RecordLog.info("[CommandCenterInit] Starting command center: "
+                + commandCenter.getClass().getCanonicalName());
+    }
+}
+```
+
+我们进入到beforeStart()方法，打断点会发现handlers会注册所有的处理器，然后最后会将所有的处理器注册到handlerMap中。
+
+```java
+@Override
+@SuppressWarnings("rawtypes")
+public void beforeStart() throws Exception {
+    // Register handlers
+    Map<String, CommandHandler> handlers = CommandHandlerProvider.getInstance().namedHandlers();
+    registerCommands(handlers);
+}
+@SuppressWarnings("rawtypes")
+public static void registerCommands(Map<String, CommandHandler> handlerMap) {
+    if (handlerMap != null) {
+        for (Entry<String, CommandHandler> e : handlerMap.entrySet()) {
+            registerCommand(e.getKey(), e.getValue());
+        }
+    }
+}
+
+@SuppressWarnings("rawtypes")
+public static void registerCommand(String commandName, CommandHandler handler) {
+    if (StringUtil.isEmpty(commandName)) {
+        return;
+    }
+
+    if (handlerMap.containsKey(commandName)) {
+        CommandCenterLog.warn("Register failed (duplicate command): " + commandName);
+        return;
+    }
+	
+    handlerMap.put(commandName, handler);
+}
+```
+
+以上就是注册处理器的工作，然后我们进入`commandCenter#start`方法，此方法会创建并执行一个serverInitTask线程，在这个线程中启用一个ServerThread线程监听socket请求，在ServerThread中将接收到的socket封装成HttpEventTask由业务线程去处理。
+
+```java
+@Override
+    public void start() throws Exception {
+        int nThreads = Runtime.getRuntime().availableProcessors();
+        //创建业务线程池
+        this.bizExecutor = new ThreadPoolExecutor(nThreads, nThreads, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<Runnable>(10),
+            new NamedThreadFactory("sentinel-command-center-service-executor"),
+            new RejectedExecutionHandler() {
+                @Override
+                public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
+                    CommandCenterLog.info("EventTask rejected");
+                    throw new RejectedExecutionException();
+                }
+            });
+
+        Runnable serverInitTask = new Runnable() {
+            int port;
+
+            {
+                try {
+                    //获取端口号，没有就设置默认端口8719
+                    port = Integer.parseInt(TransportConfig.getPort());
+                } catch (Exception e) {
+                    port = DEFAULT_PORT;
+                }
+            }
+
+            @Override
+            public void run() {
+                boolean success = false;
+                //根据端口创建一个可用的Socket连接
+                ServerSocket serverSocket = getServerSocketFromBasePort(port);
+
+                if (serverSocket != null) {
+                    CommandCenterLog.info("[CommandCenter] Begin listening at port " + serverSocket.getLocalPort());
+                    socketReference = serverSocket;
+                    //在主线程中在启用一个ServerThread线程监听请求
+                    executor.submit(new ServerThread(serverSocket));
+                    success = true;
+                    port = serverSocket.getLocalPort();
+                } else {
+                    CommandCenterLog.info("[CommandCenter] chooses port fail, http command center will not work");
+                }
+                if (!success) {
+                    port = PORT_UNINITIALIZED;
+                }
+                TransportConfig.setRuntimePort(port);
+                executor.shutdown();
+            }
+        };
+        new Thread(serverInitTask).start();
+    }
+
+private static ServerSocket getServerSocketFromBasePort(int basePort) {
+    int tryCount = 0;
+    while (true) {
+        try {
+            //如果发现端口占用情况则默认加一，重试三次
+            ServerSocket server = new ServerSocket(basePort + tryCount / 3, 100);
+            server.setReuseAddress(true);
+            return server;
+        } catch (IOException e) {
+            tryCount++;
+            try {
+                TimeUnit.MILLISECONDS.sleep(30);
+            } catch (InterruptedException e1) {
+                break;
+            }
+        }
+    }
+    return null;
+}
+
+class ServerThread extends Thread {
+
+        private ServerSocket serverSocket;
+
+        ServerThread(ServerSocket s) {
+            this.serverSocket = s;
+            setName("sentinel-courier-server-accept-thread");
+        }
+
+        @Override
+        public void run() {
+            while (true) {
+                Socket socket = null;
+                try {
+                    //socket监听
+                    socket = this.serverSocket.accept();
+                    setSocketSoTimeout(socket);
+                    //将接收到的socket封装成HttpEventTask由业务线程去处理
+                    HttpEventTask eventTask = new HttpEventTask(socket);
+                    bizExecutor.submit(eventTask);
+                } catch (Exception e) {
+                    CommandCenterLog.info("Server error", e);
+                    if (socket != null) {
+                        try {
+                            socket.close();
+                        } catch (Exception e1) {
+                            CommandCenterLog.info("Error when closing an opened socket", e1);
+                        }
+                    }
+                    try {
+                        // In case of infinite log.
+                        Thread.sleep(10);
+                    } catch (InterruptedException e1) {
+                        // Indicates the task should stop.
+                        break;
+                    }
+                }
+            }
+        }
+    }
+```
+
+我们进入到`HttpEventTask#run`中，这里主要是处理接收到socket监听的请求后的业务逻辑。首先是读取消息内容，然后将消息封装成CommandRequest对象，然后在handlerMap中找到请求的commandName对应的处理器，然后执行该处理器的handle方法。
+
+```java
+@Override
+public void run() {
+    if (socket == null) {
+        return;
+    }
+
+    PrintWriter printWriter = null;
+    InputStream inputStream = null;
+    try {
+        long start = System.currentTimeMillis();
+        inputStream = new BufferedInputStream(socket.getInputStream());
+        OutputStream outputStream = socket.getOutputStream();
+
+        printWriter = new PrintWriter(
+            new OutputStreamWriter(outputStream, Charset.forName(SentinelConfig.charset())));
+        //读取消息内容
+        String firstLine = readLine(inputStream);
+        CommandCenterLog.info("[SimpleHttpCommandCenter] Socket income: " + firstLine
+            + ", addr: " + socket.getInetAddress());
+        //封装CommandRequest对象
+        CommandRequest request = processQueryString(firstLine);
+
+        if (firstLine.length() > 4 && StringUtil.equalsIgnoreCase("POST", firstLine.substring(0, 4))) {
+            // Deal with post method
+            processPostRequest(inputStream, request);
+        }
+
+        // Validate the target command.验证目标命令是否合法
+        String commandName = HttpCommandUtils.getTarget(request);
+        if (StringUtil.isBlank(commandName)) {
+            writeResponse(printWriter, StatusCode.BAD_REQUEST, INVALID_COMMAND_MESSAGE);
+            return;
+        }
+
+        // Find the matching command handler.找到匹配的命令处理程序
+        //在getHandler中就是通过handlerMap进行key的匹配
+        CommandHandler<?> commandHandler = SimpleHttpCommandCenter.getHandler(commandName);
+        if (commandHandler != null) {
+            //执行处理方法
+            CommandResponse<?> response = commandHandler.handle(request);
+            handleResponse(response, printWriter);
+        } else {
+            // No matching command handler.
+            writeResponse(printWriter, StatusCode.BAD_REQUEST, "Unknown command `" + commandName + '`');
+        }
+
+        long cost = System.currentTimeMillis() - start;
+        CommandCenterLog.info("[SimpleHttpCommandCenter] Deal a socket task: " + firstLine
+            + ", address: " + socket.getInetAddress() + ", time cost: " + cost + " ms");
+    } catch (RequestException e) {
+        writeResponse(printWriter, e.getStatusCode(), e.getMessage());
+    } catch (Throwable e) {
+        CommandCenterLog.warn("[SimpleHttpCommandCenter] CommandCenter error", e);
+        try {
+            if (printWriter != null) {
+                String errorMessage = SERVER_ERROR_MESSAGE;
+                e.printStackTrace();
+                if (!writtenHead) {
+                    writeResponse(printWriter, StatusCode.INTERNAL_SERVER_ERROR, errorMessage);
+                } else {
+                    printWriter.println(errorMessage);
+                }
+                printWriter.flush();
+            }
+        } catch (Exception e1) {
+            CommandCenterLog.warn("Failed to write error response", e1);
+        }
+    } finally {
+        closeResource(inputStream);
+        closeResource(printWriter);
+        closeResource(socket);
+    }
+}
+```
+
+不同的处理器的handle方法肯定是不同的，所以我们以其中一个ModifyRulesCommandHandler处理器举例，这是个流控规则的处理器。我们先来验证这个处理器：
+
+我们先在dashboard页面新增一个限流规则，在新增前在对应的dashboard的controller打上断点。
+
+新增流控规则如下，先不点新增按钮：
+
+![image-20211231132355049](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231132355049.png)
+
+我们先去找这个对应的代码，加上断点，然后回到页面点新增按钮，断点就会停下，如下图：
+
+![image-20211231132613916](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231132613916.png)
+
+`apiAddFlowRule`方法代码如下，dashboard前台将规则信息传给后台，后台封装到entity保存，然后在发布规则：
+
+```java
+@PostMapping("/rule")
+@AuthAction(PrivilegeType.WRITE_RULE)
+public Result<FlowRuleEntity> apiAddFlowRule(@RequestBody FlowRuleEntity entity) {
+    Result<FlowRuleEntity> checkResult = checkEntityInternal(entity);
+    if (checkResult != null) {
+        return checkResult;
+    }
+    entity.setId(null);
+    Date date = new Date();
+    entity.setGmtCreate(date);
+    entity.setGmtModified(date);
+    entity.setLimitApp(entity.getLimitApp().trim());
+    entity.setResource(entity.getResource().trim());
+    try {
+        //dashboard保存流控规则信息
+        entity = repository.save(entity);
+        //发布规则        
+        publishRules(entity.getApp(), entity.getIp(), entity.getPort()).get(5000, TimeUnit.MILLISECONDS);
+        return Result.ofSuccess(entity);
+    } catch (Throwable t) {
+        Throwable e = t instanceof ExecutionException ? t.getCause() : t;
+        logger.error("Failed to add new flow rule, app={}, ip={}", entity.getApp(), entity.getIp(), e);
+        return Result.ofFail(-1, e.getMessage());
+    }
+}
+
+//publishRules代码如下：
+private CompletableFuture<Void> publishRules(String app, String ip, Integer port) {
+    //查询之前保存的规则
+    List<FlowRuleEntity> rules = repository.findAllByMachine(MachineInfo.of(app, ip, port));
+    //发布规则：实际上是将信息通过http请求，发布到客户端，具体代码可以自己跟进去看
+    return sentinelApiClient.setFlowRuleOfMachineAsync(app, ip, port, rules);
+}
+
+```
+
+上述代码断点后查看的entity信息：
+
+![image-20211231133207926](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231133207926.png)
+
+跟代码到发送http请求的地方，发现会拼接信息，然后发送POST请求，注意这里的SET_RULES_PATH是setRules
+
+![image-20211231135443868](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231135443868.png)
+
+到这为止是dashboard将规则发送到sentinel客户端，我们在sentinel客户端打上断点，打断点的位置就是之前说过的`HttpEventTask#run`中，我们可以看到dashboard发送过来的请求，也可以看到SET_RULES_PATH就是setRules
+
+![image-20211231140103627](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231140103627.png)
+
+我们继续一步一步执行，发现setRules的处理器是ModifyRulesCommandHandler
+
+![image-20211231140331991](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231140331991.png)
+
+我们查看`ModifyRulesCommandHandler#handle`的代码：
+
+```java
+    @Override
+    public CommandResponse<String> handle(CommandRequest request) {
+        //强制失败fastjson过老的版本
+        // XXX from 1.7.2, force to fail when fastjson is older than 1.2.12
+        // We may need a better solution on this.
+        if (VersionUtil.fromVersionString(JSON.VERSION) < FASTJSON_MINIMAL_VER) {
+            // fastjson too old
+            return CommandResponse.ofFailure(new RuntimeException("The \"fastjson-" + JSON.VERSION
+                    + "\" introduced in application is too old, you need fastjson-1.2.12 at least."));
+        }
+        //获取规则类型
+        String type = request.getParam("type");
+        // rule data in get parameter
+        //获取参数
+        String data = request.getParam("data");
+        if (StringUtil.isNotEmpty(data)) {
+            try {
+                data = URLDecoder.decode(data, "utf-8");
+            } catch (Exception e) {
+                RecordLog.info("Decode rule data error", e);
+                return CommandResponse.ofFailure(e, "decode rule data error");
+            }
+        }
+
+        RecordLog.info("Receiving rule change (type: {}): {}", type, data);
+
+        String result = "success";
+
+        if (FLOW_RULE_TYPE.equalsIgnoreCase(type)) {//限流
+            List<FlowRule> flowRules = JSONArray.parseArray(data, FlowRule.class);
+            FlowRuleManager.loadRules(flowRules);
+            if (!writeToDataSource(getFlowDataSource(), flowRules)) {
+                result = WRITE_DS_FAILURE_MSG;
+            }
+            return CommandResponse.ofSuccess(result);
+        } else if (AUTHORITY_RULE_TYPE.equalsIgnoreCase(type)) {//授权
+            List<AuthorityRule> rules = JSONArray.parseArray(data, AuthorityRule.class);
+            AuthorityRuleManager.loadRules(rules);
+            if (!writeToDataSource(getAuthorityDataSource(), rules)) {
+                result = WRITE_DS_FAILURE_MSG;
+            }
+            return CommandResponse.ofSuccess(result);
+        } else if (DEGRADE_RULE_TYPE.equalsIgnoreCase(type)) {//熔断
+            List<DegradeRule> rules = JSONArray.parseArray(data, DegradeRule.class);
+            DegradeRuleManager.loadRules(rules);
+            if (!writeToDataSource(getDegradeDataSource(), rules)) {
+                result = WRITE_DS_FAILURE_MSG;
+            }
+            return CommandResponse.ofSuccess(result);
+        } else if (SYSTEM_RULE_TYPE.equalsIgnoreCase(type)) {//系统规则
+            List<SystemRule> rules = JSONArray.parseArray(data, SystemRule.class);
+            SystemRuleManager.loadRules(rules);
+            if (!writeToDataSource(getSystemSource(), rules)) {
+                result = WRITE_DS_FAILURE_MSG;
+            }
+            return CommandResponse.ofSuccess(result);
+        }
+        return CommandResponse.ofFailure(new IllegalArgumentException("invalid type"));
+    }
+```
+
+我们当前传递的参数是限流，所以进入到`FlowRuleManager.loadRules(flowRules);`加载规则方法：
+
+我们一直让代码一直往下走：
+
+![image-20211231141846957](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231141846957.png)
+
+我们继续进入buildFlowRuleMap：
+
+```java
+public static <K> Map<K, List<FlowRule>> buildFlowRuleMap(List<FlowRule> list, Function<FlowRule, K> groupFunction,
+                                                          Predicate<FlowRule> filter, boolean shouldSort) {
+    Map<K, List<FlowRule>> newRuleMap = new ConcurrentHashMap<>();
+    if (list == null || list.isEmpty()) {
+        return newRuleMap;
+    }
+    Map<K, Set<FlowRule>> tmpMap = new ConcurrentHashMap<>();
+	//遍历规则
+    for (FlowRule rule : list) {
+        if (!isValidRule(rule)) {
+            RecordLog.warn("[FlowRuleManager] Ignoring invalid flow rule when loading new flow rules: " + rule);
+            continue;
+        }
+        if (filter != null && !filter.test(rule)) {
+            continue;
+        }
+        if (StringUtil.isBlank(rule.getLimitApp())) {
+            rule.setLimitApp(RuleConstant.LIMIT_APP_DEFAULT);
+        }
+		//根据流量规则生成不同的控制器
+        TrafficShapingController rater = generateRater(rule);
+        rule.setRater(rater);
+
+        K key = groupFunction.apply(rule);
+        if (key == null) {
+            continue;
+        }
+        Set<FlowRule> flowRules = tmpMap.get(key);
+
+        if (flowRules == null) {
+            // Use hash set here to remove duplicate rules.
+            flowRules = new HashSet<>();
+            tmpMap.put(key, flowRules);
+        }
+
+        flowRules.add(rule);
+    }
+    Comparator<FlowRule> comparator = new FlowRuleComparator();
+    for (Entry<K, Set<FlowRule>> entries : tmpMap.entrySet()) {
+        List<FlowRule> rules = new ArrayList<>(entries.getValue());
+        if (shouldSort) {
+            // Sort the rules.
+            Collections.sort(rules, comparator);
+        }
+        newRuleMap.put(entries.getKey(), rules);
+    }
+
+    return newRuleMap;
+}
+```
+
+进入到generateRater方法：
+
+```java
+private static TrafficShapingController generateRater(/*@Valid*/ FlowRule rule) {
+    //如果限流规则为QPS，则根据不同的流控规则生成不同的处理器，这个地方使用的是策略模式
+    if (rule.getGrade() == RuleConstant.FLOW_GRADE_QPS) {
+        switch (rule.getControlBehavior()) {
+            case RuleConstant.CONTROL_BEHAVIOR_WARM_UP://预热策略
+                return new WarmUpController(rule.getCount(), rule.getWarmUpPeriodSec(),
+                    ColdFactorProperty.coldFactor);
+            case RuleConstant.CONTROL_BEHAVIOR_RATE_LIMITER://匀速排队
+                return new RateLimiterController(rule.getMaxQueueingTimeMs(), rule.getCount());
+            case RuleConstant.CONTROL_BEHAVIOR_WARM_UP_RATE_LIMITER:
+                return new WarmUpRateLimiterController(rule.getCount(), rule.getWarmUpPeriodSec(),
+                    rule.getMaxQueueingTimeMs(), ColdFactorProperty.coldFactor);
+            case RuleConstant.CONTROL_BEHAVIOR_DEFAULT:
+            default:
+                // Default mode or unknown mode: default traffic shaping controller (fast-reject).
+        }
+    }
+    //默认是直接拒绝策略
+    return new DefaultController(rule.getCount(), rule.getGrade());
+}
+```
+
+我们让代码返回到保存的地方，然后可以看到我们创建的直接拒绝策略的处理器
+
+![image-20211231142516204](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231142516204.png)
+
+然后执行完handle方法并创建完处理器后，会走到handleResponse，在这里会返回response给dashboard断开连接。
+
+![image-20211231142954781](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231142954781.png)
+
+### 5.3.4 Sentinel进行限流
+
+Sentinel是通过 `SphU.entry(target, EntryType.IN`)代码完成限流/熔断等操作，所以我们在`SphU#entry`方法上打上断点。
+
+![image-20211231151841245](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231151841245.png)
+
+我们跟进去，最终会走到`CtSph#entryWithPriority`方法，这个方法是 Sentinel 的骨架，非常重要。：
+
+```java
+private Entry entryWithPriority(ResourceWrapper resourceWrapper, int count, boolean prioritized, Object... args)
+    throws BlockException {
+    //从ThreadLocal中获取Context实例
+    Context context = ContextUtil.getContext();
+    //如果是 NullContext，那么说明 context name 超过了 2000 个，参见 ContextUtil#trueEnter
+    //这个时候，Sentinel 不再接受处理新的 context 配置，也就是不做这些新的接口的统计、限流熔断等
+    if (context instanceof NullContext) {
+        // The {@link NullContext} indicates that the amount of context has exceeded the threshold,
+        // so here init the entry only. No rule checking will be done.
+        return new CtEntry(resourceWrapper, null, context);
+    }
+	//如果我们不显式调用 ContextUtil#enter，这里会进入到默认的 context 中
+    if (context == null) {
+        // Using default context.
+        context = InternalContextUtil.internalEnter(Constants.CONTEXT_DEFAULT_NAME);
+    }
+
+    // Global switch is close, no rule checking will do.
+    //Sentinel的全局开关
+    if (!Constants.ON) {
+        return new CtEntry(resourceWrapper, null, context);
+    }
+ 
+    //这里使用了责任链模式
+    //下面这行代码用于构建一个责任链，入参是 resource，资源的唯一标识是 resource name
+    ProcessorSlot<Object> chain = lookProcessChain(resourceWrapper);
+
+    /*
+     * Means amount of resources (slot chain) exceeds {@link Constants.MAX_SLOT_CHAIN_SIZE},
+     * so no rule checking will be done.
+     */
+    //根据 lookProcessChain 方法，我们知道，当 resource 超过 Constants.MAX_SLOT_CHAIN_SIZE，也就是 6000 的时候，Sentinel 开始不处理新的请求，这么做主要是为了 Sentinel 的性能考虑
+    if (chain == null) {
+        return new CtEntry(resourceWrapper, null, context);
+    }
+    // 执行这个责任链。如果抛出 BlockException，说明链上的某一环拒绝了该请求，
+    // 把这个异常往上层业务层抛，业务层处理 BlockException 应该进入到熔断降级逻辑中
+    Entry e = new CtEntry(resourceWrapper, chain, context);
+    try {
+        //开启链路调用
+        chain.entry(context, resourceWrapper, null, count, prioritized, args);
+    } catch (BlockException e1) {
+        e.exit(count, args);
+        throw e1;
+    } catch (Throwable e1) {
+        // This should not happen, unless there are errors existing in Sentinel internal.
+        RecordLog.info("Sentinel unexpected exception", e1);
+    }
+    return e;
+}
+```
+
+在上面的代码中，Sentinel的处理核心就在这个责任链上，链中每一个节点是一个 `Slot` 实例，这个链通过 BlockException 异常来告知调用入口最终的执行情况。
+
+我们进入`lookProcessChain`方法中，如果链路是空的，我们将会构建一个链路，走到newSlotChain方法:
+
+```java
+ProcessorSlot<Object> lookProcessChain(ResourceWrapper resourceWrapper) {
+    ProcessorSlotChain chain = chainMap.get(resourceWrapper);
+    if (chain == null) {
+        synchronized (LOCK) {
+            chain = chainMap.get(resourceWrapper);
+            if (chain == null) {
+                // Entry size limit.
+                if (chainMap.size() >= Constants.MAX_SLOT_CHAIN_SIZE) {
+                    return null;
+                }
+				//构建链路
+                chain = SlotChainProvider.newSlotChain();
+                Map<ResourceWrapper, ProcessorSlotChain> newMap = new HashMap<ResourceWrapper, ProcessorSlotChain>(
+                    chainMap.size() + 1);
+                newMap.putAll(chainMap);
+                newMap.put(resourceWrapper, chain);
+                chainMap = newMap;
+            }
+        }
+    }
+    return chain;
+}
+```
+
+然后我们进入到`newSlotChain`方法中，这里会将所有的Slot添加到链中这里主要是通过SPI的方式，然后构建chain并返回。
+
+```java
+public static ProcessorSlotChain newSlotChain() {
+    if (slotChainBuilder != null) {
+        return slotChainBuilder.build();
+    }
+
+    // Resolve the slot chain builder SPI.
+    //Sentinel 提供了 SPI 端点，，我们可以定制builder
+    slotChainBuilder = SpiLoader.loadFirstInstanceOrDefault(SlotChainBuilder.class, DefaultSlotChainBuilder.class);
+
+    if (slotChainBuilder == null) {
+        // Should not go through here.
+        RecordLog.warn("[SlotChainProvider] Wrong state when resolving slot chain builder, using default");
+        slotChainBuilder = new DefaultSlotChainBuilder();
+    } else {
+        RecordLog.info("[SlotChainProvider] Global slot chain builder resolved: "
+            + slotChainBuilder.getClass().getCanonicalName());
+    }
+    //构建
+    return slotChainBuilder.build();
+}
+```
+
+具体添加Slot在build方法中：
+
+```java
+@Override
+public ProcessorSlotChain build() {
+    ProcessorSlotChain chain = new DefaultProcessorSlotChain();
+
+    // Note: the instances of ProcessorSlot should be different, since they are not stateless.
+    List<ProcessorSlot> sortedSlotList = SpiLoader.loadPrototypeInstanceListSorted(ProcessorSlot.class);
+    for (ProcessorSlot slot : sortedSlotList) {
+        if (!(slot instanceof AbstractLinkedProcessorSlot)) {
+            RecordLog.warn("The ProcessorSlot(" + slot.getClass().getCanonicalName() + ") is not an instance of AbstractLinkedProcessorSlot, can't be added into ProcessorSlotChain");
+            continue;
+        }
+		//添加Slot
+        chain.addLast((AbstractLinkedProcessorSlot<?>) slot);
+    }
+
+    return chain;
+}
+```
+
+然后我们回到entryWithPriority方法，继续往下走会执行，会对链路中每个进行逐一调用,一直到到最后一个Slot。可以自行打断点查看。
+
+~~~java
+//开启链路调用
+chain.entry(context, resourceWrapper, null, count, prioritized, args);
+~~~
+
+执行完后，我们可以在断点查看当前链路中的所有slot。
+
+![image-20211231162402134](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231162402134.png)
+
+在这里，我们主要看FlowSlot，因为这个是限流的插槽。
+
+![image-20211231163944981](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231163944981.png)
+
+我们进入checkFlow方法，这里会根据资源的名称去找限流规则：
+
+```java
+public void checkFlow(Function<String, Collection<FlowRule>> ruleProvider, ResourceWrapper resource,
+                      Context context, DefaultNode node, int count, boolean prioritized) throws BlockException {
+    if (ruleProvider == null || resource == null) {
+        return;
+    }
+    //根据资源名称找到对应的限流规则
+    Collection<FlowRule> rules = ruleProvider.apply(resource.getName());
+    if (rules != null) {
+        for (FlowRule rule : rules) {
+            //遍历规则以此判断是否通过
+            if (!canPassCheck(rule, context, node, count, prioritized)) {
+                throw new FlowException(rule.getLimitApp(), rule);
+            }
+        }
+    }
+}
+```
+
+我们进入`ruleProvider#apply`方法，然后再`FlowRuleManager#getFlowRuleMap`中可以看到我们的限流规则，如下图：
+
+```java
+private final Function<String, Collection<FlowRule>> ruleProvider = new Function<String, Collection<FlowRule>>() {
+    @Override
+    public Collection<FlowRule> apply(String resource) {
+        // Flow rule map should not be null.
+        Map<String, List<FlowRule>> flowRules = FlowRuleManager.getFlowRuleMap();
+        return flowRules.get(resource);
+    }
+};
+```
+
+![image-20211231164516722](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231164516722.png)
+
+我们回到checkFlow方法，找完限流规则回去执行canPassCheck方法判断规则是否通过，canPassCheck代码如下：
+
+```java
+public boolean canPassCheck(/*@NonNull*/ FlowRule rule, Context context, DefaultNode node, int acquireCount,
+                                                boolean prioritized) {
+    String limitApp = rule.getLimitApp();
+    if (limitApp == null) {
+        return true;
+    }
+	//判断是否是集群
+    if (rule.isClusterMode()) {
+        return passClusterCheck(rule, context, node, acquireCount, prioritized);
+    }
+	//不是集群则本地检查
+    return passLocalCheck(rule, context, node, acquireCount, prioritized);
+}
+```
+
+我们跟进本地检查方法
+
+```java
+private static boolean passLocalCheck(FlowRule rule, Context context, DefaultNode node, int acquireCount,
+                                      boolean prioritized) {
+    Node selectedNode = selectNodeByRequesterAndStrategy(rule, context, node);
+    if (selectedNode == null) {
+        return true;
+    }
+	//根据规则处理器进行检查
+    return rule.getRater().canPass(selectedNode, acquireCount, prioritized);
+}
+```
+
+我们继续跟进canPass会进入到Defaultcontroller中，因为我们当时设置的就是直接拒绝策略
+
+![image-20211231165241632](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231165241632.png)
+
+代码如下：
+
+```java
+@Override
+public boolean canPass(Node node, int acquireCount, boolean prioritized) {
+    //当前已经统计的数
+    int curCount = avgUsedTokens(node);
+    //如果已统计的数+请求计数>限流数量，返回false，代表限流
+    if (curCount + acquireCount > count) {
+        if (prioritized && grade == RuleConstant.FLOW_GRADE_QPS) {
+            long currentTime;
+            long waitInMs;
+            currentTime = TimeUtil.currentTimeMillis();
+            waitInMs = node.tryOccupyNext(currentTime, acquireCount, count);
+            if (waitInMs < OccupyTimeoutProperty.getOccupyTimeout()) {
+                node.addWaitingRequest(currentTime + waitInMs, acquireCount);
+                node.addOccupiedPass(acquireCount);
+                sleep(waitInMs);
+
+                // PriorityWaitException indicates that the request will pass after waiting for {@link @waitInMs}.
+                throw new PriorityWaitException(waitInMs);
+            }
+        }
+        return false;
+    }
+    return true;
+}
+private int avgUsedTokens(Node node) {
+        if (node == null) {
+            return DEFAULT_AVG_USED_TOKENS;
+        }
+    //如果当前是线程数限流，则返回当前线程数
+    //如果是QPS，则返回当前通过的qps数据
+        return grade == RuleConstant.FLOW_GRADE_THREAD ? node.curThreadNum() : (int)(node.passQps());
+    }
+```
+
+以上就是最简单的限流的源码跟踪，建议自己跟一遍源码。
 
 # 六、SpringCloud高级组件
+
+
 
 > 未完结
 >
