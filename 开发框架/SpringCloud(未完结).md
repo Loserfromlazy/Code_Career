@@ -3000,11 +3000,11 @@ Controller中API配置注解：
 
 ```java
 @GetMapping("/findOpenStatusByUid")
-    @SentinelResource(value = "findOpenStatusByUid" ,blockHandler = "doException")
-    public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
-        UserInfo userById = userServiceFeignClient.findUserById(uid);
-        return userById.getOpen();
-    }
+@SentinelResource(value = "findOpenStatusByUid" ,blockHandler = "doException")
+public Integer findOpenStatusByUid(@RequestParam("uid") Integer uid){
+    UserInfo userById = userServiceFeignClient.findUserById(uid);
+    return userById.getOpen();
+}
 ```
 
 兜底数据类：
@@ -3041,7 +3041,7 @@ Sentinel的规则数据都是存储在内存中的，所以一旦我们停掉微
 
 ![image-20211230112032993](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211230112032993.png)
 
-我们用第三种模式：下面我们在autodeliverSentinel中进行规则数据持久化配置。
+我们用push模式：下面我们在autodeliverSentinel中进行规则数据持久化配置。
 
 首先我们导入依赖：
 
@@ -3118,9 +3118,55 @@ autodeliver-degrade-rules
 1. ⼀个资源可以同时有多个限流规则和降级规则，所以配置集中是⼀个json数组。
 2. 这种配置方式在Sentinel控制台中修改规则，仅是内存中⽣效，不会修改Nacos中的配置值，重启后恢复原来的值； Nacos控制台中修改规则，不仅内存中⽣效，Nacos中持久化规则也⽣效，重启后规则依然保持。**也就是说只能在Nacos中对配置进行更改**
 
-> 这部分官方文档写的很不清楚，我查了很多资料按照上面的流程走了一遍，发现并不能完成配置同步，可能是版本是1.8的原因，所以这个版本可以直接去改源码，实现双向配置。
+> 这部分官方文档写的很不清楚，我查了很多资料按照上面的流程走了一遍，发现并不能完成配置同步，报错空指针：![image-20220104155916487](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220104155916487.png)
+>
+> 我查了很多资料可能是jdk版本的问题，可以见下面的issue
+>
+> https://github.com/alibaba/Sentinel/issues/1817
+>
+> ![image-20220104155156000](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220104155156000.png)
+>
+> 也有可能是Sentinel版本与springcloudalibaba版本冲突的的问题：
+>
+> ![image-20220104155837911](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220104155837911.png)
+>
+> 解决办法：我将SpringCloudAlibaba降为2.2.1；sentinel降为1.7.2即可正常使用
+>
+> 最终解决办法：我不想降低springCloudAlibaba的版本，因为很多东西再用，不可能说降就降，所以我在NacosDataSourceFactoryBean的第70行源码加上了断点，发现username找不到，会报空指针，所以我们配置文件上配置了username和password然后就可以使用了，真的是很坑！！！配置文件如下：
+>
+> ```yml
+> spring:
+>   application:
+>     name: autodeliver
+>   cloud:
+>     sentinel:
+>       transport:
+>         dashboard: localhost:8080     # sentinel注册地址
+>       datasource:
+>         # 名称随意
+>         flow:
+>           nacos:
+>             server-addr: localhost:8848
+>             username: nacos
+>             password: nacos
+>             dataId: ${spring.application.name}-flow-rules
+>             namespace: sentinel
+>             groupId: SENTINEL_GROUP
+>             rule-type: flow  # 规则类型，取值见：org.springframework.cloud.alibaba.sentinel.datasource.RuleType
+>         degrade:
+>           nacos:
+>             server-addr: localhost:8848
+>             username: nacos
+>             password: nacos
+>             dataId: ${spring.application.name}-degrade-rules
+>             namespace: sentinel
+>             groupId: SENTINEL_GROUP
+>             rule-type: degrade
+> ```
+>
+> 问题分析：应该是这个版本sentinel配置nacos持久化，需要账户密码去验证但之前的版本不需要，所以会报这个错。PS：官方文档真的很不友好。
 
-所以如果想实现互相修改都能保存规则，那么可以通过修改源代码的方式实现。
+所以如果想实现sentinel修改能保存规则，那么可以通过修改源代码的方式实现。见下面的5.3.5。
 
 ## 5.3 Sentinel源码1.8版本
 
@@ -3740,6 +3786,8 @@ private CompletableFuture<Void> publishRules(String app, String ip, Integer port
 
 ```
 
+> apiAddFlowRule这里的这个publishRules方法,是用于发布规则到客户端的，我们可以对此进行修改，让规则发布到nacos中。
+
 上述代码断点后查看的entity信息：
 
 ![image-20211231133207926](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211231133207926.png)
@@ -4174,7 +4222,14 @@ private int avgUsedTokens(Node node) {
     }
 ```
 
-以上就是最简单的限流的源码跟踪，建议自己跟一遍源码。
+> 以上就是最简单的限流的源码跟踪，建议自己跟一遍源码。
+>
+
+### 5.3.5 Sentinel持久化到Nacos
+
+[官网对于持久化的介绍](https://github.com/alibaba/Sentinel/wiki/Sentinel-%E6%8E%A7%E5%88%B6%E5%8F%B0%EF%BC%88%E9%9B%86%E7%BE%A4%E6%B5%81%E6%8E%A7%E7%AE%A1%E7%90%86%EF%BC%89#%E8%A7%84%E5%88%99%E9%85%8D%E7%BD%AE)
+
+
 
 # 六、SpringCloud高级组件
 
