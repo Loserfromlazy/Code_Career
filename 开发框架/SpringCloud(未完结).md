@@ -8,7 +8,7 @@
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/spring/%E5%8D%95%E4%BD%93%E6%9E%B6%E6%9E%84png.png)
 
-网站流量很小，一个应用将所有功能部署在一起，以减少部署节点和成本。
+网站流量很小，一个应用将所有功能部署
 
 优点：系统开发速度快；维护成本低；适用于并发要求较低的系统
 
@@ -4229,7 +4229,124 @@ private int avgUsedTokens(Node node) {
 
 [官网对于持久化的介绍](https://github.com/alibaba/Sentinel/wiki/Sentinel-%E6%8E%A7%E5%88%B6%E5%8F%B0%EF%BC%88%E9%9B%86%E7%BE%A4%E6%B5%81%E6%8E%A7%E7%AE%A1%E7%90%86%EF%BC%89#%E8%A7%84%E5%88%99%E9%85%8D%E7%BD%AE)
 
+根据5.2.7的介绍，之前的配置只能修改nacos中的配置，而不能在Sentinel中进行修改，我们需要sentinel和nacos修改都能完成同步，这就需要对源码进行修改了。
 
+我这里的版本是Sentinel  DashBoard1.8,下面进行修改：
+
+首先将源码下载下来，然后IDEA打开Sentinel DashBoard1.8源码工程，在源码工程的test中有阿里为我们写好的流控改造的案例，如下图：
+
+![image-20220105142304141](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220105142304141.png)
+
+然后我们将这四个文件分别拷贝到如下图的位置（放哪都行，只是这样更符合包的逻辑）：
+
+![image-20220105142822057](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220105142822057.png)
+
+然后我们稍作修改NacosConfig和NacosConfigUtil：
+
+`NacosConfig.java`：这个文件主要是把nacos上的地址命名空间等配置好即可。
+
+```java
+@Configuration
+public class NacosConfig {
+
+    //可以都写在配置文件里，这里是为了方便
+    @Value("${nacos.addr}")
+    private String nacosAddr;
+
+    @Bean
+    public Converter<List<FlowRuleEntity>, String> flowRuleEntityEncoder() {
+        return JSON::toJSONString;
+    }
+
+    @Bean
+    public Converter<String, List<FlowRuleEntity>> flowRuleEntityDecoder() {
+        return s -> JSON.parseArray(s, FlowRuleEntity.class);
+    }
+
+    @Bean
+    public ConfigService nacosConfigService() throws Exception {
+        Properties properties = new Properties();
+        properties.put(PropertyKeyConst.SERVER_ADDR,nacosAddr);
+        properties.put(PropertyKeyConst.NAMESPACE,"sentinel");
+        properties.put(PropertyKeyConst.USERNAME,"nacos");
+        properties.put(PropertyKeyConst.PASSWORD,"nacos");
+        return ConfigFactory.createConfigService(properties);
+    }
+}
+```
+
+`NacosConfigUtil.java`:这个文件主要是nacos上配置的后缀和GroupID
+
+```java
+public final class NacosConfigUtil {
+
+    public static final String GROUP_ID = "SENTINEL_GROUP";
+
+    public static final String FLOW_DATA_ID_POSTFIX = "-flow-rules";
+    public static final String DEGRADE_DATA_ID_POSTFIX = "-degrade-rules";
+    public static final String PARAM_FLOW_DATA_ID_POSTFIX = "-param-rules";
+    public static final String SYS_DATA_ID_POSTFIX = "-system-rules";
+    public static final String AUTH_DATA_ID_POSTFIX = "-auth-rules";
+/*
+    public static final String GATEWAY_FLOW_DATA_ID_POSTFIX = "-gateway-flow";
+    public static final String GATEWAY_API_DATA_ID_POSTFIX = "-gateway-api";
+
+    public static final String CLUSTER_MAP_DATA_ID_POSTFIX = "-cluster-map";*/
+
+    /**
+     * cc for `cluster-client`
+     */
+    public static final String CLIENT_CONFIG_DATA_ID_POSTFIX = "-cc-config";
+    /**
+     * cs for `cluster-server`
+     */
+    public static final String SERVER_TRANSPORT_CONFIG_DATA_ID_POSTFIX = "-cs-transport-config";
+    public static final String SERVER_FLOW_CONFIG_DATA_ID_POSTFIX = "-cs-flow-config";
+    public static final String SERVER_NAMESPACE_SET_DATA_ID_POSTFIX = "-cs-namespace-set";
+
+    private NacosConfigUtil() {}
+}
+```
+
+FlowRuleNacosPublisher和FlowRuleNacosProvider不需要修改，阿里已经写好了。
+
+然后我们把FlowControllerV1的publishRules方法给改了，并且在FlowControllerV1中注入FlowRuleNacosPublisher和FlowRuleNacosProvider。
+
+```java
+//注入依赖
+@Autowired
+@Qualifier("flowRuleNacosProvider")
+private DynamicRuleProvider<List<FlowRuleEntity>> ruleProvider;
+@Autowired
+@Qualifier("flowRuleNacosPublisher")
+private DynamicRulePublisher<List<FlowRuleEntity>> rulePublisher;
+
+
+//修改方法
+//    private CompletableFuture<Void> publishRules(String app, String ip, Integer port) {
+//        List<FlowRuleEntity> rules = repository.findAllByMachine(MachineInfo.of(app, ip, port));
+//        return sentinelApiClient.setFlowRuleOfMachineAsync(app, ip, port, rules);
+//    }
+
+private void publishRules(/*@NonNull*/ String app) throws Exception {
+    List<FlowRuleEntity> rules = repository.findAllByApp(app);
+    rulePublisher.publish(app, rules);
+}
+```
+
+到此流控模块就可以实现nacos和sentinel互相同步了。
+
+> 其他模块如降级模块与流控模块同理，虽然阿里只提供了流控模块的代码但是大概写法都是一样的，自己照着改一下就可以了。
+
+我们下面来测试，打开autoDeliverSentinel和我们改造好的控制台，发送一个请求，然后我们可以看到从nacos中拉取的配置规则：
+
+![image-20220105144525319](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220105144525319.png)
+
+我们在Sentinel中进行修改比如将阈值修改成1或者新增一个流控规则，然后去nacos上看，发现nacos已经完成修改，然后再nacos中在改一个数，回来看Sentinel中也完成了修改。结果如下图：
+
+![image-20220105144840272](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220105144840272.png)
+
+![image-20220105144859787](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220105144859787.png)
 
 # 六、SpringCloud高级组件
 
