@@ -2856,7 +2856,7 @@ public class UserController {
 			 validateID      validateID
 ~~~
 
-如上图：有两条调用链路都调用了validateID这一个资源，在Sentinel中允许只根据调用入口的统计信息对资源限流。比如链路模式下设置入口资源为register1，这样的话表示只有从register1的调用才会记录到validateID的限流统计中，而不关心register2到来的调用，如下图：
+如上图：有两条调用链路都调用了validateID这一个资源，在Sentinel中允许只根据调用入口的统计信息对资源限流。比如链路模式下设置资源为register1，这样的话表示只有从register1的调用才会记录到validateID的限流统计中，而不关心register2到来的调用，如下图：
 
 ![image-20211227094536433](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211227094536433.png)
 
