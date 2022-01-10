@@ -4229,9 +4229,23 @@ private int avgUsedTokens(Node node) {
 
 [官网对于持久化的介绍](https://github.com/alibaba/Sentinel/wiki/Sentinel-%E6%8E%A7%E5%88%B6%E5%8F%B0%EF%BC%88%E9%9B%86%E7%BE%A4%E6%B5%81%E6%8E%A7%E7%AE%A1%E7%90%86%EF%BC%89#%E8%A7%84%E5%88%99%E9%85%8D%E7%BD%AE)
 
-根据5.2.7的介绍，之前的配置只能修改nacos中的配置，而不能在Sentinel中进行修改，我们需要sentinel和nacos修改都能完成同步，这就需要对源码进行修改了。
+根据5.2.7的介绍，之前的配置只能修改nacos中的配置，而不能在Sentinel中进行修改，我们需要sentinel和nacos修改都能完成同步，这就需要对源码进行修改了。步骤：
+
+> 可以参照flow模块去修改，因为阿里提供了flow模块的例子
+
+1. 修改NacosConfig，增加对应模块转换器
+2. 增加对应模块的publisher和provider
+3. 修改对应模块的controller
+   1. 首先注入publisher和provider
+   2. 然后将publish用注入的publisher代替
+
+> PS：其实修改Controller时只需要修改publishRules就可以了，也就是说其实不用注入provider，因为之前5.2.7中可以发现dashboard是可以从nacos拉数据的只是不同同步数据，所以只需要将publishRules改了就行。
+>
+> 其实改源码的整体核心，我个人感觉就是将推送规则从之前的推到内存现在改到推送到数据源中。
 
 我这里的版本是Sentinel  DashBoard1.8,下面进行修改：
+
+#### 修改flow模块
 
 首先将源码下载下来，然后IDEA打开Sentinel DashBoard1.8源码工程，在源码工程的test中有阿里为我们写好的流控改造的案例，如下图：
 
@@ -4262,7 +4276,7 @@ public class NacosConfig {
     public Converter<String, List<FlowRuleEntity>> flowRuleEntityDecoder() {
         return s -> JSON.parseArray(s, FlowRuleEntity.class);
     }
-
+	//...之后不同的模块需要自己加转换器
     @Bean
     public ConfigService nacosConfigService() throws Exception {
         Properties properties = new Properties();
@@ -4281,7 +4295,7 @@ public class NacosConfig {
 public final class NacosConfigUtil {
 
     public static final String GROUP_ID = "SENTINEL_GROUP";
-
+	//不同的模块的dataId需要自己加
     public static final String FLOW_DATA_ID_POSTFIX = "-flow-rules";
     public static final String DEGRADE_DATA_ID_POSTFIX = "-degrade-rules";
     public static final String PARAM_FLOW_DATA_ID_POSTFIX = "-param-rules";
@@ -4336,8 +4350,6 @@ private void publishRules(/*@NonNull*/ String app) throws Exception {
 
 到此流控模块就可以实现nacos和sentinel互相同步了。
 
-> 其他模块如降级模块与流控模块同理，虽然阿里只提供了流控模块的代码但是大概写法都是一样的，自己照着改一下就可以了。
-
 我们下面来测试，打开autoDeliverSentinel和我们改造好的控制台，发送一个请求，然后我们可以看到从nacos中拉取的配置规则：
 
 ![image-20220105144525319](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220105144525319.png)
@@ -4347,6 +4359,277 @@ private void publishRules(/*@NonNull*/ String app) throws Exception {
 ![image-20220105144840272](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220105144840272.png)
 
 ![image-20220105144859787](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220105144859787.png)
+
+#### 修改降级模块
+
+首先在nacosconfig和nacosconfigUtil中增加降级的转换器和dataId：
+
+```java
+//降级规则 Converter
+@Bean
+public Converter<List<DegradeRuleEntity>, String> degradeRuleEntityEncoder() {
+    return JSON::toJSONString;
+}
+
+@Bean
+public Converter<String, List<DegradeRuleEntity>> degradeRuleEntityDecoder() {
+    return s -> JSON.parseArray(s, DegradeRuleEntity.class);
+}
+```
+
+然后增加降级的provider和publisher：
+
+```java
+@Component("degradeRuleNacosProvider")
+public class DegradeRuleNacosProvider implements DynamicRuleProvider<List<DegradeRuleEntity>> {
+
+    @Autowired
+    private ConfigService configService;
+    @Autowired
+    private Converter<String, List<DegradeRuleEntity>> converter;
+
+    @Override
+    public List<DegradeRuleEntity> getRules(String appName) throws Exception {
+        //System.out.println(appName+NacosConfigUtil.DEGRADE_DATA_ID_POSTFIX+NacosConfigUtil.GROUP_ID);
+        String rules = configService.getConfig(appName + NacosConfigUtil.DEGRADE_DATA_ID_POSTFIX,
+                NacosConfigUtil.GROUP_ID, 3000);
+        if (StringUtil.isEmpty(rules)) {
+            return new ArrayList<>();
+        }
+        System.out.println(rules);//用日志代替，这里是为了方便
+        return converter.convert(rules);
+    }
+}
+```
+
+```java
+@Component("degradeRuleNacosPublisher")
+public class DegradeRuleNacosPublisher implements DynamicRulePublisher<List<DegradeRuleEntity>> {
+
+    @Autowired
+    private ConfigService configService;
+    @Autowired
+    private Converter<List<DegradeRuleEntity>, String> converter;
+
+    @Override
+    public void publish(String app, List<DegradeRuleEntity> rules) throws Exception {
+        AssertUtil.notEmpty(app, "app name cannot be empty");
+        if (rules == null) {
+            return;
+        }
+        configService.publishConfig(app + NacosConfigUtil.DEGRADE_DATA_ID_POSTFIX,
+                NacosConfigUtil.GROUP_ID, converter.convert(rules));
+    }
+}
+```
+
+然后修改降级的controller，只需要改publishRules就可以：
+
+```java
+@RestController
+@RequestMapping("/degrade")
+public class DegradeController {
+
+    private final Logger logger = LoggerFactory.getLogger(DegradeController.class);
+
+    @Autowired
+    @Qualifier("degradeRuleNacosProvider")
+    private DynamicRuleProvider<List<DegradeRuleEntity>> ruleProvider;
+    @Autowired
+    @Qualifier("degradeRuleNacosPublisher")
+    private DynamicRulePublisher<List<DegradeRuleEntity>> rulePublisher;
+
+    @Autowired
+    private RuleRepository<DegradeRuleEntity, Long> repository;
+    @Autowired
+    private SentinelApiClient sentinelApiClient;
+
+    @GetMapping("/rules.json")
+    @AuthAction(PrivilegeType.READ_RULE)
+    public Result<List<DegradeRuleEntity>> apiQueryMachineRules(String app, String ip, Integer port) {
+        if (StringUtil.isEmpty(app)) {
+            return Result.ofFail(-1, "app can't be null or empty");
+        }
+        if (StringUtil.isEmpty(ip)) {
+            return Result.ofFail(-1, "ip can't be null or empty");
+        }
+        if (port == null) {
+            return Result.ofFail(-1, "port can't be null");
+        }
+        try {
+            List<DegradeRuleEntity> rules = sentinelApiClient.fetchDegradeRuleOfMachine(app, ip, port);
+            //List<DegradeRuleEntity> rules = ruleProvider.getRules(app);
+            System.out.println(rules);
+            rules = repository.saveAll(rules);
+            return Result.ofSuccess(rules);
+        } catch (Throwable throwable) {
+            logger.error("queryApps error:", throwable);
+            return Result.ofThrowable(-1, throwable);
+        }
+    }
+
+    @PostMapping("/rule")
+    @AuthAction(PrivilegeType.WRITE_RULE)
+    public Result<DegradeRuleEntity> apiAddRule(@RequestBody DegradeRuleEntity entity) {
+        Result<DegradeRuleEntity> checkResult = checkEntityInternal(entity);
+        if (checkResult != null) {
+            return checkResult;
+        }
+        Date date = new Date();
+        entity.setGmtCreate(date);
+        entity.setGmtModified(date);
+        try {
+            entity = repository.save(entity);
+        } catch (Throwable t) {
+            logger.error("Failed to add new degrade rule, app={}, ip={}", entity.getApp(), entity.getIp(), t);
+            return Result.ofThrowable(-1, t);
+        }
+        try {
+            if (!publishRules(entity.getApp(), entity.getIp(), entity.getPort())) {
+                logger.warn("Publish degrade rules failed, app={}", entity.getApp());
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return Result.ofSuccess(entity);
+    }
+
+    @PutMapping("/rule/{id}")
+    @AuthAction(PrivilegeType.WRITE_RULE)
+    public Result<DegradeRuleEntity> apiUpdateRule(@PathVariable("id") Long id,
+                                                     @RequestBody DegradeRuleEntity entity) {
+        if (id == null || id <= 0) {
+            return Result.ofFail(-1, "id can't be null or negative");
+        }
+        DegradeRuleEntity oldEntity = repository.findById(id);
+        if (oldEntity == null) {
+            return Result.ofFail(-1, "Degrade rule does not exist, id=" + id);
+        }
+        entity.setApp(oldEntity.getApp());
+        entity.setIp(oldEntity.getIp());
+        entity.setPort(oldEntity.getPort());
+        entity.setId(oldEntity.getId());
+        Result<DegradeRuleEntity> checkResult = checkEntityInternal(entity);
+        if (checkResult != null) {
+            return checkResult;
+        }
+
+        entity.setGmtCreate(oldEntity.getGmtCreate());
+        entity.setGmtModified(new Date());
+        try {
+            entity = repository.save(entity);
+        } catch (Throwable t) {
+            logger.error("Failed to save degrade rule, id={}, rule={}", id, entity, t);
+            return Result.ofThrowable(-1, t);
+        }
+        try {
+            if (!publishRules(entity.getApp(), entity.getIp(), entity.getPort())) {
+                logger.warn("Publish degrade rules failed, app={}", entity.getApp());
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return Result.ofSuccess(entity);
+    }
+
+    @DeleteMapping("/rule/{id}")
+    @AuthAction(PrivilegeType.DELETE_RULE)
+    public Result<Long> delete(@PathVariable("id") Long id) {
+        if (id == null) {
+            return Result.ofFail(-1, "id can't be null");
+        }
+
+        DegradeRuleEntity oldEntity = repository.findById(id);
+        if (oldEntity == null) {
+            return Result.ofSuccess(null);
+        }
+
+        try {
+            repository.delete(id);
+        } catch (Throwable throwable) {
+            logger.error("Failed to delete degrade rule, id={}", id, throwable);
+            return Result.ofThrowable(-1, throwable);
+        }
+        try {
+            if (!publishRules(oldEntity.getApp(), oldEntity.getIp(), oldEntity.getPort())) {
+                logger.warn("Publish degrade rules failed, app={}", oldEntity.getApp());
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return Result.ofSuccess(id);
+    }
+
+//    private boolean publishRules(String app, String ip, Integer port) {
+//        List<DegradeRuleEntity> rules = repository.findAllByMachine(MachineInfo.of(app, ip, port));
+//        return sentinelApiClient.setDegradeRuleOfMachine(app, ip, port, rules);
+//    }
+
+    private boolean publishRules(/*@NonNull*/ String app, String ip, Integer port) throws Exception {
+        List<DegradeRuleEntity> rules = repository.findAllByMachine(MachineInfo.of(app, ip, port));
+        try{
+            rulePublisher.publish(app, rules);
+            return true;
+        }catch (Exception e){
+            return false;
+        }
+    }
+
+    private <R> Result<R> checkEntityInternal(DegradeRuleEntity entity) {
+        if (StringUtil.isBlank(entity.getApp())) {
+            return Result.ofFail(-1, "app can't be blank");
+        }
+        if (StringUtil.isBlank(entity.getIp())) {
+            return Result.ofFail(-1, "ip can't be null or empty");
+        }
+        if (entity.getPort() == null || entity.getPort() <= 0) {
+            return Result.ofFail(-1, "invalid port: " + entity.getPort());
+        }
+        if (StringUtil.isBlank(entity.getLimitApp())) {
+            return Result.ofFail(-1, "limitApp can't be null or empty");
+        }
+        if (StringUtil.isBlank(entity.getResource())) {
+            return Result.ofFail(-1, "resource can't be null or empty");
+        }
+        Double threshold = entity.getCount();
+        if (threshold == null || threshold < 0) {
+            return Result.ofFail(-1, "invalid threshold: " + threshold);
+        }
+        Integer recoveryTimeoutSec = entity.getTimeWindow();
+        if (recoveryTimeoutSec == null || recoveryTimeoutSec <= 0) {
+            return Result.ofFail(-1, "recoveryTimeout should be positive");
+        }
+        Integer strategy = entity.getGrade();
+        if (strategy == null) {
+            return Result.ofFail(-1, "circuit breaker strategy cannot be null");
+        }
+        if (strategy < CircuitBreakerStrategy.SLOW_REQUEST_RATIO.getType()
+            || strategy > RuleConstant.DEGRADE_GRADE_EXCEPTION_COUNT) {
+            return Result.ofFail(-1, "Invalid circuit breaker strategy: " + strategy);
+        }
+        if (entity.getMinRequestAmount()  == null || entity.getMinRequestAmount() <= 0) {
+            return Result.ofFail(-1, "Invalid minRequestAmount");
+        }
+        if (entity.getStatIntervalMs() == null || entity.getStatIntervalMs() <= 0) {
+            return Result.ofFail(-1, "Invalid statInterval");
+        }
+        if (strategy == RuleConstant.DEGRADE_GRADE_RT) {
+            Double slowRatio = entity.getSlowRatioThreshold();
+            if (slowRatio == null) {
+                return Result.ofFail(-1, "SlowRatioThreshold is required for slow request ratio strategy");
+            } else if (slowRatio < 0 || slowRatio > 1) {
+                return Result.ofFail(-1, "SlowRatioThreshold should be in range: [0.0, 1.0]");
+            }
+        } else if (strategy == RuleConstant.DEGRADE_GRADE_EXCEPTION_RATIO) {
+            if (threshold > 1) {
+                return Result.ofFail(-1, "Ratio threshold should be in range: [0.0, 1.0]");
+            }
+        }
+        return null;
+    }
+}
+```
 
 # 六、SpringCloud高级组件
 
