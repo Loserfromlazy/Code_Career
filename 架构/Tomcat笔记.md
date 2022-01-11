@@ -77,7 +77,7 @@ Tomcat Coyote支持的IO模型：
 
 Tomcat是由一系列可配置(conf/server.xml)的组件构成的web容器，而Catalina是Tomcat的servlet容器。从另一个角度，Tomcat本质就是一款Servlet容器，因为Catalina才是Tomcat的核心，其他模块都是为了Catalina支撑的。比如Coyote提供链接通信，Jasper提供JSP引擎，Naming提供JBDI服务，Juli提供日志服务。
 
-其实，可以认为整个Tomcat就是一个Catalina实例，Tomcat启动的时候会初始化这个实例，Catalina实例通过加载server.xml完成其他实例的创建，创建并管理Server，Server创建并管理多个服务，每个服务又可以有多个Connector和一个Contanier,
+其实，可以认为整个Tomcat就是一个Catalina实例，Tomcat启动的时候会初始化这个实例，Catalina实例通过加载server.xml完成其他实例的创建，创建并管理Server，Server创建并管理多个服务，每个服务又可以有多个Connector和一个Contanier，各个组件
 
 
 
