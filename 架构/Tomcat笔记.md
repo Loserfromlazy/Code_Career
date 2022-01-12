@@ -77,7 +77,229 @@ Tomcat Coyote支持的IO模型：
 
 Tomcat是由一系列可配置(conf/server.xml)的组件构成的web容器，而Catalina是Tomcat的servlet容器。从另一个角度，Tomcat本质就是一款Servlet容器，因为Catalina才是Tomcat的核心，其他模块都是为了Catalina支撑的。比如Coyote提供链接通信，Jasper提供JSP引擎，Naming提供JBDI服务，Juli提供日志服务。
 
-其实，可以认为整个Tomcat就是一个Catalina实例，Tomcat启动的时候会初始化这个实例，Catalina实例通过加载server.xml完成其他实例的创建，创建并管理Server，Server创建并管理多个服务，每个服务又可以有多个Connector和一个Contanier，各个组件
+其实，可以认为整个Tomcat就是一个Catalina实例，Tomcat启动的时候会初始化这个实例，Catalina实例通过加载server.xml完成其他实例的创建，创建并管理Server，Server创建并管理多个服务，每个服务又可以有多个Connector和一个Container，各个组件介绍如下：
+
+![TomcatServer20220112](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/TomcatServer20220112.png)
+
+1. Catalina
+
+   负责解析Tomcat的配置文件server.xml，以此来创建服务器server组件并进行管理
+
+2. Server
+
+   服务器表示整个Catalina Servlet容器以及其他组件，负责组装并启动Servlet引擎，Tomcat连接器。Server通过实现Lifecycle接口，提供一种优雅的启动和关闭整个系统的方式
+
+3. Service
+
+   服务是Server内部的组件，一个Server包含多个Service。它将若干个Connector组件绑定到一个Container
+
+4. Container
+
+   容器，负责处理用户的Servlet请求，并返回对象给web用户的模块
+
+Container组件有以下几种具体的组件，分别是Engine、Host、Context和Wrapper，这4个组件是父子关系：
+
+1. Engine
+
+   表示整个Catalina的Servlet引擎，用来管理多个虚拟站点，一个Service最多只能有一个Engine，但一个引擎可以包含多个Host
+
+2. Host
+
+   代表一个虚拟主机，或者一个站点，可以给Tomcat配置多个虚拟主机地址，而一个虚拟主机可包含多个Context
+
+3. Context
+
+   表示一个Web应用程序，一个Web应用可包含多个Wrapper
+
+4. Wrapper
+
+   表示一个Servlet，Wrapper作为容器中的最底层不能包含子容器
+
+# 二、Tomcat核心配置
+
+## 2.1 配置详情
+
+上述的组件都可以在conf/server.xml文件中体现，Tomcat作为服务器的配置主要是在server.xml的配置，里面包含了Servlet容器的相关配置，即Catalina的配置。具体配置内容如下：
+
+**`server.xml`**
+
+~~~xml
+<!--port：关闭服务器的监听端口
+	shutdown：关闭服务器的指令字符串
+-->
+<Server port="8005" shutdown="SHUTDOWN">
+  <!-- 以日志的形式输出服务器、操作系统、JVM版本信息-->
+  <Listener className="org.apache.catalina.startup.VersionLoggerListener" />
+  <!-- 加载和销毁APR，如果找不到APR库就会输出日志，并不影响Tomcat启动-->
+  <Listener className="org.apache.catalina.core.AprLifecycleListener" SSLEngine="on" />
+  <!-- 避免JRE内存泄漏问题-->
+  <Listener className="org.apache.catalina.core.JreMemoryLeakPreventionListener" />
+  <!-- 加载和销毁全局命名服务-->
+  <Listener className="org.apache.catalina.mbeans.GlobalResourcesLifecycleListener" />
+  <!-- 在Context停止时重建Executor池中的线程，避免ThreadLocal相关内存泄漏-->
+  <Listener className="org.apache.catalina.core.ThreadLocalLeakPreventionListener" />
+   <!--定义了全局命名服务 -->
+  <GlobalNamingResources>
+    <Resource name="UserDatabase" auth="Container"
+              type="org.apache.catalina.UserDatabase"
+              description="User database that can be updated and saved"
+              factory="org.apache.catalina.users.MemoryUserDatabaseFactory"
+              pathname="conf/tomcat-users.xml" />
+  </GlobalNamingResources>
+
+  <!--
+	定义一个Service服务，一个Server可以有多个Service
+   -->
+    <Service name="Catalina">
+        <!--内容见下面-->
+    </Service>
+</Server>
+~~~
+
+**service标签及内部具体组件**
+
+~~~xml
+<!-- 用于创建Service实例，默认使用 org.apahce.catalina.core.StandardService
+	默认情况下，仅指定Service的名称即name="Catalina"
+	service子标签：
+	Listener（用于为Service添加生命周期监听器）
+	Executor（用于配置共享线程池）
+	Connector（用于配置Service包含的链接器）
+	Engine（用于配置Service中链接器对应的Servlet容器引擎）
+-->
+<Service name="Catalina">
+
+        <!--
+默认情况下，Service 并未添加共享线程池配置。 如果我们想添加⼀个线程池， 可以在<Service> 下添加如下配置：
+name：线程池名称，⽤于 Connector中指定
+namePrefix：所创建的每个线程的名称前缀，⼀个单独的线程名称为
+namePrefix+threadNumber
+maxThreads：池中最⼤线程数
+minSpareThreads：活跃线程数，也就是核⼼池线程数，这些线程不会被销毁，会⼀直存在
+maxIdleTime：线程空闲时间，超过该时间后，空闲线程会被销毁，默认值为6000（1分钟），单位毫秒
+maxQueueSize：在被执⾏前最⼤线程排队数⽬，默认为Int的最⼤值，也就是⼴义的⽆限。除⾮特殊情况，这个值不需要更改，否则会有请求不会被处理的情况发⽣
+prestartminSpareThreads：启动线程池时是否启动 minSpareThreads部分线程。默认值为false，即不启动
+threadPriority：线程池中线程优先级，默认值为5，值从1到10
+className：线程池实现类，未指定情况下，默认实现类org.apache.catalina.core.StandardThreadExecutor如果想使⽤⾃定义线程池⾸先需要实现org.apache.catalina.Executor接⼝
+		-->
+
+    <Executor name="tomcatThreadPool" namePrefix="catalina-exec-"
+        maxThreads="150" minSpareThreads="4"/>
+
+    
+    <!-- 默认情况下，server.xml 配置了两个链接器，⼀个⽀持HTTP协议，⼀个⽀持AJP协议，⼤多数情况下，我们并不需要新增链接器配置，只是根据需要对已有链接器进⾏优化 
+    -->
+    <!-- 
+port：端⼝号，Connector ⽤于创建服务端Socket 并进⾏监听，以等待客户端请求链接。如果该属性设为0，Tomcat将会随机选择⼀个可⽤的端⼝号给当前Connector 使⽤
+
+protocol：当前Connector ⽀持的访问协议。 默认为 HTTP/1.1 ， 并采⽤⾃动切换机制选择⼀个基于JAVA NIO的链接器或者基于本地APR的链接器（根据本地是否含有Tomcat的本地库判定）
+
+connectionTimeOut:Connector 接收链接后的等待超时时间， 单位为 毫秒。 -1 表示不超时。
+
+redirectPort：当前Connector 不⽀持SSL请求， 接收到了⼀个请求， 并且也符合security-constraint 约束，
+需要SSL传输，Catalina⾃动将请求重定向到指定的端⼝。
+
+executor：指定共享线程池的名称， 也可以通过maxThreads、minSpareThreads 等属性配置内部线程池。
+
+URIEncoding:⽤于指定编码URI的字符编码， Tomcat8.x版本默认的编码为 UTF-8 , Tomcat7.x版本默认为ISO-
+8859-1 -->
+    <Connector port="8080" protocol="HTTP/1.1"
+               connectionTimeout="20000"
+               redirectPort="8443" disableUploadTimeout="true" useBodyEncodingForURI="true" URIEncoding="UTF-8" />
+<!-- Define an AJP 1.3 Connector on port 8009 -->
+    <Connector protocol="AJP/1.3"
+               port="8009"
+               redirectPort="8443"  URIEncoding="UTF-8"/>
+    
+<!--name： ⽤于指定Engine 的名称， 默认为Catalina
+defaultHost：默认使⽤的虚拟主机名称， 当客户端请求指向的主机⽆效时， 将交由默认的虚拟主机处
+理， 默认为localhost-->
+    <Engine name="Catalina" defaultHost="localhost">
+
+      <Realm className="org.apache.catalina.realm.LockOutRealm">
+
+        <Realm className="org.apache.catalina.realm.UserDatabaseRealm"
+               resourceName="UserDatabase"/>
+      </Realm>
+<!--
+Host用于配置主机
+name： ⽤Host 的名称,即Engine指定的名称
+appBase：网站资源信息的、存放位置，默认是webapps
+unpackWARs：是否解压war包
+autoDeploy：是否自动部署
+-->
+      <Host name="localhost"  appBase="webapps"
+            unpackWARs="true" autoDeploy="true">
+        <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"
+               prefix="localhost_access_log" suffix=".txt"
+               pattern="%h %l %u %t &quot;%r&quot; %s %b" />
+		<!--Context 配置一个Web应用
+			docBase：web应用的路径，可以是磁盘上的绝对路径，也可以是相对于appBase的相对路径
+			path：Web应用的访问路径，如果我们Host名为localhost， 则该web应⽤访问的根路径为：http://localhost:8080/demo
+		-->
+          <Context docBase="..." path="/demo"/>
+      </Host>
+    </Engine>
+  </Service>
+~~~
+
+## 2.2 案例演示
+
+server.xml中大部分配置保持默认即可，我们这里对host标签和context标签的配置进行演示：
+
+我们首先在host中增加两个网址，用于配置host标签，我这里之前弄eureka时添加过，所以就不添加了，如下：
+
+127.0.0.1       CloudEurekaServerA
+127.0.0.1       CloudEurekaServerB
+
+然后在server.xml中，修改host配置：
+
+~~~xml
+      <Host name="CloudEurekaServerA"  appBase="webapps"
+            unpackWARs="true" autoDeploy="true">
+
+        <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"
+               prefix="localhost_access_log" suffix=".txt"
+               pattern="%h %l %u %t &quot;%r&quot; %s %b" />
+      </Host>
+	  <Host name="CloudEurekaServerB"  appBase="webapps2"
+            unpackWARs="true" autoDeploy="true">
+
+        <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"
+               prefix="localhost_access_log" suffix=".txt"
+               pattern="%h %l %u %t &quot;%r&quot; %s %b" />
+      </Host>
+~~~
+
+然后我们复制一份webapps命名为webapps2，修改两个中的ROOT下的index.jsp（随便改，能区分即可）便于查看，然后我们分别访问两个host，结果如下：
+
+![image-20220112141730338](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220112141730338.png)
+
+![image-20220112141749175](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220112141749175.png)
+
+我们下面在host中增加Context标签，我们可以将webapps复制到其他磁盘中，然后修改index.jsp，使用绝对路径配置（相对路径也可以，这里是为了演示方便），配置如下：
+
+~~~xml
+<Host name="CloudEurekaServerA"  appBase="webapps"
+            unpackWARs="true" autoDeploy="true">
+		<Context docBase="D:\webapps\ROOT" path="/demo" />
+        <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"
+               prefix="localhost_access_log" suffix=".txt"
+               pattern="%h %l %u %t &quot;%r&quot; %s %b" />
+      </Host>
+~~~
+
+结果如下，这样我们就可以通过加`/路径名`来跳转到别的项目中：
+
+![image-20220112142553665](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220112142553665.png)
+
+# 三、自定义Tomcat
+
+[项目地址](https://github.com/Loserfromlazy/My_Tomcat)
+
+自定义Tomcat是可以作为一个服务器软件提供服务的，就是说我们可以使用浏览器客户端发送http请求，My_Tomcat可以接收请求并处理，处理成功后可以返回浏览器客户端。
+
+我们分步来实现，首先我们请求http://localhost:8080,返回一个固定的Hello World字符串，然后封装Request和Response，返回html静态文件即静态资源，最后我们使My_Tomcat可以请求动态资源。
 
 
 
