@@ -301,13 +301,161 @@ server.xml中大部分配置保持默认即可，我们这里对host标签和con
 
 我们分步来实现，首先我们请求http://localhost:8080,返回一个固定的Hello World字符串，然后封装Request和Response，返回html静态文件即静态资源，最后我们使My_Tomcat可以请求动态资源。
 
+## 3.1 返回固定字符串 
+
+第一步我们先让我们的项目能监听8080端口，并返回信息：
+
+我们新建项目然后创建Boostrap类，类信息如下，主要思路是通过监听8080端口然后返回信息，在返回信息时需要将HTTP请求体进行拼接我写在了HttpProtocolUtil类中：
+
+![image-20220115122657579](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220115122657579.png)
+
+```java
+public class BootStrap {
+    //暂时写死，可以修改到xml文件中进行读取
+    private int port = 8080;
+
+    public int getPort() {
+        return port;
+    }
+
+    public void setPort(int port) {
+        this.port = port;
+    }
+
+    /**
+     * MYTomcat程序init和启动
+     *
+     * @author Loserfromlazy
+     * @date 2022/1/12 15:35
+     */
+    public void start() throws IOException {
+        //===================BIO
+        /*ServerSocket serverSocket = new ServerSocket(port);
+        System.out.println("My_Tomcat Listening on port 8080");
+        while (true){
+            Socket socket = serverSocket.accept();
+            OutputStream outputStream = socket.getOutputStream();
+            String data = "Hello,World!";
+            String responseText = HttpProtocolUtil.getHttpHeader200(data.getBytes(StandardCharsets.UTF_8).length) + data;
+            outputStream.write(responseText.getBytes(StandardCharsets.UTF_8));
+            socket.close();
+        }*/
+        //==================NIO
+        ServerSocketChannel serverSocketChannel= ServerSocketChannel.open();
+        serverSocketChannel.bind(new InetSocketAddress(8080));
+        serverSocketChannel.configureBlocking(false);
+        Selector selector = Selector.open();
+        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+        while (true){
+            if (selector.select(2000)==0){
+                continue;
+            }
+            Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+            while (iterator.hasNext()){
+                SelectionKey key = iterator.next();
+                if (key.isAcceptable()){
+                    SocketChannel socketChannel = serverSocketChannel.accept();
+                    socketChannel.configureBlocking(false);
+                    socketChannel.register(selector,SelectionKey.OP_READ);
+                    String data = "Hello,World!";
+                    String responseText = HttpProtocolUtil.getHttpHeader200(data.getBytes(StandardCharsets.UTF_8).length) + data;
+                    ByteBuffer buffer = ByteBuffer.wrap(responseText.getBytes(StandardCharsets.UTF_8));
+                    socketChannel.write(buffer);
+                    iterator.remove();
+                }
+            }
+        }
+    }
 
 
+    /**
+     * MYTomcat程序入口
+     *
+     * @author Loserfromlazy
+     * @date 2022/1/12 15:24
+     */
+    public static void main(String[] args) {
+        BootStrap bootStrap = new BootStrap();
+        try {
+            bootStrap.start();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
 
+```java
+public class HttpProtocolUtil {
 
+    public static String getHttpHeader200(long contentLength){
+        return "HTTP/1.1 200 OK \n" +
+                "Content-Type:text/html \n" +
+                "Content-Length: "+contentLength+"\n" +
+                "\r\n";
+    }
 
+    public static String getHttpHeader404(){
+        String str404="<h1>404 not found</h1>";
+        return "HTTP/1.1 404 NOT Found \n" +
+                "Content-Type:text/html \n" +
+                "Content-Length: "+str404.getBytes(StandardCharsets.UTF_8).length+"\n" +
+                "\r\n" +str404;
+    }
+}
+```
 
+## 3.2 返回静态资源
 
+第二步，我们可以封装请求的Request和Response对象，然后返回静态资源
+
+> 这里我将上一步的Bootstrap改为Bootstrap1，然后新建一个Bootstrap，用于保存每一步的代码，后面也会这么做。
+
+在进行封装前，我们可以查看HTTP请求头信息，可以使用以下方法查看或者F12：
+
+```java
+public void start() throws IOException {
+    //===================BIO
+    ServerSocket serverSocket = new ServerSocket(port);
+    System.out.println("My_Tomcat Listening on port 8080");
+    while (true) {
+        Socket socket = serverSocket.accept();
+        InputStream inputStream = socket.getInputStream();
+        int count = 0;
+        while (count == 0) {
+            count = inputStream.available();
+        }
+        byte [] bytes = new byte[count];
+        inputStream.read(bytes);
+        System.out.println(new String(bytes));
+        socket.close();
+    }
+}
+```
+
+输出信息：
+
+~~~
+GET / HTTP/1.1
+Host: localhost:8080
+Connection: keep-alive
+Cache-Control: max-age=0
+sec-ch-ua: " Not;A Brand";v="99", "Google Chrome";v="97", "Chromium";v="97"
+sec-ch-ua-mobile: ?0
+sec-ch-ua-platform: "Windows"
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9
+Sec-Fetch-Site: none
+Sec-Fetch-Mode: navigate
+Sec-Fetch-User: ?1
+Sec-Fetch-Dest: document
+Accept-Encoding: gzip, deflate, br
+Accept-Language: zh-CN,zh;q=0.9
+Cookie: Idea-3b85319b=6df6ddd1-3436-43bd-a172-56742a301d72
+~~~
+
+拿到了请求头，我们就可以封装Request，我们这里就封装请求方法和URL。
 
 
 
