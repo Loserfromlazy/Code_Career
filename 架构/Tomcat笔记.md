@@ -430,6 +430,35 @@ public void start() throws IOException {
         System.out.println(new String(bytes));
         socket.close();
     }
+    //==================NIO
+        ServerSocketChannel serverSocketChannel= ServerSocketChannel.open();
+        serverSocketChannel.bind(new InetSocketAddress(8080));
+        serverSocketChannel.configureBlocking(false);
+        Selector selector = Selector.open();
+        System.out.println("My_Tomcat Listening on port 8080");
+        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+        while (true){
+            if (selector.select(2000)==0){
+                continue;
+            }
+            Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+            while (iterator.hasNext()){
+                SelectionKey key = iterator.next();
+                if (key.isAcceptable()){
+                    SocketChannel socketChannel = serverSocketChannel.accept();
+                    socketChannel.configureBlocking(false);
+                    socketChannel.register(selector,SelectionKey.OP_READ);
+                    ByteBuffer buffer = ByteBuffer.allocate(1024);
+                    int count = 0;
+                    while (count==0){
+                        count = socketChannel.read(buffer);
+                    }
+                    buffer.flip();
+                    System.out.println(new String(buffer.array()));
+                    iterator.remove();
+                }
+            }
+        }
 }
 ```
 
