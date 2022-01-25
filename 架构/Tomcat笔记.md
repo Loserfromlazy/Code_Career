@@ -293,13 +293,15 @@ server.xml中大部分配置保持默认即可，我们这里对host标签和con
 
 ![image-20220112142553665](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220112142553665.png)
 
-# 三、自定义Tomcat
+# 三、手写简单Tomcat
 
 [项目地址](https://github.com/Loserfromlazy/My_Tomcat)
 
 自定义Tomcat是可以作为一个服务器软件提供服务的，就是说我们可以使用浏览器客户端发送http请求，My_Tomcat可以接收请求并处理，处理成功后可以返回浏览器客户端。
 
 我们分步来实现，首先我们请求http://localhost:8080,返回一个固定的Hello World字符串，然后封装Request和Response，返回html静态文件即静态资源，最后我们使My_Tomcat可以请求动态资源。
+
+我写的时候每一步都用了BIO和NIO两种方式，用的时候注释掉一种即可。这里只展示主要代码，具体工具类代码请自行github查看。
 
 ## 3.1 返回固定字符串 
 
@@ -313,15 +315,12 @@ server.xml中大部分配置保持默认即可，我们这里对host标签和con
 public class BootStrap {
     //暂时写死，可以修改到xml文件中进行读取
     private int port = 8080;
-
     public int getPort() {
         return port;
     }
-
     public void setPort(int port) {
         this.port = port;
     }
-
     /**
      * MYTomcat程序init和启动
      *
@@ -366,8 +365,6 @@ public class BootStrap {
             }
         }
     }
-
-
     /**
      * MYTomcat程序入口
      *
@@ -385,26 +382,6 @@ public class BootStrap {
 }
 ```
 
-```java
-public class HttpProtocolUtil {
-
-    public static String getHttpHeader200(long contentLength){
-        return "HTTP/1.1 200 OK \n" +
-                "Content-Type:text/html \n" +
-                "Content-Length: "+contentLength+"\n" +
-                "\r\n";
-    }
-
-    public static String getHttpHeader404(){
-        String str404="<h1>404 not found</h1>";
-        return "HTTP/1.1 404 NOT Found \n" +
-                "Content-Type:text/html \n" +
-                "Content-Length: "+str404.getBytes(StandardCharsets.UTF_8).length+"\n" +
-                "\r\n" +str404;
-    }
-}
-```
-
 ## 3.2 返回静态资源
 
 第二步，我们可以封装请求的Request和Response对象，然后返回静态资源
@@ -416,7 +393,7 @@ public class HttpProtocolUtil {
 ```java
 public void start() throws IOException {
     //===================BIO
-    ServerSocket serverSocket = new ServerSocket(port);
+    /*ServerSocket serverSocket = new ServerSocket(port);
     System.out.println("My_Tomcat Listening on port 8080");
     while (true) {
         Socket socket = serverSocket.accept();
@@ -429,7 +406,7 @@ public void start() throws IOException {
         inputStream.read(bytes);
         System.out.println(new String(bytes));
         socket.close();
-    }
+    }*/
     //==================NIO
         ServerSocketChannel serverSocketChannel= ServerSocketChannel.open();
         serverSocketChannel.bind(new InetSocketAddress(8080));
@@ -486,5 +463,494 @@ Cookie: Idea-3b85319b=6df6ddd1-3436-43bd-a172-56742a301d72
 
 拿到了请求头，我们就可以封装Request，我们这里就封装请求方法和URL。
 
+**Request对象**
 
+封装Request对象的思路就是将HTTP头中的信息保存在Requset对象中
+
+```java
+public class Request {
+
+    private String method;//例如GET POST
+    private String url;//例如 /index.html
+
+    public String getMethod() {
+        return method;
+    }
+
+    public void setMethod(String method) {
+        this.method = method;
+    }
+
+    public String getUrl() {
+        return url;
+    }
+
+    public void setUrl(String url) {
+        this.url = url;
+    }
+
+    private InputStream inputStream;//根据传入的inputStream解析请求头
+    private SocketChannel socketChannel;////根据传入的SocketChannel解析请求头(NIO)
+
+    public Request() {
+    }
+
+    public Request(SocketChannel socketChannel) throws IOException {
+        this.socketChannel = socketChannel;
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
+        int count = 0;
+        while (count==0){
+            count = socketChannel.read(buffer);
+        }
+        buffer.flip();
+        String httpHeaderStr = new String(buffer.array());//http头协议
+        String[] split = httpHeaderStr.split("\\n");
+        String firstLine = split[0];//协议第一行
+        String[] firstLineItem = firstLine.split(" ");
+        this.method =firstLineItem[0];
+        this.url = firstLineItem[1];
+        System.out.println("method==>"+this.method+";url==>"+this.url);
+    }
+
+    public Request(InputStream inputStream) throws IOException {
+        this.inputStream = inputStream;
+
+        int count = 0;
+        while (count == 0) {
+            count = inputStream.available();
+        }
+        byte [] bytes = new byte[count];
+        inputStream.read(bytes);
+        String httpHeaderStr = new String(bytes);//http头协议
+        String[] split = httpHeaderStr.split("\\n");
+        String firstLine = split[0];//协议第一行
+        String[] firstLineItem = firstLine.split(" ");
+        this.method =firstLineItem[0];
+        this.url = firstLineItem[1];
+        System.out.println("method==>"+this.method+";url==>"+this.url);
+
+    }
+}
+```
+
+**Response对象**
+
+封装Response对象的思路就是通过构造的输出流输出我们需要输出的内容。
+
+```java
+public class Response {
+
+    private OutputStream outputStream;
+
+    private SocketChannel socketChannel;
+
+    public Response(SocketChannel socketChannel) {
+        this.socketChannel = socketChannel;
+    }
+
+    public Response() {
+    }
+
+    public Response(OutputStream outputStream) {
+        this.outputStream = outputStream;
+    }
+
+    /**
+     * 通过url获取静态资源的绝对路径，根据绝对路径获取静态文件，然后使用输出流输出
+     *
+     * @author Yuhaoran
+     * @date 2022/1/17 13:23
+     */
+    public void outPutHtml(String url) throws IOException {
+        String absolutePath = StaticResourceUtil.getAbsolutePath(url);
+        File file = new File(absolutePath);
+        if (file.exists() && file.isFile()){
+            FileInputStream inputStream = new FileInputStream(file);
+            //输出文件内容
+            int count = 0;
+            while (count == 0) {
+                count = inputStream.available();
+            }
+            int written = 0;
+            int byteSize = 1024;
+            byte[] bytes = new byte[byteSize];
+            outputStream.write(HttpProtocolUtil.getHttpHeader200(count).getBytes(StandardCharsets.UTF_8));
+            while (written < count) {
+                if (written + byteSize > count) {
+                    bytes = new byte[count - written];
+                }
+                inputStream.read(bytes);
+                outputStream.write(bytes);
+                outputStream.flush();
+                written += byteSize;
+            }
+        }else {
+            //输出404
+            outputStream.write(HttpProtocolUtil.getHttpHeader404().getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    public void outPutHtmlByChannel(String url) throws IOException {
+        String absolutePath = StaticResourceUtil.getAbsolutePath(url);
+        File file = new File(absolutePath);
+        if (file.exists() && file.isFile()){
+            //输出文件内容
+            FileInputStream inputStream = new FileInputStream(file);
+            FileChannel fileChannel = inputStream.getChannel();
+            ByteBuffer buffer = ByteBuffer.allocate((int) file.length());
+            fileChannel.read(buffer);
+            buffer.flip();
+            byte[] bytes = HttpProtocolUtil.getHttpHeader200(buffer.capacity()).getBytes(StandardCharsets.UTF_8);
+            ByteBuffer responseBuffer = ByteBuffer.wrap(bytes);
+            socketChannel.write(responseBuffer);
+            socketChannel.write(buffer);
+        }else {
+            //输出404
+            byte[] bytes = HttpProtocolUtil.getHttpHeader404().getBytes(StandardCharsets.UTF_8);
+            ByteBuffer buffer = ByteBuffer.wrap(bytes);
+            socketChannel.write(buffer);
+        }
+    }
+
+    public void outPut(String contect) throws IOException {
+        outputStream.write(contect.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public void outPutByChannel(String contect) throws IOException {
+        ByteBuffer buffer = ByteBuffer.wrap(contect.getBytes(StandardCharsets.UTF_8));
+        socketChannel.write(buffer);
+    }
+}
+```
+
+封装完成后我们就可以在主方法中使用：
+
+```java
+public class BootStrap2 {
+    //暂时写死，可以修改到xml文件中进行读取
+    private int port = 8080;
+    public int getPort() {
+        return port;
+    }
+    public void setPort(int port) {
+        this.port = port;
+    }
+    /**
+     * MYTomcat程序init和启动
+     *
+     * @author Loserfromlazy
+     * @date 2022/1/15 12:38
+     */
+    public void start() throws IOException {
+        //===================BIO
+//        ServerSocket serverSocket = new ServerSocket(port);
+//        System.out.println("My_Tomcat Listening on port 8080");
+//        while (true) {
+//            Socket socket = serverSocket.accept();
+//            InputStream inputStream = socket.getInputStream();
+//            OutputStream outputStream = socket.getOutputStream();
+//            Request request = new Request(inputStream);
+//            Response response = new Response(outputStream);
+//            response.outPutHtml(request.getUrl());
+//            socket.close();
+//        }
+        //==================NIO
+        ServerSocketChannel serverSocketChannel= ServerSocketChannel.open();
+        serverSocketChannel.bind(new InetSocketAddress(8080));
+        serverSocketChannel.configureBlocking(false);
+        Selector selector = Selector.open();
+        System.out.println("My_Tomcat Listening on port 8080");
+        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+        while (true){
+            if (selector.select(2000)==0){
+                continue;
+            }
+            Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+            while (iterator.hasNext()){
+                SelectionKey key = iterator.next();
+                if (key.isAcceptable()){
+                    SocketChannel socketChannel = serverSocketChannel.accept();
+                    socketChannel.configureBlocking(false);
+                    socketChannel.register(selector,SelectionKey.OP_READ);
+                    System.out.println(socketChannel.getRemoteAddress()+"发来请求");
+                    Request request = new Request(socketChannel);
+                    Response response = new Response(socketChannel);
+                    response.outPutHtmlByChannel(request.getUrl());
+                    socketChannel.close();
+                    iterator.remove();
+                }
+            }
+        }
+    }
+    /**
+     * MYTomcat程序入口
+     *
+     * @author Loserfromlazy
+     * @date 2022/1/12 15:24
+     */
+    public static void main(String[] args) {
+        BootStrap2 bootStrap = new BootStrap2();
+        try {
+            bootStrap.start();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+## 3.3 返回动态资源
+
+> 关于Xpath表达式可以在菜鸟上看一下语法很简单https://www.runoob.com/xpath/xpath-syntax.html
+
+动态资源就需要我们进行对Servlet的封装，代码如下，首先需要定义一下Servlet规范，如下面的Servlet接口，然后封装一个具体的HttpServlet，最后我们自己编写Servlet继承HttpServlet写自己的业务逻辑：
+
+```java
+public interface Servlet {
+    void init() throws Exception;
+
+    void destory() throws Exception;
+
+    void service(Request request,Response response) throws Exception;
+}
+```
+
+```java
+public abstract class HttpServlet implements Servlet{
+    public abstract void doGet(Request request,Response response);
+
+    public abstract void doPost(Request request,Response response);
+
+    @Override
+    public void service(Request request,Response response) throws Exception {
+        if ("GET".equals(request.getMethod())){
+            doGet(request,response);
+        }else{
+            doPost(request,response);
+        }
+    }
+}
+```
+
+```java
+public class MyServlet extends HttpServlet{
+    @Override
+    public void doGet(Request request, Response response) {
+        String content = "<h1>Hello My_Tomcat GET Method!</h1>";
+        try {
+            //BIO
+            //response.outPut(HttpProtocolUtil.getHttpHeader200(content.getBytes(StandardCharsets.UTF_8).length)+content);
+            //NIO
+            response.outPutByChannel(HttpProtocolUtil.getHttpHeader200(content.getBytes(StandardCharsets.UTF_8).length)+content);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void doPost(Request request, Response response) {
+        String content = "<h1>Hello My_Tomcat POST Method!</h1>";
+        try {
+            //BIO
+            //response.outPut(HttpProtocolUtil.getHttpHeader200(content.getBytes(StandardCharsets.UTF_8).length)+content);
+            //NIO
+            response.outPutByChannel(HttpProtocolUtil.getHttpHeader200(content.getBytes(StandardCharsets.UTF_8).length)+content);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+    @Override
+    public void init() throws Exception {
+
+    }
+    @Override
+    public void destory() throws Exception {
+
+    }
+}
+```
+
+有了Servlet我们还需要web.xml,这里我们参考之前的Servlet即可：
+
+```xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<web-app>
+
+    <servlet>
+        <servlet-name>myServlet</servlet-name>
+        <servlet-class>server.MyServlet</servlet-class>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>myServlet</servlet-name>
+        <url-pattern>/my</url-pattern>
+    </servlet-mapping>
+
+</web-app>
+```
+
+最后在主方法中使用即可：
+
+```java
+public class BootStrap {
+    //暂时写死，可以修改到xml文件中进行读取
+    private int port = 8080;
+    public int getPort() {
+        return port;
+    }
+    public void setPort(int port) {
+        this.port = port;
+    }
+    /**
+     * MYTomcat程序init和启动
+     *
+     * @author Loserfromlazy
+     * @date 2022/1/15 12:38
+     */
+    public void start() throws Exception {
+        //加载web.xml
+        loadServlet();
+        //===================BIO
+        /*ServerSocket serverSocket = new ServerSocket(port);
+        System.out.println("My_Tomcat Listening on port 8080");
+        while (true) {
+            Socket socket = serverSocket.accept();
+            InputStream inputStream = socket.getInputStream();
+            OutputStream outputStream = socket.getOutputStream();
+            Request request = new Request(inputStream);
+            Response response = new Response(outputStream);
+            if (servletMap.get(request.getUrl())==null){
+                response.outPutHtml(request.getUrl());
+            }else {
+                HttpServlet httpServlet = servletMap.get(request.getUrl());
+                httpServlet.service(request,response);
+            }
+
+            socket.close();
+        }*/
+        //==================NIO
+        ServerSocketChannel serverSocketChannel= ServerSocketChannel.open();
+        serverSocketChannel.bind(new InetSocketAddress(8080));
+        serverSocketChannel.configureBlocking(false);
+        Selector selector = Selector.open();
+        System.out.println("My_Tomcat Listening on port 8080");
+        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+        while (true){
+            if (selector.select(2000)==0){
+                continue;
+            }
+            Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+            while (iterator.hasNext()){
+                SelectionKey key = iterator.next();
+                if (key.isAcceptable()){
+                    SocketChannel socketChannel = serverSocketChannel.accept();
+                    socketChannel.configureBlocking(false);
+                    socketChannel.register(selector,SelectionKey.OP_READ);
+                    System.out.println(socketChannel.getRemoteAddress()+"发来请求");
+                    Request request = new Request(socketChannel);
+                    Response response = new Response(socketChannel);
+                    if (servletMap.get(request.getUrl())==null){
+                        response.outPutHtmlByChannel(request.getUrl());
+                    }else {
+                        HttpServlet httpServlet = servletMap.get(request.getUrl());
+                        httpServlet.service(request,response);
+                    }
+                    socketChannel.close();
+                    iterator.remove();
+                }
+            }
+        }
+    }
+
+    private Map<String,HttpServlet> servletMap = new HashMap<>();
+    /**
+     * 加载解析web.xml
+     * @author Loserfromlazy
+     * @date 2022/1/18 13:18
+     */
+    private void loadServlet() {
+        InputStream resourceAsStream = this.getClass().getClassLoader().getResourceAsStream("web.xml");
+        SAXReader saxReader = new SAXReader();
+        try {
+            Document document = saxReader.read(resourceAsStream);
+            Element rootElement = document.getRootElement();
+
+            List<Element> selectNodes = rootElement.selectNodes("//servlet");
+            for (Element element : selectNodes) {
+                //获取servlet-name
+                Node servletNameNode = element.selectSingleNode("servlet-name");
+                String servletName = servletNameNode.getStringValue();
+                //获取servlet-class
+                Node servletClassNode = element.selectSingleNode("servlet-class");
+                String servletClass = servletClassNode.getStringValue();
+
+                //根据servlet-name找到servlet-class
+                Node servletMapping = rootElement.selectSingleNode("/web-app/servlet-mapping[servlet-name = '" + servletName + "']");
+                Node urlPatternNode = servletMapping.selectSingleNode("url-pattern");
+                String urlPattern = urlPatternNode.getStringValue();
+
+                //存入map
+                servletMap.put(urlPattern, (HttpServlet) Class.forName(servletClass).newInstance());
+            }
+        }catch (Exception e){
+            e.printStackTrace();
+        }
+
+    }
+    /**
+     * MYTomcat程序入口
+     *
+     * @author Loserfromlazy
+     * @date 2022/1/12 15:24
+     */
+    public static void main(String[] args) {
+        BootStrap bootStrap = new BootStrap();
+        try {
+            bootStrap.start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+## 3.4 使用线程池的方式改造
+
+我们只需要创建一个线程池和一个线程类来包装我们的执行逻辑，然后将线程提交到线程池即可。
+
+这里以NIO的线程类为例：
+
+```java
+public class RequestProcess implements Runnable{
+    private SocketChannel socketChannel;
+    private Map<String,HttpServlet> servletMap = new HashMap<>();
+    private Selector selector;
+
+    public RequestProcess(SocketChannel socketChannel, Map<String, HttpServlet> servletMap, Selector selector) {
+        this.socketChannel = socketChannel;
+        this.servletMap = servletMap;
+        this.selector = selector;
+    }
+
+    @Override
+    public void run() {
+        try {
+            socketChannel.configureBlocking(false);
+            socketChannel.register(selector, SelectionKey.OP_READ);
+            System.out.println(socketChannel.getRemoteAddress()+"发来请求");
+            Request request = new Request(socketChannel);
+            Response response = new Response(socketChannel);
+            if (servletMap.get(request.getUrl())==null){
+                response.outPutHtmlByChannel(request.getUrl());
+            }else {
+                HttpServlet httpServlet = servletMap.get(request.getUrl());
+                httpServlet.service(request,response);
+            }
+            socketChannel.close();
+        }catch (Exception e){
+            e.printStackTrace();
+        }
+
+    }
+}
+```
 
