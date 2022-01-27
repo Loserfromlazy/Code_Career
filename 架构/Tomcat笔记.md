@@ -297,7 +297,7 @@ server.xml中大部分配置保持默认即可，我们这里对host标签和con
 
 [项目地址](https://github.com/Loserfromlazy/My_Tomcat)
 
-自定义Tomcat是可以作为一个服务器软件提供服务的，就是说我们可以使用浏览器客户端发送http请求，My_Tomcat可以接收请求并处理，处理成功后可以返回浏览器客户端。
+自定义Tomcat是可以作为一个服务器软件提供服务的，就是说我们可以使用浏览器客户端发送http请求，My_Tomcat可以接收请求并处理，处理成功后可以返回浏览器客户端。主要是简单的理解tomcat的主要工作流程。
 
 我们分步来实现，首先我们请求http://localhost:8080,返回一个固定的Hello World字符串，然后封装Request和Response，返回html静态文件即静态资源，最后我们使My_Tomcat可以请求动态资源。
 
@@ -953,4 +953,16 @@ public class RequestProcess implements Runnable{
     }
 }
 ```
+
+# 四、Tomcat源码
+
+## 4.1 源码构建
+
+官方文档指定使用ant进行构建，但是使用maven也是能构建的。
+
+
+
+
+
+
 
