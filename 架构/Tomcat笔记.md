@@ -960,7 +960,7 @@ public class RequestProcess implements Runnable{
 
 官方文档指定使用ant进行构建，但是使用maven也是能构建的。
 
-
+![image-20220211154319881](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220211154319881.png)
 
 
 
