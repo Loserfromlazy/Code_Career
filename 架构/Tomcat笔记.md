@@ -958,9 +958,178 @@ public class RequestProcess implements Runnable{
 
 ## 4.1 源码构建
 
-官方文档指定使用ant进行构建，但是使用maven也是能构建的。
+官方文档指定使用ant进行构建，但是使用maven也是能构建的。因为本质上就是一个Java项目。
 
-![image-20220211154319881](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220211154319881.png)
+我们首先在官网上下载tomcat的源码，我的源码版本是8.5.75，下载apache-tomcat-8.5.75-src.zip即可下载完成后将zip包解压。解压后创建一个source文件夹，将conf和webapps文件夹拷贝到source文件夹下：
+
+![image-20220216134840537](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216134840537.png)
+
+然后在解压后的文件夹下创建pom.xml文件：
+
+![image-20220216134921017](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216134921017.png)
+
+pom文件内容如下：
+
+~~~xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+		http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	 <groupId>org.apache.tomcat</groupId>
+	 <artifactId>apache-tomcat-8.5.75-src</artifactId>
+	 <name>Tomcat8.5</name>
+	 <version>8.5</version>
+  <properties>
+    <!-- 设置项目编码 -->
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+  </properties>
+
+	 <build>
+		 <!--指定源目录-->
+		 <finalName>Tomcat8.5</finalName>
+		 <sourceDirectory>java</sourceDirectory>
+		 <resources>
+			 <resource>
+				<directory>java</directory>
+			 </resource>
+		 </resources>
+		 <plugins>
+		 <!--引入编译插件-->
+			 <plugin>
+				 <groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-compiler-plugin</artifactId>
+					<version>3.1</version>
+				 <configuration>
+					<encoding>UTF-8</encoding>
+					<source>8</source>
+					<target>8</target>
+				 </configuration>
+			 </plugin>
+		 </plugins>
+	 </build>
+
+	<!--tomcat 依赖的基础包-->
+	 <dependencies>
+		 <dependency>
+			 <groupId>org.easymock</groupId>
+			 <artifactId>easymock</artifactId>
+			 <version>3.4</version>
+		 </dependency>
+		 <dependency>
+			 <groupId>ant</groupId>
+			 <artifactId>ant</artifactId>
+			 <version>1.7.0</version>
+		 </dependency>
+		 <dependency>
+			 <groupId>wsdl4j</groupId>
+			 <artifactId>wsdl4j</artifactId>
+			 <version>1.6.2</version>
+		 </dependency>
+		 <dependency>
+			 <groupId>javax.xml</groupId>
+			 <artifactId>jaxrpc</artifactId>
+			 <version>1.1</version>
+		 </dependency>
+		 <dependency>
+			 <groupId>org.eclipse.jdt.core.compiler</groupId>
+			 <artifactId>ecj</artifactId>
+			 <version>4.5.1</version>
+		 </dependency>
+		 <dependency>
+			 <groupId>javax.xml.soap</groupId>
+			 <artifactId>javax.xml.soap-api</artifactId>
+			 <version>1.4.0</version>
+		 </dependency>
+	 </dependencies>
+</project>
+~~~
+
+然后打开idea导入这个工程，idea会自动识别为maven工程。导入工程后启动BootStrap类，启动前加上启动参数：
+
+> 添加启动参数的方法如下：
+>
+> 打开idea的启动类的配置编辑
+>
+> ![image-20220216135214702](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216135214702.png)
+>
+> 然后再下图的VM options中编写，如果没有这个文本框，就需要在下图右上角的这个Modify options中添加VM options然后在编写。
+>
+> ![image-20220216135401645](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216135401645.png)
+
+VM参数如下：参数主要是用来指定tomcat的日志路径和产品目录路径。
+
+> Bootstrap启动的时候使用了两个系统变量catalina.home和catalina.base，从官网和源码中的注释可以知道这两者的区别主要是：catalina.home是Tomcat产品的安装目录，而catalina.base是tomcat启动过程中需要读取的各种配置及日志的根目录。默认情况下catalina.base是和catalina.home是相同的。
+>
+
+~~~
+-Dcatalina.home=D:\tomcat\apache-tomcat-8.5.75-src\source
+-Dcatalina.base=D:\tomcat\apache-tomcat-8.5.75-src\source
+-Djava.util.logging.manager=org.apache.juli.ClassLoaderLogManager
+-Djava.util.logging.config.file=D:\tomcat\apache-tomcat-8.5.75-src\source\conf\logging.properties
+~~~
+
+然后启动BootStrap类，打开localhost:8080，正常弹出tomcat首页即可。
+
+![image-20220216143150933](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216143150933.png)
+
+## 4.2 源码构建的问题
+
+以下是构件中编译遇到的各种问题：
+
+### 4.2.1 JSP报错
+
+如果打开8080弹出JSP报错（PS：我的是JSP报错加乱码），如下图：
+
+![image-20220216142507101](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216142507101.png)
+
+则需要手动添加JSP的编译器，在ContextConfig中的configureStart()方法中增加JSP编译器，如下图：
+
+![image-20220216142645786](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216142645786.png)
+
+重启后就可以解决JSP报错的问题。
+
+### 4.2.2 tomcat编译乱码问题
+
+如果也想我一样有日志乱码问题，首先可以试试网上的各种改UTF-8编码的操作，这里就不做赘述。如果不行就需要改源码解决，过程如下：
+
+但是我改了7、8个地方改成UTF-8都不行，所以我对日志进行了Debug，过程如下：
+
+首先看控制台的乱码如下图：
+
+![image-20220216143320555](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216143320555.png)
+
+然后在最开始出现乱码的地方，通过全局搜索找到这个VersionLoggerListener.log
+
+![image-20220216143427884](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216143427884.png)
+
+然后打上断点开始进行debug调试，一路跟代码，发现在getString方法中的bundle.getString(key)这一句执行完后，乱码就会出现。如下图：
+
+![image-20220216143916714](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216143916714.png)
+
+点进bundle.getString(key)，发现是JDK中ResourceBundle的方法.这个类是用来做国际化的。
+
+最后在stackoverflow上找到了，如下图，Java9以上属性文件默认是UTF-8，但是Java8及以下默认是使用ISO-8859-1的，我的jdk版本就是8所以日志会有乱码问题。
+
+![image-20220216145522949](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216145522949.png)
+
+解决方法是：修改方法，手动进行转码（改的时候注意有很多getString，别改错了）：
+
+![image-20220216151134899](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216151134899.png)
+
+重启后发现第一个乱码问题已解决。
+
+下一个乱码问题也是如此，最后跟到下面的地方，跟上面同理，手动进行转码
+
+![image-20220216151251087](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220216151251087.png)
+
+乱码问题解决。
+
+> PS：我改完这两个地方就没有乱码了
+
+## 4.3 
 
 
 
