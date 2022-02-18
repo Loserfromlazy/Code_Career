@@ -1,5 +1,9 @@
 # Tomcat学习笔记
 
+转载请声明作者和出处！！！
+
+本文如有错误欢迎指正，感激不尽。
+
 # 一、Tomcat概述
 
 ## 1.1 浏览器访问流程
@@ -1129,7 +1133,74 @@ VM参数如下：参数主要是用来指定tomcat的日志路径和产品目录
 
 > PS：我改完这两个地方就没有乱码了
 
-## 4.3 
+## 4.3 源码流程分析
+
+> 建议自己跟一编源码，光看别人的源码分析是看不懂的，别人的源码分析只能提供分析思路
+
+### 4.3.1 tomcat启动流程
+
+首先我们在startip.bat或startup.sh中可以找到这个脚本会拉起catalina.bat或catalina.sh的脚本，如下图
+
+![image-20220218152901720](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218152901720.png)
+
+然后再catalina.bat或catalina.sh中会发现这个脚本会启动BootStrap类，也就是main方法，然后启动时会带一个start的参数，如下图：
+
+![image-20220218153057792](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218153057792.png)
+
+然后我们进入BootStrap的main，具体的流程图（流程图是自己边Debug边画的只有大概的流程）在下面。
+
+进入main方法后会先进入init方法
+
+![image-20220218153804154](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218153804154.png)
+
+这里会创建一个Catalina的实例
+
+![image-20220218153849250](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218153849250.png)
+
+然后回到main方法，继续往下走，我们会发现，会执行load()方法，然后执行start()方法。load方法主要是tomcat中的各种组件初始化，start方法是各种组件依次启动。
+
+![image-20220218154210449](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218154210449.png)
+
+我们先跟进load()方法,这里会调用Catalina的load方法：
+
+![image-20220218154748322](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218154748322.png)
+
+我们进入Catalina的load方法中，这个方法中主要关注的代码如下，它会拉取Server的init方法：
+
+```java
+getServer().init();
+```
+
+我们点进init方法，会进入到LifeCycle的init方法，LifeCycle这个接口主要就是定义了整体生命周期，我们进入LifecycleBase的init方法中（默认进这个类，可以自行debug确认）
+
+![image-20220218155155040](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218155155040.png)
+
+进入后会走到initInternal()方法中，这个方法是抽象方法，debug跟进会进入到对应的实现方法中，因为我们调用的是Server.init()所以会进入StandardServer的initInternal()中。
+
+![image-20220218155644956](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218155644956.png)
+
+我们进入该方法，这个方法中主要关注下面的代码：
+
+```java
+// Initialize our defined Services
+for (Service service : services) {
+    service.init();
+}
+```
+
+service.init()会拉起Service的init方法，我们点进init(),会发现会回到LifeCycle的init方法，然后跟上面一样会进入到StandardService的initInternal()方法中，如下图
+
+![image-20220218155407675](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220218155407675.png)
+
+最后会按照流程图一步一步走下去，会把Tomcat的组件逐级init。然后会回到BootStrap的start()方法中，start()方法与init()方法流程差不多，这里就不再赘述。
+
+Tomcat启动的整体流程图：
+
+![tomcat启动流程](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/tomcat%E5%90%AF%E5%8A%A8%E6%B5%81%E7%A8%8B.png)
+
+### 4.3.2 Tomcat请求处理流程
+
+
 
 
 
