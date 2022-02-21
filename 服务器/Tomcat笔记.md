@@ -1233,17 +1233,27 @@ public class DemoServlet extends HttpServlet {
 
 然后就可以在源码中打断点查看Tomcat的请求流程了。
 
-**Tomcat请求流程**
-
 以上面的工程为例，请求地址是`http://localhost:8080/webdemo/web/webdemo`,Tomcat处理的大体流程如下图：
 
 ![Tomcat请求流程20220221](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/Tomcat%E8%AF%B7%E6%B1%82%E6%B5%81%E7%A8%8B20220221.png)
 
+**Tomcat请求流程**
 
+首先，我们需要找到断点的入口，我们在NioEndPoint中的Poller类的run方法中打上断点。
 
-
-
-
+> 为什么在NioEndPoint中的Poller类的run方法中打上断点？
+>
+> Tomcat是从Connector接收请求的,在上面的启动流程源码分析中，如果debug跟代码的话，最后会发现在init流程中会执行socket的bind()方法在start流程中会执行socket的accept()方法。这两个方法都是在NioEndpoint中的，如下图：
+>
+> ![image-20220221150926632](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220221150926632.png)
+>
+> 而在NioEndpoint的startInternal()方法中，在执行accept之前，会创建轮询器，
+>
+> ![image-20220221160351307](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220221160351307.png)
+>
+> 我们进入到轮询器类中，发现其继承了Runnable，所以我们找到run方法，会发现，此方法会监听socket通道中的事件，因此这个轮询线程就是为了轮询监听socket通道事件的。因此我们在监听到事件之后的处理方法即`processKey(sk, socketWrapper);`上打断点开始debug。如下图：
+>
+> ![image-20220221160819369](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220221160819369.png)
 
 
 
