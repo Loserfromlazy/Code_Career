@@ -1200,6 +1200,53 @@ Tomcat启动的整体流程图：
 
 ### 4.3.2 Tomcat请求处理流程
 
+**部署项目到源码**
+
+如果需要查看Tomcat的请求流程，我们就需要有效的能进入我们Tomcat源代码工程的URL。所以我们可以新建一个JavaWeb工程，然后将这个JavaWeb工程部署到我们的Tomcat源码项目中。
+
+首先我们先新建一个webdemo工程，然后创建一个Servlet,如下：
+
+![image-20220221094659286](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220221094659286.png)
+
+```java
+@WebServlet(name = "webdemo",value = "/web/webdemo")
+public class DemoServlet extends HttpServlet {
+    @Override
+    protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        System.out.println("进入了GET方法");
+    }
+
+    @Override
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        System.out.println("进入了POST方法");
+    }
+}
+```
+
+然后我们将webdemo工程部署到tomcat中启动（注意是Tomcat不是我们的Tomcat源码工程），启动后会生成文件夹，如下图：
+
+![image-20220221094826667](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220221094826667.png)
+
+然后我们将Tomcat生成的这个webdemo文件夹拷贝到我们的Tomcat源码工程中：
+
+![image-20220221095019428](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220221095019428.png)
+
+然后就可以在源码中打断点查看Tomcat的请求流程了。
+
+**Tomcat请求流程**
+
+以上面的工程为例，请求地址是`http://localhost:8080/webdemo/web/webdemo`,Tomcat处理的大体流程如下图：
+
+![Tomcat请求流程20220221](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/Tomcat%E8%AF%B7%E6%B1%82%E6%B5%81%E7%A8%8B20220221.png)
+
+
+
+
+
+
+
+
+
 
 
 
