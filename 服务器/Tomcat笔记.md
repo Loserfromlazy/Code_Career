@@ -1255,9 +1255,185 @@ public class DemoServlet extends HttpServlet {
 >
 > ![image-20220221160819369](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220221160819369.png)
 
+下面我们debug运行BootStrap然后浏览器发送一个请求，开始查看请求处理流程：
 
+> 这里只是演示请求处理流程，建议自己跟一遍源码。
 
+首先我们看到请求确实来到了processKey方法，如下图：
 
+![image-20220222104226663](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222104226663.png)
+
+我们跟进这个方法，在processKey中有一个processSocket方法这个方法会继续处理我们的socket和key的信息，我们跟进这个processSocket方法。
+
+![image-20220222105709562](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222105709562.png)
+
+进入之后我们会发现进入到了NioEndPoint的抽象父类的方法中，然后我们会发现在这里会用线程池执行一个线程，因此我们需要关注这个线程的run方法。
+
+![image-20220222105953264](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222105953264.png)
+
+我们进入到SocketProcessorBase类中的run方法，代码如下：
+
+```java
+@Override
+public final void run() {
+    synchronized (socketWrapper) {
+        // It is possible that processing may be triggered for read and
+        // write at the same time. The sync above makes sure that processing
+        // does not occur in parallel. The test below ensures that if the
+        // first event to be processed results in the socket being closed,
+        // the subsequent events are not processed.
+        if (socketWrapper.isClosed()) {
+            return;
+        }
+        doRun();
+    }
+}
+```
+
+我们在doRun()打上断点，让程序运行到这里。（因为是线程池执行这个线程，所以可以跳过来）
+
+然后我们继续跟进doRun()方法，在这个方法中，我们会发现他会执行handler的process方法。
+
+![image-20220222110701615](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222110701615.png)
+
+进入process方法之后，在这个方法中会得到一个Processor对象，然后调用Processor对象的process方法，如下图：
+
+![image-20220222111046555](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222111046555.png)
+
+继续跟，会进入到AbstractProcessorLight中（这个类是一个轻量级的抽象处理器实现，旨在作为从轻量级升级处理器到HTTP/AJP处理器的所有处理器实现的基础。）也就是说在这里会找到具体的处理器Processor去处理。
+
+我们在这个方法中能找到service方法如下，这个方法会继续处理我们我们第一步传过来的socketWrapper对象。
+
+```java
+state = service(socketWrapper);
+```
+
+我们跟进这个方法，果然进入到了具体的处理器中，也就是会进入到具体的Http1.1协议处理器的service方法中：
+
+![image-20220222111732184](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222111732184.png)
+
+进入到service方法后，这个方法会将我们传过来的request和response对象转换成标准的HttpServlet对象，然后调用容器，getContainer方法会拿到service关联的Engine。
+
+这里会通过获取容器的管道然后调用管道中的第一个Value的invoke方法，如下图：
+
+![image-20220222125009002](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222125009002.png)
+
+我们跟进invoke方法：（此时会进入StandardEngineValve类） 此方法中会调用host，从host中管道取第一个Value执行invoke方法，去处理这个http请求。**管道Pipeline其实就是一些按顺序执行Value#invoke()方法的对应的类的封装**
+
+> Pipeline是一个处理管道的标准实现，它将调用一系列已配置为按顺序调用的阀门。此实现可用于任何类型的容器。Pipeline里面是Value接口的各种实现类。
+>
+> **getFirst方法：**
+>
+> 在调用pipeline的getFirst()方法时，如果first上有Value就返回该Value，否则就返回basic上的Value。
+>
+> ```java
+> protected Valve basic = null;
+> protected Container container = null;
+> protected Valve first = null;
+> @Override
+> public Valve getFirst() {
+>     if (first != null) {
+>         return first;
+>     }
+> 
+>     return basic;
+> }
+> ```
+>
+> basic和first都是Value，Value是一个接口，下面有很多实现类比如StandardEngineValve
+>
+> basic其实就是它本身的标准Value实现类：
+>
+> ![image-20220222143447158](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222143447158.png)
+
+```java
+@Override
+public final void invoke(Request request, Response response)
+    throws IOException, ServletException {
+
+    // Select the Host to be used for this Request
+    Host host = request.getHost();
+    if (host == null) {
+        // HTTP 0.9 or HTTP 1.0 request without a host when no default host
+        // is defined.
+        // Don't overwrite an existing error
+        if (!response.isError()) {
+            response.sendError(404);
+        }
+        return;
+    }
+    if (request.isAsyncSupported()) {
+        request.setAsyncSupported(host.getPipeline().isAsyncSupported());
+    }
+
+    // Ask this Host to process this request
+    host.getPipeline().getFirst().invoke(request, response);
+}
+```
+
+> PS：在获取`host.getPipeline().getFirst().invoke(request, response);`
+>
+> host的pipeline的顺序是AbstractAccessLogValve->ErrorReportValve ->StandardHostValve。host的pipeline的basic时StandardHostValve，如图：
+>
+> ![image-20220222142458756](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222142458756.png)
+
+我们继续跟进host的invoke，接下来会走到AbstractAccessLogValve的invoke方法然后调用`getNext().invoke(request, response);`
+
+我们继续跟invoke会走到ErrorReportValve的invoke方法，此方法中继续调用`getNext().invoke(request, response);`
+
+我们继续跟，此时会进入StandardHostValve类，然后会从context中拿管道调用invoke。
+
+```java
+if (!response.isErrorReportRequired()) {
+    context.getPipeline().getFirst().invoke(request, response);
+}
+```
+
+我们继续跟,进入到AuthenticatorBase#invoke()方法然后调用`getNext().invoke(request, response);`
+
+我们继续跟invoke，会进入到StandardContextValve#invoke()方法
+
+这里会从wrapper中获取管道然后执行
+
+```java
+wrapper.getPipeline().getFirst().invoke(request, response);
+```
+
+跟进invoke会进入StandardWrapperValve#invoke()方法
+
+在这里会创建一个过滤器链，代码如下：
+
+> 关于过滤器链的注解：filterchain的实现，用于管理针对特定请求的一组过滤器的执行。当一组定义的过滤器全部执行完毕后，对doFilter()的下一次调用将执行servlet的service()方法本身。
+
+```java
+ApplicationFilterChain filterChain =
+        ApplicationFilterFactory.createFilterChain(request, wrapper, servlet);
+```
+
+上面代码往下几行，创建完之后会执行这个过滤器链：
+
+```java
+filterChain.doFilter
+    (request.getRequest(), response.getResponse());
+```
+
+我们跟进doFilter方法：一直往下跟最后会执行service方法
+
+```java
+servlet.service(request, response);
+```
+
+> 从connector调用容器到servlet.service的过程：
+>
+> ![image-20220222132651362](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222132651362.png)
+
+这个方法就是我们的Servlet的的service，然后就会取执行我们自己的Servlet方法了。此时看servlet，就是上面我们部署的webdome项目中的servlet，也就是说tomcat一步一步的找到了我们的Servlet并执行它。
+
+![image-20220222132014991](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222132014991.png)
+
+整体流程：
+
+![tomcat处理请求流程20220222](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/tomcat%E5%A4%84%E7%90%86%E8%AF%B7%E6%B1%82%E6%B5%81%E7%A8%8B20220222.png)
 
 
 

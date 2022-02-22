@@ -4631,8 +4631,5 @@ public class DegradeController {
 }
 ```
 
-# 六、SpringCloud高级组件
 
-> 未完结
->
 
