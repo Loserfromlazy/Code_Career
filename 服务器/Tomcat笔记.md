@@ -1435,7 +1435,48 @@ servlet.service(request, response);
 
 ![tomcat处理请求流程20220222](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/tomcat%E5%A4%84%E7%90%86%E8%AF%B7%E6%B1%82%E6%B5%81%E7%A8%8B20220222.png)
 
+# 五、Tomcat对HTTPS的支持
+
+https需要证书，我们可以用java自带的工具生成自己的测试用的证书。
+
+~~~shell
+keytool -genkey -alias loserfromlazy -keyalg RSA -keystore miyao.keystore
+~~~
+
+- -alias 别名
+- -keyalg 加密方式
+- -keystore  密钥库名称
+- ...其它具体参数请自行查阅
+
+![image-20220222170641664](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222170641664.png)
+
+这里注意名字与姓氏需要与域名保持一致，之后就会在当前目录下生成miyao.keystore文件
+
+然后在tomcat的server.xml中配置
+
+~~~xml
+<Connector port="8443" protocol="org.apache.coyote.http11.Http11NioProtocol"
+               maxThreads="150" SSLEnabled="true">
+        <SSLHostConfig>
+            <Certificate certificateKeystoreFile="conf/miyao.keystore"
+						 certificateKeystorePassword="123456"
+                         type="RSA" />
+        </SSLHostConfig>
+    </Connector>
+~~~
+
+然后浏览器访问即可（注意需要忽略浏览器的安全警告）：
+
+![image-20220222172111497](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220222172111497.png)
+
+# 六、Tomcat调优
+
+Tomcat本身也是一个Java项目，所以调优分为JVM调优和Tomcat自身调优
+
+## 6.1 JVM调优
+
+jvm调优只需要我们将jvm参数放到Catalina.bat或Catalina.sh中即可。
 
 
 
-
+## 6.2 Tomcat自身调优
