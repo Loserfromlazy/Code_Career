@@ -1477,6 +1477,100 @@ Tomcat本身也是一个Java项目，所以调优分为JVM调优和Tomcat自身�
 
 jvm调优只需要我们将jvm参数放到Catalina.bat或Catalina.sh中即可。
 
+jvm优化主要是内存和垃圾回收策略。
 
+简单了解Java内存模型：
+
+![Java内存模型20220223](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/Java%E5%86%85%E5%AD%98%E6%A8%A1%E5%9E%8B20220223.png)
+
+- 线程共享的数据区：主要是Java堆和方法区**Java 堆的唯一目的就是存放对象实例，几乎所有的对象实例（和数组）都在这里分配内存**
+- **方法区与Java堆一样，也是线程共享的并且不需要连续的内存，其用于存储已被虚拟机加载的类信息、常量、静态变量、即时编译器编译后的代码等数据**
+- **虚拟机栈描述的是Java方法执行的内存模型，是线程私有的。**每个方法在执行的时候都会创建一个栈帧，用于存储局部变量表、操作数栈、动态链接、方法出口等信息
+- **程序计数器是线程私有的一块较小的内存空间，其可以看做是当前线程所执行的字节码的行号指示器**
+- **本地方法栈与Java虚拟机栈非常相似，也是线程私有的，区别是虚拟机栈为虚拟机执行 Java 方法服务，而本地方法栈为虚拟机执行 Native 方法服务**
+
+内存优化主要是对堆进行优化，内存相关参数：
+
+| 参数                 | 参数作用                     | 备注           |
+| -------------------- | ---------------------------- | -------------- |
+| -server              | 以服务端运行                 |                |
+| -Xms                 | 最小堆内存                   | 与-Xmx设置相同 |
+| -Xmx                 | 最大堆内存                   | 可用内存的80%  |
+| -XX:MetaspaceSize    | 元空间初始值                 |                |
+| -XX:MaxMetaspaceSize | 元空间最大内存               | 默认无限       |
+| -XX:NewRatio         | 年轻代和老年代大小比值       | 默认为2        |
+| -XX:SurvivorRatio    | Eden区与Survivor区大小的壁纸 | 默认为8        |
+
+举例`JAVA_OPTS=-server -Xms1024m -Xmx1024m -XX:MetaspaceSize=256m -XX:MaxMetaspaceSize=512m`
+
+tomcat调优可以在bin目录下建立setenv.bat,然后在里面配置JAVA_OPTS即可，注意等号和-server之间不能有空格否则不生效，一定不要马虎。
+
+![image-20220223152521137](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220223152521137.png)
+
+配置完重启tomcat即可。验证方式有很多，比如可以通过jmap命令或者tomcat内置状态检查等等。`http://localhost:8080/manager/status`
+
+> 注意使用上面的网址需要在/conf/tomcat-users.xml中配置用户名密码
+>
+> ~~~xml
+> <role rolename="admin-gui"/>
+> <role rolename="manager-gui"/>
+> <role rolename="manager-jmx"/>
+> <role rolename="manager-script"/>
+> <role rolename="manager-status"/>
+> <user username="admin" password="admin" roles="admin-gui,manager-gui,manager-jmx,manager-script,manager-status"/>
+> ~~~
+
+简单了解一下垃圾收集器：
+
+- 串行收集器 Serial Collector
+
+  单线程的收集器，但它的“单线程”的意义并不仅仅说明它只会使用一个CPU或一条收集线程去完成垃圾收集工作，更重要的是在它进行垃圾收集时，必须暂停其他所有的工作线程，直到它收集结束。
+
+- 并行收集器 Parallel Collector
+
+  Parallel Scavenge收集器是一个新生代收集器，它也是使用复制算法的收集器，又是并行的多线程收集器。
+
+  Parallel Scavenge收集器的目标则是达到一个可控制的吞吐量（Throughput）。所谓吞吐量就是CPU用于运行用户代码的时间与CPU总消耗时间的比值，即吞吐量 = 运行用户代码时间 /（运行用户代码时间 +垃圾收集时间），虚拟机总共运行了100分钟，其中垃圾收集花掉1分钟，那吞吐量就是99%。
+
+- 并发收集器 Concurrent Collector
+
+- CMS收集器 Concurrent Mark Sweep Collector
+
+  CMS（Concurrent Mark Sweep）收集器是一种以获取最短回收停顿时间为目标的收集器。目前很大一部分的Java应用集中在互联网站或者B/S系统的服务端上，这类应用尤其重视服务的响应速度，希望系统停顿时间最短，以给用户带来较好的体验。
+
+- G1收集器 Garbage-First Garbage Collector
+
+  适用于大容量的多核服务器，在G1之前的其他收集器进行收集的范围都是整个新生代或者老年代，而G1不再是这样。使用G1收集器时，Java堆的内存布局就与其他收集器有很大差别，它将整个Java堆划分为多个大小相等的独立区域（Region），虽然还保留有新生代和老年代的概念，但新生代和老年代不再是物理隔离的了，它们都是一部分Region（不需要连续）的集合
+
+GC策略相关参数：
+
+| 参数                    | 描述                                                         |
+| ----------------------- | ------------------------------------------------------------ |
+| -XX:+UseSerialGC        | 启动创行收集器                                               |
+| -XX:+UseParallelGC      | 使用并行收集器，使用此配置，那么-XX:+UseParallelOldGC默认启动 |
+| -XX:+UseParNewGC        | 年轻代采用并行收集器                                         |
+| -XX:ParallelGCThreads   | 年轻代和年老代垃圾回收启用的线程数                           |
+| -XX:+UseConcMarkSweepGC | 对于年老代使用CMS垃圾收集器，启动后，-XX:+UseParNewGC自动启用 |
+| -XX:+UseG1GC            | 启用G1收集器，G1是服务器类型的收集器，用于多核大内存机器，在满足高吞吐率的情况下，高概率满足GC暂停时间的目标 |
 
 ## 6.2 Tomcat自身调优
+
+1. 禁用AJP连接器
+
+   注释禁用掉server.xml中：
+
+   ~~~
+       <!-- Define an AJP 1.3 Connector on port 8009 -->
+   
+       <Connector protocol="AJP/1.3"
+                  port="8009"
+                  redirectPort="8443"  URIEncoding="UTF-8"/>
+   ~~~
+
+2. 调整IO模式
+
+   tomcat8以前默认使用BIO，tomcat8以后默认NIO模式
+
+   当tomcat并发性能有较高要求或出现瓶颈时，可以使用ARP模式从操作系统级别解决异步IO问题，（需要在操作系统上安装ARP和Native）
+
+3. 调整配置tomcat线程池，见2.1配置详解
