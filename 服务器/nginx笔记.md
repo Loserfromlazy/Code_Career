@@ -1,5 +1,9 @@
 # Nginx学习笔记
 
+转载请声明作者和出处！
+
+本文如有错误，欢迎指正，感激不尽。
+
 ## 一、简介
 
 Nginx是lgor Sysoev为俄罗斯访问量第二的rambler.ru站点设计开发的。从2004年发布至今，凭借开源的力量，已经接近成熟与完善。
@@ -112,7 +116,7 @@ http {
 
 ```shell
 docker run -id --name=c_nginx \
--p 8:80 \
+-p 80:80 \
 -v $PWD/conf/nginx.conf:/etc/nginx/nginx.conf \
 -v $PWD/logs:/var/log/nginx \
 -v $PWD/html:/usr/share/nginx/html \
@@ -336,7 +340,7 @@ events {
 
 http块也可以包括全局块、server块
 
-**http全局快指令包括文件引入、MIMR-TYPE定义、日志自定义，连接超时时间、单链接请求数上线等。**
+**http全局块指令包括文件引入、MIMR-TYPE定义、日志自定义，连接超时时间、单链接请求数上线等。**
 
 ***设置MIME-TYPE***
 
