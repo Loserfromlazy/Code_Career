@@ -102,7 +102,7 @@ return "success";
 >
 > 从spring3.1开始，废除了DefaultAnnotationHandlerMapping的使用，推荐使用RequestMappingHandlerMapping完成注解式处理器映射
 >
-> <bean> class="org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping"/>
+> < bean> class="org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping"/>
 >
 > 处理器适配器
 >
@@ -121,10 +121,13 @@ return "success";
 在springmvc.xml中
 
 > <!-- 配置视图解析器 -->
+>
+> ~~~xml
 > 	<bean class="org.springframework.web.servlet.view.InternalResourceViewResolver">
 > 		<property name="prefix" value="/WEB-INF/jsp/"></property><!-- 前缀 -->
 > 		<property name="suffix" value=".jsp"></property><!-- 后缀 -->
 > 	</bean>
+> ~~~
 
 ### 1.3概述
 
@@ -578,7 +581,8 @@ public class JsonController {
 * 测试响应json数据
 */
 @RequestMapping("/testResponseJson")
-public @ResponseBody Account testResponseJson(@RequestBody Account account) {
+@ResponseBody
+public  Account testResponseJson(@RequestBody Account account) {
 System.out.println("异步请求："+account);
 return account;
 }
@@ -874,21 +878,41 @@ class="org.springframework.web.multipart.commons.CommonsMultipartResolver">
 </bean>
 ~~~
 
-## 六.SpringMVC中的拦截器
+## 六.SpringMVC其他技术
 
-Spring MVC 的处理器拦截器类似于Servlet 开发中的过滤器Filter，用于对处理器进行预处理和后处理。
-用户可以自己定义一些拦截器来实现特定的功能。
-谈到拦截器，还要向大家提一个词——拦截器链（Interceptor Chain）。拦截器链就是将拦截器按一定的顺
-序联结成一条链。在访问被拦截的方法或字段时，拦截器链中的拦截器就会按其之前定义的顺序被调用。
-说到这里，可能大家脑海中有了一个疑问，这不是我们之前学的过滤器吗？是的它和过滤器是有几分相似，但
-是也有区别，接下来我们就来说说他们的区别：
-过滤器是servlet规范中的一部分，任何java web工程都可以使用。
-拦截器是SpringMVC框架自己的，只有使用了SpringMVC框架的工程才能用。
-过滤器在url-pattern中配置了/*之后，可以对所有要访问的资源拦截。
-拦截器它是只会拦截访问的控制器方法，如果访问的是jsp，html,css,image或者js是不会进行拦
-截的。
-它也是AOP思想的具体应用。
-我们要想自定义拦截器，要求必须实现：HandlerInterceptor接口。
+### 6.1 拦截器
+
+Spring MVC 的处理器拦截器类似于Servlet 开发中的过滤器Filter，用于对处理器进行预处理和后处理。用户可以自己定义一些拦截器来实现特定的功能。
+**监听器、过滤器和拦截器对比**
+
+- Servlet：处理Request和Response请求
+
+- 过滤器（Filter）：对Request请求起到过滤的效果，作用在Servlet之前，如果配置为`/*`就会对所有的资源方法（包括servlet/js/css等）进行过滤处理
+
+- 监听器（Listener）：实现了javax.servlet.ServletContextListener接口的服务器端组件，它随Web应用的启动而启动，只初始化一次，让背后会一直运行监视，随Web应用停止而销毁。
+
+  作用：做一些初始化工作，web应用中Spring的容器启动ContextLoaderListener。监听Web中的特定事件，比如HttpSession、ServletRequest的创建和销毁，变量的创建、销毁和修改等，可以在某些动作前后增加处理，实现监控，比如统计在线人数，用HttpSessionListener。
+
+- 拦截器（Interceptor）：是SpringMVC、Struts等框架自己的，不会拦截jsp/html/image的访问，只会拦截访问的控制器方法（Handler）
+
+从配置也可以发现servlet、filter、listener是配置在web.xml中的，而拦截器是配置在SpringMVC自己的配置文件中的。
+
+
+
+### 6.2 全局异常处理
+
+~~~java
+//可以优雅的捕获所有的Controller对象handler方法抛出的异常
+@ControllerAdvice
+public class BaseExceptionHandler {
+
+    @ExceptionHandler(Exception.class)
+    public Result error(Exception e){
+        e.printStackTrace();
+        return new Result(1,e.getMessage(),null);
+    }
+}
+~~~
 
 ## 七.SSM整合
 

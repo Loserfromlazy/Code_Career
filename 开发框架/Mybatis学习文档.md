@@ -1,10 +1,9 @@
 # Mybatis学习文档
-更新于2021/09/01 22：32
 Mybatis是持久层框架类似于Hibernate的orm持久层框架
 
 ## 一.自定义持久层框架
 
-mybatis雏形
+这里仅是mybatis雏形
 
 ### 1.1 分析JDBC问题
 
@@ -796,11 +795,11 @@ Mybatis支持的别名
 > public class QueryVo {
 >
 > 	private User user;
-> 			
+> 				
 > 	public User getUser() {
 > 		return user;
 > 	}
-> 			
+> 				
 > 	public void setUser(User user) {
 > 		this.user = user;
 > 	}
