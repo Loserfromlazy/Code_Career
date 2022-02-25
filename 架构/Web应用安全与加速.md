@@ -6,6 +6,8 @@
 
 # 一、HTTP
 
+> 参考资料：HTTP权威指南，互联网博客
+
 ## 1.1 HTTP报文
 
 如果说HTTP是因特网的信使，那么HTTP报文就是它用来搬东西的包裹了。HTTP报文是在HTTP应用程序之间发送的数据块。这些数据块以一些文本形式的元信息（meta-information）开头，这些信息描述了报文的内容及含义，后面跟着可选的数据部分。这些报文在客户端、服务器和代理之间流动。术语“流入”、“流出”、“上游”及“下游”都是用来描述报文方向的。
@@ -143,4 +145,67 @@ HTTP报文由起始行（start line）、首部（header）块，以及可选的
 **主体**
 
 HTTP报文的第三部分是可选的实体主体部分。实体的主体是HTTP报文的负荷。就是HTTP要传输的内容。HTTP报文可以承载很多类型的数字数据：图片、视频、HTML文档、软件应用程序、信用卡事务、电子邮件等。
+
+## 1.2 连接管理
+
+世界上几乎所有的HTTP通信都是由TCP/IP承载的，TCP/IP是全球计算机及网络设备都在使用的一种常用的分组交换网络分层协议集。客户端应用程序可以打开一条TCP/IP连接，连接到可能运行在世界任何地方的服务器应用程序。一旦连接建立起来了，在客户端和服务器的计算机之间交换的报文就永远不会丢失、受损或失序。
+
+### 1.2.1 TCP连接
+
+HTTP连接实际上就是TCP连接及其使用规则。TCP为HTTP提供了一条可靠的比特传输管道。从TCP连接一端填入的字节会从另一端以原有的顺序、正确地传送出来，如下图：
+
+![TCP连接20220225](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/TCP%E8%BF%9E%E6%8E%A520220225.png)
+
+TCP的数据是通过名为IP分组（或IP数据报）的小数据块来发送的。HTTP就是“HTTP over TCP over IP”这个“协议栈”中的最顶层了。其安全版本HTTPS就是在HTTP和TCP之间插入了一个（称为TLS或SSL的）密码加密层。
+
+![image-20220225090743967](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220225090743967.png)
+
+HTTP要传送一条报文时，会以流的形式将报文数据的内容通过一条打开的TCP连接按序传输。TCP收到数据流之后，会将数据流砍成被称作段的小数据块，并将段封装在IP分组中，通过因特网进行传输。
+
+![image-20220225091241338](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220225091241338.png)
+
+TCP通过四个值定义了一条连接。两条不同的TCP连接不能拥有4个完全相同的地址组件值（但不同连接的部分组件可以拥有相同的值），这四个值是`<源IP地址、源端口号、目的IP地址、目的端口号>`
+
+### 1.2.2 TCP连接的建立和销毁
+
+在两个设备要建立连接发送数据之前，双方都需要做一些准备工作
+
+1. 最开始客户端和服务器处于CLOSE状态。客户端主动打开连接，服务器被动打开连接。TCP服务器创建传输控制块TCB，时刻接收客户端的连接请求，此时服务器进入LISTEN状态
+
+2. 一次握手
+
+   Client将标志位SYN置为1，随机产生一个值seq=J，并将该数据包发送给Server， Client进入SYN_SENT状态，等待Server确认。
+
+3. 二次握手
+
+   Server收到数据包后由标志位SYN=1知道Client请求建立连接，Server将标志位 SYN和ACK都置为1，ack=J+1，随机产生一个值seq=K，并将该数据包发送给Client以确认连接请求 ，Server进入SYN_RCVD状态。
+
+4. 三次握手
+
+   Client收到确认后，检查ack是否为J+1，ACK是否为1，如果正确则将标志位ACK 置为1，ack=K+1，并将该数据包发送给Server，Server检查ack是否为K+1，ACK是否为1，如果正确则 连接建立成功，Client和Server进入ESTABLISHED状态，完成三次握手，随后Client与Server之间可以 开始传输数据了。
+
+   ![TCP三次握手20220225](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/TCP%E4%B8%89%E6%AC%A1%E6%8F%A1%E6%89%8B20220225.png)
+
+而终止TCP连接，就是指断开一个TCP连接时，需要客户端和服务端总共发送4个包以确认连接的断开。
+
+- **第一次挥手**：Client发送一个FIN，用来关闭Client到Server的数据传送，Client进入 FIN_WAIT_1状态
+- **第二次挥手**：Server收到FIN后，发送一个ACK给Client，确认序号为收到序号+1（与SYN相同， 一个FIN占用一个序号），Server进入CLOSE_WAIT状态。
+- **第三次挥手**：Server等待2MSL（MSL）后发送一个FIN，用来关闭Server到Client的数据传送，Server进入LAST_ACK 状态。
+- **第四次挥手**：Client收到FIN后，Client进入TIME_WAIT状态，接着发送一个ACK给Server，确认序号为收到序号+1，Server进入CLOSED状态，完成四次挥手。
+
+![TCP四次挥手20220225](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/TCP%E5%9B%9B%E6%AC%A1%E6%8C%A5%E6%89%8B20220225.png)
+
+> 为什么挥手是四次？因为服务端在LISTEN状态下，收到建立连接请求的SYN报文后，把ACK和SYN放在一个报文里 发送给客户端。而关闭连接时，当收到对方的FIN报文时，仅仅表示对方不再发送数据了但是还 能接收数据，己方也未必全部数据都发送给对方了，所以己方可以立即close，也可以发送一些 数据给对方后，再发送FIN报文给对方来表示同意现在关闭连接，因此，己方ACK和FIN一般都会 分开发送。
+
+> SYN flood攻击原理
+>
+> DDOS是分布式拒绝服务，本质是利用合理的请求造成服务器资源过载，造成服务不可用，常见的DDOS攻击有SYN flood等 。
+>
+> SYN flood在攻击时，首先伪造大量的源IP地址，分别向服务器端发送大量的SYN包。服务器端返回SYN/ACK，因为源地址是伪造的所以不会应答，服务器没有收到应答就会重试3-5次。攻击者大量发送这种请求，服务器就会消耗很多请求，同时还有对他们进行重试因此到最后服务器服务无法处理正常请求导致拒绝服务。
+
+
+
+
+
+
 
