@@ -897,7 +897,59 @@ Spring MVC 的处理器拦截器类似于Servlet 开发中的过滤器Filter，�
 
 从配置也可以发现servlet、filter、listener是配置在web.xml中的，而拦截器是配置在SpringMVC自己的配置文件中的。
 
+SpringMVC实现拦截器需要实现HandlerInterceptor接口
 
+**拦截器的执行顺序**
+
+单个拦截器的执行顺序：
+
+![springmvc拦截器处理流程20220225](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/springmvc%E6%8B%A6%E6%88%AA%E5%99%A8%E5%A4%84%E7%90%86%E6%B5%81%E7%A8%8B20220225.png)
+
+如果拦截器配置多个拦截器，那么它们的preHandle()方法会按照配置文件中拦截器的配置顺序执行，而它们的postHandle()方法和afterCompletion()方法会按照配置顺序的反序执行。
+
+示例：
+
+```java
+public class MyInterceptor1 implements HandlerInterceptor {
+    /**
+     * 会在handler方法之前执行
+     * @param httpServletRequest request
+     * @param httpServletResponse response
+     * @param o handler
+     * @return boolean 返回的值代表是否放行
+     * @author Yuhaoran
+     */
+    @Override
+    public boolean preHandle(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, Object o) throws Exception {
+        System.out.println("preHandle");
+        return true;
+    }
+
+    /**
+     * 会在handler方法之后，页面尚未跳转执行
+     * @param httpServletRequest request
+     * @param httpServletResponse response
+     * @param o handler
+     * @param modelAndView 封装了视图和数据，此时页面尚未跳转，可以在这里对数据和视图进行修改
+     */
+    @Override
+    public void postHandle(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, Object o, ModelAndView modelAndView) throws Exception {
+        System.out.println("postHandle");
+    }
+
+    /**
+     * 页面已经跳转渲染完毕之后
+     * @param httpServletRequest request
+     * @param httpServletResponse response
+     * @param o handler
+     * @param e 可以在这里捕获异常
+     */
+    @Override
+    public void afterCompletion(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse, Object o, Exception e) throws Exception {
+        System.out.println("afterCompletion");
+    }
+}
+```
 
 ### 6.2 全局异常处理
 
