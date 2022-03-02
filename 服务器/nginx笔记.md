@@ -112,8 +112,6 @@ http {
 ```
 
 
-
-
 ```shell
 docker run -id --name=c_nginx \
 -p 80:80 \
@@ -134,7 +132,36 @@ nginx
 
 > 若浏览器访问后报403错误，则可能是html目录缺少index.html
 
-### 1.3 nginx的目录结构
+### 1.3 CentOS上安装nginx
+
+安装nginx的环境
+
+~~~
+yum install gcc-c++
+yum install -y pcre pcre-devel
+yum install -y zlib zlib-devel
+yum install -y openssl openssl-devel
+~~~
+
+官网下载nginx安装包然后上传到服务器上
+
+使用命令`tar -zxvf nginx-1.20.2.tar.gz `解压
+
+进入到**解压后的目录**
+
+使用`./configure`命令
+
+然后使用`make`命令编译，然后使用`make install`
+
+完毕之后在/usr/local/下会产⽣⼀个nginx⽬录至此安装完毕
+
+可以进入到nginx的sbin目录中`./nginx`启动nginx
+
+`./nginx -s stop`终止nginx
+
+`./nginx -s reload` 重新加载配置文件
+
+### 1.4 nginx的目录结构
 
 ~~~
 /var/nignx
@@ -143,16 +170,16 @@ nginx
 |--logs   日志
 ~~~
 
-
-
 ## 二、Nginx配置文件
 
 nginx服务器的配置主要在nginx.conf，默认的配置文件内容如下
 
 ~~~nginx
 #user  nobody;
+#worker进程数量，通常设置为和cpu数量相等
 worker_processes  1;
 
+#全局错误日志和pid文件位置
 #error_log  logs/error.log;
 #error_log  logs/error.log  notice;
 #error_log  logs/error.log  info;
@@ -161,14 +188,17 @@ worker_processes  1;
 
 
 events {
+    #单个worker进程的最大并发连接数
     worker_connections  1024;
 }
 
 
 http {
+    #引入mime类型的定义文件
     include       mime.types;
     default_type  application/octet-stream;
 
+    #设置日志格式
     #log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
     #                  '$status $body_bytes_sent "$http_referer" '
     #                  '"$http_user_agent" "$http_x_forwarded_for"';
@@ -178,6 +208,7 @@ http {
     sendfile        on;
     #tcp_nopush     on;
 
+    #链接超时时间
     #keepalive_timeout  0;
     keepalive_timeout  65;
 
@@ -306,7 +337,7 @@ http      #http块
 
 > - 1、**全局块**：配置影响nginx全局的指令。一般有运行nginx服务器的用户组，nginx进程pid存放路径，日志存放路径，配置文件引入，允许生成worker process数等。
 > - 2、**events块**：配置影响nginx服务器或与用户的网络连接。有每个进程的最大连接数，选取哪种事件驱动模型处理连接请求，是否允许同时接受多个网路连接，开启多个网络连接序列化等。
-> - 3、**http块**：可以嵌套多个server，配置代理，缓存，日志定义等绝大多数功能和第三方模块的配置。如文件引入，mime-type定义，日志自定义，是否使用sendfile传输文件，连接超时时间，单连接请求数等。
+> - 3、**http块**：可以嵌套多个server，http块是配置最频繁的部分，常见有：虚拟主机的配置，监听端口的配置，请求转发，反向代理，负载均衡配置等。
 > - 4、**server块**：配置虚拟主机的相关参数，一个http中可以有多个server。
 > - 5、**location块**：配置请求的路由，以及各种页面的处理情况。
 
@@ -392,12 +423,12 @@ Server块和locaton块比较复杂，此处仅给出示例简单了解即可。
 http {  //http层开始
 ...    
     //使用Server配置网站, 每个Server{}代表一个网站(简称虚拟主机)
-    'server' {
+    server {
         listen       80;        //监听端口, 默认80
         server_name  localhost; //提供服务的域名或主机名
         access_log host.access.log  //访问日志
         //控制网站访问路径
-        'location' / {
+        location / {
             root   /usr/share/nginx/html;   //存放网站代码路径
             index  index.html index.htm;    //服务器返回的默认页面文件
         }
@@ -406,7 +437,7 @@ http {  //http层开始
     }
     ...
     //第二个虚拟主机配置
-    'server' {
+    server {
     ...
     }
     
@@ -415,7 +446,23 @@ http {  //http层开始
 }   //http层结束
 ~~~
 
-## 三、nginx静态资源部署
+## 三、nginx反向代理和负载均衡
+
+反向代理代理的是服务器，如下图：
+
+![反向代理20220301](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/%E5%8F%8D%E5%90%91%E4%BB%A3%E7%90%8620220301.png)
+
+现在我们模拟反向代理，我们在服务器上部署两个SpringBoot项目（等同于部署两个Tomcat），然后使用nginx进行代理，具体如下图：
+
+![反代负载需求20220301](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/%E5%8F%8D%E4%BB%A3%E8%B4%9F%E8%BD%BD%E9%9C%80%E6%B1%8220220301.png)
+
+SpringBoot项目简单创建一个，然后实现`/aaa`和`/bbb`地址的Controller即可。
+
+可以使用`nohup java -jar xxx.jar >/dev/null 2>&1 &`来后台运行SpringBoot的jar包。
+
+
+
+
 
 
 
