@@ -1285,7 +1285,7 @@ applicationContext-dao.xml
 
 ## 八、实现SpringMVC
 
-SpringMVC的大致原理如下，我们跟据此流程来手写一个建议的SpringMVC框架。
+SpringMVC的大致原理如下，我们跟据此流程来手写一个简易的SpringMVC框架。
 
 ![springmvc流程20220227](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/springmvc%E6%B5%81%E7%A8%8B20220227.png)
 

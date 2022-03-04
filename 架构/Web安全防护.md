@@ -6,7 +6,7 @@
 
 HTTP相关基础知识见HTTP学习笔记。
 
-请不要攻击他人服务器或计算机系统，本文仅是对web安全的学习。
+请不要攻击他人服务器或计算机系统，本文仅是对web安全的基础学习。
 
 > 《刑法》
 > 第二百八十五条　【非法侵入计算机信息系统罪;非法获取计算机信息系统数据、非法控制计算机信息系统罪;提供侵入、非法控制计算机信息系统程序、工具罪】违反国家规定，侵入国家事务、国防建设、尖端科学技术领域的计算机信息系统的，处三年以下有期徒刑或者拘役。
@@ -130,7 +130,7 @@ zhanshi.html
 
 然而在我实验`<script>alert('hey!you are attacked');</script> `或`<script>window.location.href='http://www.baidu.com'</script>`
 
-这种script代码时vue却不生效了，后来查阅资料发现 html5中innerHTML对有可能产生的安全问题进行了处理，原因如下图，即innerHTML会处理掉script标签：
+这种script代码时vue却不生效了，后来查阅资料发现 html5中innerHTML对有可能产生的安全问题进行了处理，原因如下图，即innerHTML会处理掉script标签，当然可以使用DOM型XSS来绕开innerHtml这个问题：
 
 ![image-20220228124925200](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220228124925200.png)
 
@@ -190,7 +190,7 @@ zhanshi1.html
 <script>window.location.href='http://www.baidu.com'</script>
 ~~~
 
-## 1.2 分类
+## 1.2  分类
 
 XSS分为
 
@@ -211,6 +211,8 @@ XSS分为
 存储型 XSS(又被称为持久性XSS)攻击常见于带有用户保存数据的网站功能，如论坛发帖、商品评论、用户私信、留言等功能。
 
 常见的存储型XSS攻击：
+
+> 这里的例子都是在1.1的例子基础上来进行的，通过内置List模拟数据库存储，所以也可以当作存储型XSS的例子
 
 1. 简单攻击
 
@@ -340,9 +342,148 @@ XSS分为
 
 反射型XSS，又称非持久型XSS，恶意diamagnetic并没有保存在目标网站，而是通过引诱用户点击一个恶意链接来实施攻击，这类攻击的特征有：恶意脚本在url中，只有点击链接才会引起攻击；不具备持久型，一般发生在与用户交互的地方。
 
-反射型XSS演示
+反射型XSS演示：
+
+首先创建一个接口和一个页面，代码如下：
+
+```java
+@GetMapping("/reflectxss")
+public String test(String reflectxss, ModelMap map, HttpServletResponse response){
+    System.out.println(reflectxss);
+    if (reflectxss == null || "".equals(reflectxss)){
+        map.put("result","不包含reflectxss参数");
+    }else {
+        map.put("result",reflectxss);
+    }
+    //绕过浏览器的xss auditor防护
+    //response.setHeader("x-xss-Protection","0");
+    return "reflectxss";
+}
+```
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>反射XSS演示</title>
+</head>
+<body>
+<h2>反射XSS演示</h2>
+通过url发送的参数如下：<br>
+<span th:utext="${result}"></span>
+</body>
+</html>
+```
+
+我们进入此页面，输入一个abc，可以看到是正常使用的：
+
+![image-20220304101030748](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220304101030748.png)
+
+然后我们可以输入恶意代码`<script>alert("abc")</script>`来验证反射型xss攻击：
+
+![image-20220304101159292](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220304101159292.png)
+
+当然这种类型最大的危害是可以恶意构建DOM，实现破坏。比如`<input type="button" value="登录" onClick="alert(document.cookie)"/> `
+
+![image-20220304101658366](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220304101658366.png)
 
 **DOM型XSS攻击**
+
+DOM型XSS其实是一种特殊类型的反射型XSS，他是基于DOM文档对象模型的一种漏洞，而且不需要与服务器进行交互。客户端的脚本程序可以通过DOM来动态修改页面内容，从客户端获取DOM中的数据并在本地执行。基于这个特性，就可以利用JS脚本来实现XSS漏洞的利用。
+
+我们创建以下html页面进行演示：
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DOM型XSS演示</title>
+</head>
+<body>
+<h2>DOM型XSS演示</h2>
+<div id="myDiv"></div>
+<script type="text/javascript">
+    //获取url参数
+function getQueryString(name)
+{
+    var reg = new RegExp("(^|&)"+ name +"=([^&]*)(&|$)");
+    var r = window.location.search.substr(1).match(reg);
+    if(r!=null)return  unescape(r[2]); return null;
+}
+document.getElementById("myDiv").innerHTML=(getQueryString("dom"));
+</script>
+</body>
+</html>
+```
+
+首先输入正常参数
+
+![image-20220304102930469](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220304102930469.png)
+
+我们可以尝试脚本入侵`<script>alert("123")</script>`
+
+![image-20220304103112904](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220304103112904.png)
+
+不生效原因就是innerHtml的安全机制，然后我们可以尝试DOM型XSS：`<img src='XXX' onerror='alert(110)'/>`
+
+![image-20220304103240750](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220304103240750.png)
+
+我们可以注入各种DOM进行攻击。
+
+## 1.3 植入代码原理和危害
+
+**植入JS代码**
+
+- 外在形式
+  - 直接注入js代码
+  - 引用外部js文件
+- 基本原理
+  - 通过img标签的src发送数据
+  - 构造表单诱导用户输入账户密码
+  - 构造隐藏性强的form表单自动提交
+  - 页面强制跳转
+  - 注入文字链接，图片链接
+- 危害
+  - 获取管理员或其他用户的cookie，冒充身份登录
+  - 构造表单诱导用户输入账号密码
+  - 跳转到其他网站，窃取流量
+  - 植入广告、外链等
+  - 通过隐藏友链提升其他网站的百度权重SEO黑帽
+
+**植入HTML代码**
+
+- 外在形式
+  - 构造img标签
+  - 构造a标签
+  - 构造iframe
+  - 构造其他HTML标签
+- 基本原理
+  - 通过img标签的src发送数据
+  - 通过img标签的onerror触发脚本代码
+  - 通过a标签被动触发脚本代码href/onclick
+  - 通过iframe引入第三方页面
+  - 直接构造文字或图片链接
+- 潜在危害
+  - 获取管理员或用户的cookie，冒充身份登录
+  - 构造表单诱导用户输入账号密码
+  - 植入广告、外链
+  - 通过隐藏友链提升其他网站的百度权重SEO黑帽
+
+## 1.4 漏洞预防策略
+
+XSS攻击实现的主要原因就是对用户的输入原样进行了输出。
+
+
+
+
+
+
+
+
+
+
 
 
 

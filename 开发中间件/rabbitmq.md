@@ -183,4 +183,3 @@ RabbitMQ 最初起源于金融系统，用于在分布式系统中存储转发�
 	</rabbit:fanout-exchange>
 ~~~
 
-## 
