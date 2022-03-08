@@ -391,6 +391,8 @@ public class Test {
 3. 获取添加了注解的目标。通常是Class对象，Method对象，Field对象，还有Constructor对象，Parameter对象，Annotation对象等
 4. 实现注解处理器。借助反射，获取注解对象，读取注解属性值, 然后根据注解及属性值做相应处理 
 
+具体实现自定义注解案例，可以见我的[自定义SpringMVC案例](https://github.com/Loserfromlazy/MySpringMVC)
+
 
 
 
