@@ -280,40 +280,6 @@ public class CreateThreadDemo3 {
 }
 ```
 
-```java
-public class CreateThreadDemo3 {
-    private static final Integer MAX = 5;
-
-    public static void main(String[] args) throws InterruptedException, ExecutionException {
-        Thread thread = null;
-        for (int i = 0; i < 2; i++) {
-            DemoThread demoThread = new DemoThread();
-            FutureTask<Long> futureTask = new FutureTask<>(demoThread);
-            thread = new Thread(futureTask);
-            thread.start();
-            System.out.println("做自己的事情");
-            Thread.sleep(500);
-            System.out.println(thread.getName()+"占用时间"+futureTask.get());
-        }
-    }
-
-    static class DemoThread implements Callable<Long>{
-
-        @Override
-        public Long call() throws Exception {
-            long start = System.currentTimeMillis();
-            for (int i = 0; i < MAX; i++) {
-                System.out.println(Thread.currentThread().getName()+",i="+i);
-            }
-            Thread.sleep(1000);
-            System.out.println(Thread.currentThread().getName()+"结束");
-            long used = System.currentTimeMillis() - start;
-            return used;
-        }
-    }
-}
-```
-
 在这个例子中有两个线程：一个是执行main()方法的主线程，叫作main；另一个是main线程通过thread.start()方法启动的业务线程，该线程是一个包含FutureTask任务作为target的Thread线程。两个线程的执行流程如下：
 
 ![Callable20211213](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgoCallable20211213.png)

@@ -2097,11 +2097,108 @@ r">
 
 在 Spring 的配置类上添加 @EnableTransactionManagement 注解即可
 
+# 六、Spring源码
 
+## 6.1 源码构建
 
+Spring的源码构建只要版本都能对应上，基本上不会有什么问题，构建会很顺畅。我的版本：`jdk1.8.0_301,gradle5.6.4,spring5.2.x`下面分享一下各个版本对应：
 
+| Spring   | Gradle            | JDK  |
+| -------- | ----------------- | ---- |
+| main分支 | 最新版            | 17   |
+| 5.3.x    | 7.4（截至2022.3） | 11   |
+| 5.2.x    | 5.6.4             | 8    |
 
+上面表格只是大概的版本参照，有几点需要注意：
 
+- 5.3.x版本在jdk8的环境下能进行构建，但是不能编译，因为缺少jrf包，这个包据说在有的jdk8的版本是有的，我编译时使用的是jdk1.8.0_301也是缺少这个包的，所以最好使用jdk11，如果你非想用jdk8但还失败的话可以尝试更换jdk8的小版本，只要不缺少jrf包即可，但是我个人是没有尝试，有大佬成功也可以告知一下。
+
+- 构建成功，编译也可能不成功，我个人情况就是这样，jdk1.8构建spring5.3.x成功但是编译时报错，因为缺少jar包。
+
+- 构建成功就可以有一个源码阅读环境了，可以在ApplicationContext类下按ctrl+alt+u,有继承关系就代编构建成功，如图：
+
+  ![image-20220310131419205](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310131419205.png)
+
+- PS：编译不成功有90%可能是版本不匹配，不要挣扎用网上的更换IDEA的设置，比如更改java compile，更改project的jdk设置等，我是一个没成功，这种方法可能是版本匹配上还编译失败才能有用。
+- 或者想使用jdk8就把spring源码版本降为5.2.x，我全程没有问题，直接构建编译成功。
+- gradle的版本可以在gradle/wrapper文件夹下的`gradle-wrapper.properties`文件中看到，你本地的gradle安装什么版本跟它保持一致就行。
+- git clone下来的源码默认是main分支，请自行更换分支，比如更换到5.3.x等，我clone下来时就忘了，徒劳挣扎一个小时。
+
+构建流程：
+
+1. 首先git、jdk等环境必须要有，IDE推荐IDEA2019.2.x以上，因为能导入项目后能自动。这里就不过多赘述了。然后去github上克隆源码。这里推荐ssh的方式下载，不用非得fork到自己的仓库。
+
+2. 下载完后切一下分支，当然你想看最新的也可以就留在main分支下。
+
+3. 安装配置Gradle。可以先去gradle/wrapper文件夹下的`gradle-wrapper.properties`文件中看一下gradle的版本，然后去这个地址[Gradle官方](https://services.gradle.org/distributions/)下载安装对应的版本。安装完配置一下环境变量。下载的zip包先不要删除。gradle安装配置这里略。
+
+4. 直接把spring源码导入到IDEA即可（注意IDEA版本大于2019.2），然后配置一下IDEA中的gradle，如下图：
+
+   ![image-20220310131528930](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310131528930.png)
+
+5. 改一下项目中gradle的下载源地址改成阿里的。改一下配置，不让gradle每次都去下载。具体修改如下图：
+
+   ![image-20220310131720408](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310131720408.png)
+
+   ![image-20220310131754241](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310131754241.png)
+
+6. 等待IDEA自动构建完成，按照spring的github的wiki按顺序编译就行。顺序如下：
+
+   ```rust
+    spring->spring-oxm -> Tasks->Other->compileJava 
+    spring->spring-core -> Tasks->Other->compileJava 
+    spring->spring-context -> Tasks->Other->compileJava 
+   ```
+
+   ![image-20220310134620351](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310134620351.png)
+
+7. 然后自己新建一个Gradle工程，编写测试代码运行即可，如果能正确运行成功代表编译成功。
+
+   测试代码如下：
+
+   ```java
+   public class Test {
+      public static void main(String[] args) {
+         AnnotationConfigApplicationContext applicationContext = new AnnotationConfigApplicationContext(MyConfig.class);
+         System.out.println(applicationContext.getBean("User"));
+      }
+   }
+   ```
+
+   ```java
+   @Configuration
+   public class MyConfig {
+   
+      @Bean("User")
+      public User getUser(){
+         return new User();//PS：User实体类随便建一下就行
+      }
+   }
+   ```
+
+8. 如果运行过程中出现CoroutinesUtils.class 找不到的提示，可以在如下位置添加jar包即可解决。
+
+   第一步
+
+   ![image-20220310135103249](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310135103249.png)
+
+   第二步
+
+   ![image-20220310135157835](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310135157835.png)
+
+   第三步
+
+   ![image-20220310135230055](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310135230055.png)
+
+9. 如果出现Kotlin: Language version 1.3is no longer supported，那么就在下图位置更换版本。
+
+10. 如果出现Kotlin: warnings found and -Weeror specified，那就把-Werror删掉即可
+
+> ps：编译的时候是一个模块一个模块来的，哪个模块报这个错就改哪个模块
+
+![image-20220310135400465](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310135400465.png)
+
+## 6.2 源码
 
 
 
