@@ -145,9 +145,49 @@ public void test3(){
 }
 ```
 
+## 2. ProcessBuilder
 
+其实上一个方法的底层原理就是新建一个ProcessBuilder，然后调用start方法。源码如下：（源码位置Runtime.java）
 
+```java
+public Process exec(String[] cmdarray, String[] envp, File dir)
+    throws IOException {
+    return new ProcessBuilder(cmdarray)
+        .environment(envp)
+        .directory(dir)
+        .start();
+}
+```
 
+ProcessBuilder的用法与Runtime的exec类似，使用方法如下：
+
+```java
+@Test
+public void test2(){
+    try {
+        String shpath = "XXX\\test.bat ";
+        String [] params = new String[2];
+        params[0] =shpath;
+        params[1] ="key_rk";
+        ProcessBuilder processBuilder = new ProcessBuilder(params);
+        Process ps = processBuilder.start();
+        //Process ps = Runtime.getRuntime().exec(shpath+"key_rk");
+        System.out.println(shpath+"key_rk");
+        ps.waitFor();
+
+        BufferedReader br = new BufferedReader(new InputStreamReader(ps.getInputStream()));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = br.readLine()) != null) {
+            sb.append(line);
+        }
+        String result = sb.toString();
+        System.out.println(result);
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+```
 
 
 
