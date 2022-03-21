@@ -1,11 +1,10 @@
 # Spring学习笔记
 
-Spring是分层的Java SE/EE应用full-stack轻量级开源框架，以IoC（Inverse Of Control：反转控制）和AOP（Aspect Oriented Programming：面向切面编程）为内核，提供了表现层SpringMVC和持久层Spring JDBC以及业务层事务管理等众多的企业级应用技术，还能整合开源世界众多
-著名的第三方框架和类库，逐渐成为使用最多的Java EE企业应用开源框架。
+转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
 
-本文中大部分主要是Spring Core中的内容的整理总结。
+在Core中都包括IOC Container（IOC容器），Events（事件），Resources（资源），i18n（），Validation（验证），DataBinging（数据绑定），Type Conversion（类型转换），SpEL，AOP。
 
-在Core中都包括IOC Container（IOC容器），Events（事件），Resources（资源），i18n（），Validation（验证），DataBinging（数据绑定），Type Conversion（类型转换），SpEL，AOP
+> 本文参考资料：Spring官方文档、自己的学习和尝试的总结、部分资料来源于网络（源头已无法寻找）
 
 # 一、概述
 
@@ -114,20 +113,15 @@ Expert One-to-One J2EE Development without EJB(2004)
 
 但上述工厂模式解耦合也有问题
 
-1.存哪去？
-分析：由于我们是很多对象，肯定要找个集合来存。这时候有Map和List供选择。到底选Map还是List就看我们有没有查找需求。有查找需求，选Map。所以我们的答案就是在应用加载时，创建一个Map，用于存放三层对象。
-我们把这个map称之为容器。
+首先就是我们应该将对象存到哪里？
+由于我们是很多对象，肯定要找个集合来存。这时候有Map和List供选择。到底选Map还是List就看我们有没有查找需求。有查找需求，选Map。所以我们的答案就是在应用加载时，创建一个Map，用于存放三层对象。我们把这个map称之为容器。
 
-2.什么是工厂？
+> 当然这只是浅层的理解，便于初期学习。实际上在Spring源码中，存在三个Map，称为三级缓存，而真正存放构建好的map成为单例池，单例池只是IOC的一部分。
+
+PS：什么是工厂？
 
 工厂就是负责给我们从容器中获取指定对象的类。这时候我们获取对象的方式发生了改变。
-原来：
-我们在获取对象时，都是采用new的方式。是主动的。
-
-现在：
-我们获取对象时，同时跟工厂要，有工厂为我们查找或者创建对象。是被动的。
-
-这种被动接收的方式获取对象的思想就是**控制反转**，它是spring框架的核心之一。
+原来我们在获取对象时，都是采用new的方式。是主动的。现在我们获取对象时，同时跟工厂要，有工厂为我们查找或者创建对象。是被动的。这种被动接收的方式获取对象的思想就是**控制反转**，它是spring框架的核心之一。
 
 **明确ioc的作用：**
 削减计算机程序的耦合(解除我们代码中的依赖关系)。
@@ -1438,7 +1432,7 @@ public class SpringConfiguration {
 
 # 四、手写IOC和AOP
 
-在理解了IOC和AOP思想之后，根据银行转账案例我们逐步分析，并一步步手写IOC和AOP。
+在理解了IOC和AOP思想之后，根据银行转账案例我们逐步分析，并一步步手写IOC和AOP。当然，这里仅仅是实现了一个简单的IOC容器，便于更好的理解Spring框架。因此仅使用了一个map存储对象，也无法解决循环依赖。
 
 > 由于要手写IOC和AOP所以就只使用原生的Servlet，以及jdbc。就不引入Spring和SpringMVC以及mybatis了。
 
@@ -2101,7 +2095,7 @@ r">
 
 ## 6.1 源码构建
 
-Spring的源码构建只要版本都能对应上，基本上不会有什么问题，构建会很顺畅。我的版本：`jdk1.8.0_301,gradle5.6.4,spring5.2.x`下面分享一下各个版本对应：
+Spring的源码构建只要版本都能对应上，基本上不会有什么问题，构建会很顺畅。源码构建分为gradle构建代码和IDE进行build编译两个部分。我的版本：`jdk1.8.0_301,gradle5.6.4,spring5.2.x`下面分享一下各个版本对应：
 
 | Spring   | Gradle            | JDK  |
 | -------- | ----------------- | ---- |
@@ -2115,7 +2109,7 @@ Spring的源码构建只要版本都能对应上，基本上不会有什么问�
 
 - 构建成功，编译也可能不成功，我个人情况就是这样，jdk1.8构建spring5.3.x成功但是编译时报错，因为缺少jar包。
 
-- 构建成功就可以有一个源码阅读环境了，可以在ApplicationContext类下按ctrl+alt+u,有继承关系就代编构建成功，如图：
+- 构建成功就可以有一个源码阅读环境了，IDEA可以在ApplicationContext类下按ctrl+alt+u,有继承关系就代编构建成功，如图：
 
   ![image-20220310131419205](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310131419205.png)
 
@@ -2198,9 +2192,340 @@ Spring的源码构建只要版本都能对应上，基本上不会有什么问�
 
 ![image-20220310135400465](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310135400465.png)
 
-## 6.2 源码
+## 6.2 Spring5 IOC源码分析
 
+> 具体版本为GitHub拉下来的5.2.x分支
 
+Spring的源码调用过程非常长，还有各个类的不断的重复调用，我在debug调用时，发现有非常长的调用过程，因此本文将先介绍其中的关键点，然后给出流程图或时序图来进行Spring的源码分析学习。可以通过debug配合关键点了解spring源码，然后最后通过流程图串联起关键点，最后串联起整合IOC容器创建加载的的流程。
+
+> 想了解源码，最好还是自己亲自去实际debug和阅读，尤其是Spring这种优秀框架的源码需要自己去体会，我分享源码分析这种博客的目的便是记录学习的过程，分享学习的思路，同时也能更好地加深学习的印象。
+>
+> 本文将尽可能的对IOC的代码流程进行详细分析，但阅读他人博客是吸收思路，查缺补漏，而真正想了解源码还是应该“纸上得来终觉浅，绝知此事要躬行”。
+>
+> PS：在阅读源码的过程中有时需要靠注解和类变量的命名去简单定位，然后通过阅读和debug去确认自己的定位，所以我下面的介绍不会介绍我在看源码是怎么确定是这个类的，因此自己看源码时如果不确定也可以去看别人的思路或者靠自己一点点尝试摸索。
+
+首先，SpringIOC中本质上就是对Bean的加载和依赖注入。因此，我们开始分析Spring Bean的加载流程。
+
+### 6.2.1 Spring Bean的加载中的关键点
+
+首先我们通过一段代码作为入口：一般情况下Spring通过ApplicationContext来获取Bean，我们就以此为入口，来进行分析。我们这里使用`AnnotationConfigApplicationContext`来获取，当前使用xml的形式也是可以的，但是两者在Spring5.x中有些许不同，后面介绍也会说不同的地方。
+
+```java
+public static void main(String[] args) {
+   //ApplicationContext applicationContext = new ClassPathXmlApplicationContext("classpath:application.xml");
+   AnnotationConfigApplicationContext applicationContext = new AnnotationConfigApplicationContext(MyConfig.class);
+   System.out.println(applicationContext.getBean("User"));//打断点
+}
+```
+
+我们通过断点可以看到，这里已经存入User类了如下图，因此第一行构造方法时，就已经完成了对所有bean的加载。
+
+![image-20220321130805400](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321130805400.png)
+
+因此我们跟进构造函数，如下，在这里我们可以看到三个方法，其中最核心的就是refresh方法。注解形式的ApplicationContext与XML的略有不同，但是核心refresh方法是一样的
+
+```java
+public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
+   this();//调用构造函数
+   register(componentClasses);//注册传入的组件类
+   refresh();//Spring刷新上下文
+}
+```
+
+我们进入refresh方法，代码如下：
+
+```java
+@Override
+public void refresh() throws BeansException, IllegalStateException {
+   synchronized (this.startupShutdownMonitor) {
+      // Prepare this context for refreshing.
+      //刷新前的预处理
+      prepareRefresh();
+
+      // Tell the subclass to refresh the internal bean factory.
+      //告诉子类刷新内部bean工厂并返回新的beanFactory：
+      //AnnotationConfigApplicationContext本质上什么都不做只返回beanFactory，注册工厂都在this()和register()方法中完成了
+      //在ClassPathXmlApplicationContext会刷新bean工厂
+      //本质上是接口的实现类不同，所以方法也不同
+      ConfigurableListableBeanFactory beanFactory = obtainFreshBeanFactory();
+
+      // Prepare the bean factory for use in this context.
+      //BeanFactory的预准备工作，配置工厂的context的类加载器等
+      prepareBeanFactory(beanFactory);
+
+      try {
+         // Allows post-processing of the bean factory in context subclasses.
+         //BeanFactory准备工作完成后进行的后置处理工作
+         postProcessBeanFactory(beanFactory);
+
+         // Invoke factory processors registered as beans in the context.
+         //实例化并调用在上下文中注册为bean的工厂处理器。
+         invokeBeanFactoryPostProcessors(beanFactory);
+
+         // Register bean processors that intercept bean creation.
+         //注册BeanPostProcessors（Bean的后置处理器）
+         registerBeanPostProcessors(beanFactory);
+
+         // Initialize message source for this context.
+         //初始化MessageSource组件（主要实现国际化功能）
+         initMessageSource();
+
+         // Initialize event multicaster for this context.
+         //初始化事件派发器
+         initApplicationEventMulticaster();
+
+         // Initialize other special beans in specific context subclasses.
+         //留给子类重写的插槽，容器刷新时可以自定义逻辑
+         onRefresh();
+
+         // Check for listener beans and register them.
+         //注册应用的监听器，就是注册实现了ApplicationListener接口的监听器
+         registerListeners();
+
+         // Instantiate all remaining (non-lazy-init) singletons.
+         //初始化剩下的所有非懒加载的单例bean实例（未设置属性）->
+         //填充属性->初始化方法调用->调用BeanPostProcessor(后置处理器)
+         finishBeanFactoryInitialization(beanFactory);
+
+         // Last step: publish corresponding event.
+         //完成刷新
+         finishRefresh();
+      }
+
+      catch (BeansException ex) {
+         if (logger.isWarnEnabled()) {
+            logger.warn("Exception encountered during context initialization - " +
+                  "cancelling refresh attempt: " + ex);
+         }
+
+         // Destroy already created singletons to avoid dangling resources.
+         destroyBeans();
+
+         // Reset 'active' flag.
+         cancelRefresh(ex);
+
+         // Propagate exception to caller.
+         throw ex;
+      }
+
+      finally {
+         // Reset common introspection caches in Spring's core, since we
+         // might not ever need metadata for singleton beans anymore...
+         resetCommonCaches();
+      }
+   }
+}
+```
+
+refresh方法中定义了整个Spring IOC的流程，每一个方法名字都清晰易懂，可维护性、可读性很强。其中`obtainFreshBeanFactory()`和`finishBeanFactoryInitialization(beanFactory);`是比较关键的方法。
+
+其中`obtainFreshBeanFactory()`是用于刷新内部bean工厂并返回新的beanFactory。`finishBeanFactoryInitialization(beanFactory);`是初始化所有的单例Bean。
+
+> 为什么是单例Bean呢，因为Spring中的Bean默认都是单例的，而且只有@Autowired自动注入和set注入的单例Bean才能解决循环依赖问题。
+
+下面我们逐个跟进每一个关键点，最后将各个关键点串联，整合成整个bean加载的流程。这里先给出简略的AnnotationConfigApplicationContext的IOC加载流程图：
+
+> ClassPathXmlApplicationContext流程有些许不同，但不影响我们理解每一步关键点
+
+![springflow120220321](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/springflow120220321.png)
+
+### 6.2.2 关键点一 构建BeanFactory
+
+~~~java
+public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
+   this();//调用构造函数
+   register(componentClasses);//注册传入的组件类
+   refresh();//Spring刷新上下文
+}
+~~~
+
+我们进入入口，首先会调用构造函数，其实在这里就会构建BeanFactory的实例。BeanFactory是SpringIOC的顶级接口，代表Spring的Bean工厂。
+
+> 但是如果你使用XML的applicationContext的话构建BeanFactory不在构造函数中，而是在refresh的obtainFreshBeanFactory()方法中。ClassPathXmlApplicationContext和AnnotationConfigApplicationContext区别将在6.2.7中诠释。
+
+我们跟进构造函数，代码如下：会发现会初始化两个扫描器，官方给的解释翻译过来就是这两个扫描器主要用于读取传入的配置类和扫描注解用的。
+
+```java
+public AnnotationConfigApplicationContext() {
+    /*Convenient adapter for programmatic registration of bean classes.This is an alternative to ClassPathBeanDefinitionScanner, applying the same resolution of annotations but for explicitly registered classes only.*/
+   this.reader = new AnnotatedBeanDefinitionReader(this);
+    /*A bean definition scanner that detects bean candidates on the classpath, registering corresponding bean definitions with a given registry (BeanFactory or ApplicationContext).
+Candidate classes are detected through configurable type filters. The default filters include classes that are annotated with Spring's @Component, @Repository, @Service, or @Controller stereotype.*/
+   this.scanner = new ClassPathBeanDefinitionScanner(this);
+}
+```
+
+当然，这个构造函数不光要关注这两行初始化代码，还应该关注其父类的构造函数，这个类继承自GenericApplicationContext类。在GenericApplicationContext的无参构造函数中，会创建一个DefaultListableBeanFactory（是Spring对ConfigurableListableBeanFactory和BeanDefinitionRegistry接口的默认实现），这个就是这一小节的重点。
+
+```java
+public GenericApplicationContext() {
+   this.beanFactory = new DefaultListableBeanFactory();
+}
+```
+
+> 我们知道，一个类如果不显示的调用其父类的构造函数，那么就是默认调用其父类的无参构造函数。
+
+我们可以看一下这个类的继承关系图（IDEA使用ctrl+alt+u）：
+
+![image-20220321141328244](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321141328244.png)
+
+这里我们关注DefaultSingletonBeanRegistry这个类，这个类中有几个需要注意的Field：其中下面前三个就是Spring的三级缓存，用于解决循环依赖问题的。
+
+```java
+/** Cache of singleton objects: bean name to bean instance.
+ * 保存所有的单例对象 */
+private final Map<String, Object> singletonObjects = new ConcurrentHashMap<>(256);
+
+/** Cache of singleton factories: bean name to ObjectFactory.
+ * singletonBean的生产工厂*/
+private final Map<String, ObjectFactory<?>> singletonFactories = new HashMap<>(16);
+
+/** Cache of early singleton objects: bean name to bean instance.
+ * 保存所有早期创建的Bean对象，这个Bean对象还没有完成DI*/
+private final Map<String, Object> earlySingletonObjects = new ConcurrentHashMap<>(16);
+
+/** Set of registered singletons, containing the bean names in registration order.
+ * 保存所有已经完成初始化的Bean的名字 */
+private final Set<String> registeredSingletons = new LinkedHashSet<>(256);
+
+/** Names of beans that are currently in creation.
+ * 标识指定的Bean对象正在处于创建状态 */
+private final Set<String> singletonsCurrentlyInCreation =
+      Collections.newSetFromMap(new ConcurrentHashMap<>(16));
+```
+
+### 6.2.3 关键点二 加载配置类或配置文件
+
+这一步主要是将配置类或配置文件转换成BeanDefinition并注册到Map中存储起来，这个BeanDefinition可以看作是中间类，他是生成Bean之前的由配置文件或配置类转化而来的中间的类。
+
+我们继续回到这一步，下面我们跟进第二个方法。
+
+~~~java
+public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
+   this();//调用构造函数
+   register(componentClasses);//注册传入的组件类
+   refresh();//Spring刷新上下文
+}
+~~~
+
+> 在ClassPathXmlApplicationContext中是在obtainFreshBeanFactory()方法中的loadBeanDefinitions()方法中执行的，这个方法中会将配置文件转换成BeanDefinition，然后注册存入Map中。
+
+```java
+public void register(Class<?>... componentClasses) {
+   Assert.notEmpty(componentClasses, "At least one component class must be specified");
+   this.reader.register(componentClasses);
+}
+```
+
+我们会发现它会调用reader的register()方法，（这也证明了reader主要是用于加载配置类）我们一路跟最后会进入到doRegisterBean方法中：在这个方法中会将配置类转化成BeanDefinition的一个实现类AnnotatedGenericBeanDefinition（简称abd），然后用BeanDefinitionHolder包装这个abd，这个BeanDefinitionHolder就是一个封装了BeanDefinition的一个包装对象，然后调用  BeanDefinitionReaderUtils.registerBeanDefinition在里面进行注册，代码如下
+
+```java
+private <T> void doRegisterBean(Class<T> beanClass, @Nullable String name,
+      @Nullable Class<? extends Annotation>[] qualifiers, @Nullable Supplier<T> supplier,
+      @Nullable BeanDefinitionCustomizer[] customizers) {
+
+   AnnotatedGenericBeanDefinition abd = new AnnotatedGenericBeanDefinition(beanClass);
+   //。。。。。。略
+   BeanDefinitionHolder definitionHolder = new BeanDefinitionHolder(abd, beanName);
+   definitionHolder = AnnotationConfigUtils.applyScopedProxyMode(scopeMetadata, definitionHolder, this.registry);
+   BeanDefinitionReaderUtils.registerBeanDefinition(definitionHolder, this.registry);
+}
+```
+
+我们跟进去，在最后我们会发现他会在DefaultListableBeanFactory中的registerBeanDefinition将BeanDefinition存入Map完成注册。
+
+```java
+this.beanDefinitionMap.put(beanName, beanDefinition);
+```
+
+以上便是加载配置类的全部流程。
+
+### 6.2.4 关键点三 初始化Bean
+
+在开始初始化Bean这一步之前，我们可以简单了解一下refresh方法（代码见上面）在这个方法最开始我们可以发现这里上了一个锁`synchronized (this.startupShutdownMonitor)`。这个锁锁了一个对象，但是本质上是锁了整个方法，这样做有两个好处：
+
+1. 首先是关闭资源的时候会调用close()方法，close()方法也使用了同样的对象锁，这样可以避免这两个方法的冲突。
+2. 其次对象锁相对于整个方法加锁的话，同步的范围更小了，锁的粒度更小，效率更高。
+
+下面我们重点关注refresh方法中的`finishBeanFactoryInitialization`方法。Spring在这个方法中初始化Bean。
+
+> 之前说的refresh中有两个关键方法，其中obtainFreshBeanFactory方法其实就是关键点二 加载配置类或配置文件。这个方法在注解的applicationContext中是没有用的，只有在xml的流程中才会执行方法，具体将在6.2.7中详细解释
+
+我们跟进refresh方法中的`finishBeanFactoryInitialization`方法：
+
+```java
+/**
+ * Finish the initialization of this context's bean factory,
+ * initializing all remaining singleton beans.
+ */
+protected void finishBeanFactoryInitialization(ConfigurableListableBeanFactory beanFactory) {
+   //。。。略
+    
+   // Instantiate all remaining (non-lazy-init) singletons.
+   //实例化所有剩余的(非lazy-init)单例。
+   beanFactory.preInstantiateSingletons();
+}
+```
+
+在这个方法中最重要的就是beanFactory.preInstantiateSingletons();我们继续跟进方法。在这个方法中，我们可以看到，会初始化单例类，在getBean方法中执行。
+
+![image-20220321153445961](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321153445961.png)
+
+我们继续往下跟，直到进入到doGetBean()方法，在这个方法中，这一段代码就是创建bean实例的，我们可以看到在getSingleton方法中会将beanName和一个lambda表达式传入，这个lambda表达式中的createBean()方法就是实际去构造Bean的方法，它会获取到bean的构造函数，然后通过反射获取这个Bean的实例。（关于createBean方法，时序图会在6.2.6中给出）
+
+```java
+// Create bean instance.
+if (mbd.isSingleton()) {
+   sharedInstance = getSingleton(beanName, () -> {
+      try {
+         return createBean(beanName, mbd, args);
+      }
+      catch (BeansException ex) {
+         // Explicitly remove instance from singleton cache: It might have been put there
+         // eagerly by the creation process, to allow for circular reference resolution.
+         // Also remove any beans that received a temporary reference to the bean.
+         destroySingleton(beanName);
+         throw ex;
+      }
+   });
+   bean = getObjectForBeanInstance(sharedInstance, name, beanName, mbd);
+}
+```
+
+我们继续跟进getSingleton方法，这里就会存入Spring中维护的单例池，也就是我们所知道的存储对象的Map中。
+
+![image-20220321154642647](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321154642647.png)
+
+### 6.2.5 关键点四 Bean的依赖注入
+
+在上面的小节中，我们没有跟进createBean方法，在这一小节我们会跟进去。在createBean方法中有doCreateBean方法如下面代码：
+
+```java
+try {
+   Object beanInstance = doCreateBean(beanName, mbdToUse, args);
+   if (logger.isTraceEnabled()) {
+      logger.trace("Finished creating instance of bean '" + beanName + "'");
+   }
+   return beanInstance;
+}
+```
+
+我们跟进去，在这个方法中有一个populateBean()方法，这里就是依赖注入的地方。
+
+```java
+// Initialize the bean instance.
+Object exposedObject = bean;
+try {
+   populateBean(beanName, mbd, instanceWrapper);
+   exposedObject = initializeBean(beanName, exposedObject, mbd);
+}
+```
+
+### 6.2.6 整体流程和每一步的时序图
+
+### 6.2.7 XML和注解形式的ApplicationContext在IOC构建流程上的区别
+
+### 6.2.8 Spring解决循环依赖问题
 
 
 
