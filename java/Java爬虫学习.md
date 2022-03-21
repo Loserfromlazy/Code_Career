@@ -1,5 +1,9 @@
 # Java爬虫学习
 
+转载请声明！！本文如有错误欢迎指正，感激不尽。
+
+声明：爬虫有风险，学习需谨慎。切勿使用爬虫恶意爬取破坏他人项目或应用。
+
 # 一、概述
 
 ## 1.1 介绍
@@ -566,7 +570,7 @@ public class DownloadUtil {
  * @since 2021/12/6
  */
 public class ThreadPool {
-	//创建固定大小线程池
+	//创建固定大小线程池，生产环境或实际项目禁止使用以下方式创建线程池！！！这里
     private static final ExecutorService executorService = Executors.newFixedThreadPool(10);
 
     private ThreadPool(){}
