@@ -2,7 +2,7 @@
 
 转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
 
-在Core中都包括IOC Container（IOC容器），Events（事件），Resources（资源），i18n（），Validation（验证），DataBinging（数据绑定），Type Conversion（类型转换），SpEL，AOP。
+
 
 > 本文参考资料：Spring官方文档、自己的学习和尝试的总结、部分资料来源于网络（源头已无法寻找）
 
@@ -2321,7 +2321,7 @@ refresh方法中定义了整个Spring IOC的流程，每一个方法名字都清
 
 其中`obtainFreshBeanFactory()`是用于刷新内部bean工厂并返回新的beanFactory。`finishBeanFactoryInitialization(beanFactory);`是初始化所有的单例Bean。
 
-> 为什么是单例Bean呢，因为Spring中的Bean默认都是单例的，而且只有@Autowired自动注入和set注入的单例Bean才能解决循环依赖问题。
+> 为什么是单例Bean呢，因为Spring中的Bean默认都是单例的，而且单例Bean才需要全局初始化一次，原型Bean在每一次调用都需要初始化。
 
 下面我们逐个跟进每一个关键点，最后将各个关键点串联，整合成整个bean加载的流程。这里先给出简略的AnnotationConfigApplicationContext的IOC加载流程图：
 
@@ -2471,7 +2471,7 @@ protected void finishBeanFactoryInitialization(ConfigurableListableBeanFactory b
 
 ![image-20220321153445961](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321153445961.png)
 
-我们继续往下跟，直到进入到doGetBean()方法，在这个方法中，这一段代码就是创建bean实例的，我们可以看到在getSingleton方法中会将beanName和一个lambda表达式传入，这个lambda表达式中的createBean()方法就是实际去构造Bean的方法，它会获取到bean的构造函数，然后通过反射获取这个Bean的实例。（关于createBean方法，时序图会在6.2.6中给出）
+我们继续往下跟，直到进入到doGetBean()方法注意这里是AbstractBeanFactory类的doGetBean（关键代码如下），在这个方法中，这一段代码就是创建bean实例的，我们可以看到在getSingleton方法中会将beanName和一个lambda表达式传入，这个lambda表达式中的createBean()方法就是实际去构造Bean的方法，它会获取到bean的构造函数，然后通过反射获取这个Bean的实例。（关于createBean方法，时序图会在6.2.6中给出）
 
 ```java
 // Create bean instance.
@@ -2492,7 +2492,9 @@ if (mbd.isSingleton()) {
 }
 ```
 
-我们继续跟进getSingleton方法，这里就会存入Spring中维护的单例池，也就是我们所知道的存储对象的Map中。
+> 这里只给出了doGetBean方法的一部分，实际上这个方法里还有很重要的东西，比如解决循环依赖问题。在6.2.8中会讲解这个问题。
+
+我们继续跟进getSingleton方法（注意我们跟进的是传入lambda表达式的getSingleton方法，因为这个方法有很多重载，且有的重载与解决循环依赖有关，注意不要混淆），这里就会存入Spring中维护的单例池，也就是我们所知道的存储对象的Map。
 
 ![image-20220321154642647](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321154642647.png)
 
@@ -2521,13 +2523,358 @@ try {
 }
 ```
 
+我们跟进populateBean方法:
+
+~~~java
+protected void populateBean(String beanName, RootBeanDefinition mbd, @Nullable BeanWrapper bw) {
+    //判空操作
+		if (bw == null) {
+			if (mbd.hasPropertyValues()) {
+				throw new BeanCreationException(
+						mbd.getResourceDescription(), beanName, "Cannot apply property values to null instance");
+			}
+			else {
+				// Skip property population phase for null instance.
+				return;
+			}
+		}
+
+		// Give any InstantiationAwareBeanPostProcessors the opportunity to modify the
+		// state of the bean before properties are set. This can be used, for example,
+		// to support styles of field injection.
+		/*采用责任链模式调用所有继承了InstantiationAwareBeanPostProcessors接口的Bean，如果某个后置处理器返回了false就不会执行下面的自动装配了*/
+		if (!mbd.isSynthetic() && hasInstantiationAwareBeanPostProcessors()) {
+			for (BeanPostProcessor bp : getBeanPostProcessors()) {
+				if (bp instanceof InstantiationAwareBeanPostProcessor) {
+					InstantiationAwareBeanPostProcessor ibp = (InstantiationAwareBeanPostProcessor) bp;
+					if (!ibp.postProcessAfterInstantiation(bw.getWrappedInstance(), beanName)) {
+						return;
+					}
+				}
+			}
+		}
+		//这里的pvs是PropertyValues接口的默认实现。允许对属性进行简单操作，并提供构造函数来支持从Map进行深度复制和构造。
+		PropertyValues pvs = (mbd.hasPropertyValues() ? mbd.getPropertyValues() : null);
+		//一般以注解的形式，默认都解析为0，也就是没有显式配置自动装配策略.
+		//通常是在XML配置文件中显式指定了autowired或者在Java配置类中@Bean上，声明autowired，才会进入if条件中的代码块 
+		// 例如@Bean(autowire = Autowire.BY_NAME)
+		int resolvedAutowireMode = mbd.getResolvedAutowireMode();
+		if (resolvedAutowireMode == AUTOWIRE_BY_NAME || resolvedAutowireMode == AUTOWIRE_BY_TYPE) {
+			MutablePropertyValues newPvs = new MutablePropertyValues(pvs);
+			// Add property values based on autowire by name if applicable.
+			if (resolvedAutowireMode == AUTOWIRE_BY_NAME) {
+				autowireByName(beanName, mbd, bw, newPvs);
+			}
+			// Add property values based on autowire by type if applicable.
+			if (resolvedAutowireMode == AUTOWIRE_BY_TYPE) {
+				autowireByType(beanName, mbd, bw, newPvs);
+			}
+			pvs = newPvs;
+		}
+
+		boolean hasInstAwareBpps = hasInstantiationAwareBeanPostProcessors();
+		boolean needsDepCheck = (mbd.getDependencyCheck() != AbstractBeanDefinition.DEPENDENCY_CHECK_NONE);
+		//如果没有显式声明自动装配的方式(即使用了@Autowired注解)，那么就会使用到InstantiationAwareBeanPostProcessor这个后置处理器的postProcessProperties方法.
+		PropertyDescriptor[] filteredPds = null;
+		if (hasInstAwareBpps) {
+			if (pvs == null) {
+				pvs = mbd.getPropertyValues();
+			}
+			for (BeanPostProcessor bp : getBeanPostProcessors()) {
+				if (bp instanceof InstantiationAwareBeanPostProcessor) {
+					InstantiationAwareBeanPostProcessor ibp = (InstantiationAwareBeanPostProcessor) bp;
+					//实际上@Autowire注解都是在这里进行自动装配的
+                    //这里会进入到CommonAnnotationBeanPostProcessor的postProcessProperties方法
+					PropertyValues pvsToUse = ibp.postProcessProperties(pvs, bw.getWrappedInstance(), beanName);
+					if (pvsToUse == null) {
+						if (filteredPds == null) {
+							filteredPds = filterPropertyDescriptorsForDependencyCheck(bw, mbd.allowCaching);
+						}
+                        // 对解析完未设置的属性再进行处理
+						pvsToUse = ibp.postProcessPropertyValues(pvs, filteredPds, bw.getWrappedInstance(), beanName);
+						if (pvsToUse == null) {
+							return;
+						}
+					}
+					pvs = pvsToUse;
+				}
+			}
+		}
+		if (needsDepCheck) {
+			if (filteredPds == null) {
+				filteredPds = filterPropertyDescriptorsForDependencyCheck(bw, mbd.allowCaching);
+			}
+			checkDependencies(beanName, mbd, filteredPds, pvs);
+		}
+
+		if (pvs != null) {
+			applyPropertyValues(beanName, mbd, bw, pvs);
+		}
+	}
+~~~
+
+在这个populateBean方法中，会先进行判空操作，然后会对实现了InstantiationAwareBeanPostProcessors接口bean进行处理，然后会检查是否有显示声明装配方式，最后才是对所有非显示声明装配方式的属性进行处理（这里的处理比较重要，因为大部分我们都会使用@Autowired进行自动装配）。
+
+我们这里跟进postProcessPropertyValues方法中（populateBean其余的处理感兴趣可以自行debug研究），这个方法会跳转到CommonAnnotationBeanPostProcessor这个实现类中的postProcessPropertyValues方法。这里会执行依赖注入：
+
+```java
+metadata.inject(bean, beanName, pvs);
+```
+
+我们继续跟进这行代码
+
+```java
+public void inject(Object target, @Nullable String beanName, @Nullable PropertyValues pvs) throws Throwable {
+   Collection<InjectedElement> checkedElements = this.checkedElements;
+   Collection<InjectedElement> elementsToIterate =
+         (checkedElements != null ? checkedElements : this.injectedElements);
+   if (!elementsToIterate.isEmpty()) {
+      for (InjectedElement element : elementsToIterate) {
+          //循环注入依赖
+         element.inject(target, beanName, pvs);
+      }
+   }
+}
+```
+
+我们会发现，这里会依次将我们的属性全部注入，我们继续跟进element.inject方法中：会发现spring会将私有字段设置为可访问，然后将值存入。
+
+```java
+@Override
+protected void inject(Object bean, @Nullable String beanName, @Nullable PropertyValues pvs) throws Throwable {
+    Field field = (Field) this.member;
+    Object value;
+    if (this.cached) {
+        try {
+            value = resolvedCachedArgument(beanName, this.cachedFieldValue);
+        }
+        catch (NoSuchBeanDefinitionException ex) {
+            // Unexpected removal of target bean for cached argument -> re-resolve
+            value = resolveFieldValue(field, bean, beanName);
+        }
+    }
+    else {
+        value = resolveFieldValue(field, bean, beanName);
+    }
+    if (value != null) {
+        //注入值
+        ReflectionUtils.makeAccessible(field);
+        field.set(bean, value);
+    }
+}
+```
+
+那么这个值是怎么来的呢？如果跟进resolvedCachedArgument和resolveFieldValue，会发现最后都会进入到DefaultListableBeanFactory的resolveDependency方法，而这个方法会进入到doResolveDependency方法中，我们进入到这个方法：
+
+```java
+@Nullable
+	public Object doResolveDependency(DependencyDescriptor descriptor, @Nullable String beanName,
+			@Nullable Set<String> autowiredBeanNames, @Nullable TypeConverter typeConverter) throws BeansException {
+
+		InjectionPoint previousInjectionPoint = ConstructorResolver.setCurrentInjectionPoint(descriptor);
+		try {
+			//从容器中获取依赖，如果容器能获取到直接返回，这个方法最后会执行beanFactory.getBean()
+			Object shortcut = descriptor.resolveShortcut(this);
+			if (shortcut != null) {
+				return shortcut;
+			}
+
+			Class<?> type = descriptor.getDependencyType();
+			//处理@Value注解
+			Object value = getAutowireCandidateResolver().getSuggestedValue(descriptor);
+			if (value != null) {
+				if (value instanceof String) {
+					String strVal = resolveEmbeddedValue((String) value);
+					BeanDefinition bd = (beanName != null && containsBean(beanName) ?
+							getMergedBeanDefinition(beanName) : null);
+					value = evaluateBeanDefinitionString(strVal, bd);
+				}
+				TypeConverter converter = (typeConverter != null ? typeConverter : getTypeConverter());
+				try {
+					return converter.convertIfNecessary(value, type, descriptor.getTypeDescriptor());
+				}
+				catch (UnsupportedOperationException ex) {
+					// A custom TypeConverter which does not support TypeDescriptor resolution...
+					return (descriptor.getField() != null ?
+							converter.convertIfNecessary(value, type, descriptor.getField()) :
+							converter.convertIfNecessary(value, type, descriptor.getMethodParameter()));
+				}
+			}
+			//处理复合类型变量 比如数组、List、Map等
+			Object multipleBeans = resolveMultipleBeans(descriptor, beanName, autowiredBeanNames, typeConverter);
+			if (multipleBeans != null) {
+				return multipleBeans;
+			}
+			//如果是非复合类型，在这里进行处理，这里会返回一个Map，这是因为一个接口可以有多个实现类，按照类型查找，就会把实现该接口的实现类返回.
+			Map<String, Object> matchingBeans = findAutowireCandidates(beanName, type, descriptor);
+			if (matchingBeans.isEmpty()) {
+				//校验是否required是否标注了true
+				if (isRequired(descriptor)) {
+					//如果标注为true，但是无法匹配则抛出异常NoSuchBeanDefinitionException
+					raiseNoMatchingBeanFound(type, descriptor.getResolvableType(), descriptor);
+				}
+				return null;
+			}
+			String autowiredBeanName;
+			Object instanceCandidate;
+			//处理匹配到的Bean是否大于1，在应对这种多个候选Bean的时候，Spring判断是是否声明了@Primary注解或者@Order注解来决定注入哪个Bean.没有就抛出异常
+			if (matchingBeans.size() > 1) {
+				autowiredBeanName = determineAutowireCandidate(matchingBeans, descriptor);
+				if (autowiredBeanName == null) {
+					if (isRequired(descriptor) || !indicatesMultipleBeans(type)) {
+						return descriptor.resolveNotUnique(descriptor.getResolvableType(), matchingBeans);
+					}
+					else {
+						// In case of an optional Collection/Map, silently ignore a non-unique case:
+						// possibly it was meant to be an empty collection of multiple regular beans
+						// (before 4.3 in particular when we didn't even look for collection beans).
+						return null;
+					}
+				}
+				instanceCandidate = matchingBeans.get(autowiredBeanName);
+			}
+			else {
+				// We have exactly one match.
+				Map.Entry<String, Object> entry = matchingBeans.entrySet().iterator().next();
+				//key为实例的候选者名称，比如userServeice
+				autowiredBeanName = entry.getKey();
+				//候选者实例类 Class com.service.UserService
+				instanceCandidate = entry.getValue();
+			}
+
+			if (autowiredBeanNames != null) {
+				autowiredBeanNames.add(autowiredBeanName);
+			}
+			if (instanceCandidate instanceof Class) {
+				//选举实例 本质上执行beanFactory.getBean(beanName);
+				instanceCandidate = descriptor.resolveCandidate(autowiredBeanName, type, this);
+			}
+			Object result = instanceCandidate;
+			if (result instanceof NullBean) {
+				if (isRequired(descriptor)) {
+					raiseNoMatchingBeanFound(type, descriptor.getResolvableType(), descriptor);
+				}
+				result = null;
+			}
+			if (!ClassUtils.isAssignableValue(type, result)) {
+				throw new BeanNotOfRequiredTypeException(autowiredBeanName, type, instanceCandidate.getClass());
+			}
+			return result;
+		}
+		finally {
+			ConstructorResolver.setCurrentInjectionPoint(previousInjectionPoint);
+		}
+	}
+```
+
+这里的流程，在注释中都有写，在这个方法中获取到了值之后，返回到inject，通过java反射注入。以上就是bean的依赖注入流程。
+
 ### 6.2.6 整体流程和每一步的时序图
+
+经过对以上四个关键点的介绍，我们已经大致的体会了Spring IOC容器从初始化到加载配置到初始化bean和bean注入依赖的整体流程。在这里我将给出整体流程图和每一步的时序图，可以自行跟着去debug，对每一步有更清晰的认知。
+
+> 流程图时序图正在绘制中，即将更新
 
 ### 6.2.7 XML和注解形式的ApplicationContext在IOC构建流程上的区别
 
+在之前的关键点二中其实就是ClassPathXmlApplicationContext（简称xmlIOC）和AnnotationConfigApplicationContext（简称annoIOC）在流程上的不同。在xmlIOC中加载配置文件创建Bean工厂都是在obtainFreshBeanFactory中完成的，而在annoIOC中则是在构造函数和register中完成的，在annoIOC中的obtainFreshBeanFactory方法是什么都不做的。
+
+我们来看一下obtainFreshBeanFactory，这里的本质就是refreshBeanFactory()方法
+
+```java
+protected ConfigurableListableBeanFactory obtainFreshBeanFactory() {
+   refreshBeanFactory();
+   return getBeanFactory();
+}
+```
+
+我们跟进refreshBeanFactory方法中，这个方法有两个实现方法，其中第一个是xmlIOC调用的，第二个是annoIOC调用的。
+
+![image-20220322154813941](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220322154813941.png)
+
+而annoIOC调用的本质上是什么都不干的，因为已经在构造函数和register中完成了。
+
+```java
+//AbstractRefreshableApplicationContext#refreshBeanFactory
+/**
+ * This implementation performs an actual refresh of this context's underlying
+ * bean factory, shutting down the previous bean factory (if any) and
+ * initializing a fresh bean factory for the next phase of the context's lifecycle.
+ */
+@Override
+//xmlIOC调用的方法
+protected final void refreshBeanFactory() throws BeansException {
+   if (hasBeanFactory()) {
+      destroyBeans();
+      closeBeanFactory();
+   }
+   try {
+       //在annoIOC的构造函数中完成
+      DefaultListableBeanFactory beanFactory = createBeanFactory();
+      beanFactory.setSerializationId(getId());
+      customizeBeanFactory(beanFactory);
+       //在register方法中完成
+      loadBeanDefinitions(beanFactory);
+      this.beanFactory = beanFactory;
+   }
+   catch (IOException ex) {
+      throw new ApplicationContextException("I/O error parsing bean definition source for " + getDisplayName(), ex);
+   }
+}
+//GenericApplicationContext#refreshBeanFactory
+/**
+* Do nothing: We hold a single internal BeanFactory and rely on callers
+* to register beans through our public methods (or the BeanFactory's).
+* @see #registerBeanDefinition
+*/
+@Override
+protected final void refreshBeanFactory() throws IllegalStateException {
+    if (!this.refreshed.compareAndSet(false, true)) {
+        throw new IllegalStateException(
+            "GenericApplicationContext does not support multiple refresh attempts: just call 'refresh' once");
+    }
+    this.beanFactory.setSerializationId(getId());
+}
+```
+
+下面是二者的构造函数：
+
+```java
+public ClassPathXmlApplicationContext(
+      String[] configLocations, boolean refresh, @Nullable ApplicationContext parent)
+      throws BeansException {
+
+   super(parent);
+   setConfigLocations(configLocations);
+   if (refresh) {
+      refresh();
+   }
+}
+public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
+		this();
+		register(componentClasses);
+		refresh();
+	}
+```
+
 ### 6.2.8 Spring解决循环依赖问题
 
+循环依赖问题是指两个或以上对象互相依赖，最终形成闭环。Spring本身是可以解决单例Bean通过@Autowired和set方法形成的循环依赖的，但是Spring无法解决原型Bean和构造器参数造成的循环依赖问题。
 
+下面我们就来分析一下，Spring如何解决单例Bean的循环依赖问题。在分析之前我们先创建两个循环依赖的Bean：
+
+~~~
+@Component
+public class CycleA {
+	@Autowired
+	private CycleB cycleB;
+}
+@Component
+public class CycleB {
+	@Autowired
+	private CycleA cycleA;
+}
+~~~
 
 
 
