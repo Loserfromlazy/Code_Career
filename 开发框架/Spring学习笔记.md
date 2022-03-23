@@ -2471,7 +2471,7 @@ protected void finishBeanFactoryInitialization(ConfigurableListableBeanFactory b
 
 ![image-20220321153445961](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321153445961.png)
 
-我们继续往下跟，直到进入到doGetBean()方法注意这里是AbstractBeanFactory类的doGetBean（关键代码如下），在这个方法中，这一段代码就是创建bean实例的，我们可以看到在getSingleton方法中会将beanName和一个lambda表达式传入，这个lambda表达式中的createBean()方法就是实际去构造Bean的方法，它会获取到bean的构造函数，然后通过反射获取这个Bean的实例。（关于createBean方法，时序图会在6.2.6中给出）
+我们继续往下跟，直到进入到doGetBean方法（注意这里是AbstractBeanFactory类的doGetBean）（关键代码如下），在这个方法中，这一段代码就是创建bean实例的，我们可以看到在getSingleton方法中会将beanName和一个lambda表达式传入，这个lambda表达式中的createBean方法就是实际去构造Bean的方法，它会获取到bean的构造函数，然后通过反射获取这个Bean的实例（）。（关于createBean方法，时序图会在6.2.6中给出）
 
 ```java
 // Create bean instance.
@@ -2497,6 +2497,8 @@ if (mbd.isSingleton()) {
 我们继续跟进getSingleton方法（注意我们跟进的是传入lambda表达式的getSingleton方法，因为这个方法有很多重载，且有的重载与解决循环依赖有关，注意不要混淆），这里就会存入Spring中维护的单例池，也就是我们所知道的存储对象的Map。
 
 ![image-20220321154642647](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321154642647.png)
+
+> 关于Bean的初始化会在6.2.8循环依赖更详细的说明
 
 ### 6.2.5 关键点四 Bean的依赖注入
 
@@ -2664,7 +2666,7 @@ protected void inject(Object bean, @Nullable String beanName, @Nullable Property
 }
 ```
 
-那么这个值是怎么来的呢？如果跟进resolvedCachedArgument和resolveFieldValue，会发现最后都会进入到DefaultListableBeanFactory的resolveDependency方法，而这个方法会进入到doResolveDependency方法中，我们进入到这个方法：
+那么这个值是怎么来的呢？我们一直debug会发现最后都会进入到DefaultListableBeanFactory的resolveDependency方法，而这个方法会进入到doResolveDependency方法中，我们进入到这个方法：
 
 ```java
 @Nullable
@@ -2769,9 +2771,13 @@ protected void inject(Object bean, @Nullable String beanName, @Nullable Property
 
 这里的流程，在注释中都有写，在这个方法中获取到了值之后，返回到inject，通过java反射注入。以上就是bean的依赖注入流程。
 
+> 关于Bean的依赖注入会在6.2.8循环依赖更详细的说明
+
 ### 6.2.6 整体流程和每一步的时序图
 
 经过对以上四个关键点的介绍，我们已经大致的体会了Spring IOC容器从初始化到加载配置到初始化bean和bean注入依赖的整体流程。在这里我将给出整体流程图和每一步的时序图，可以自行跟着去debug，对每一步有更清晰的认知。
+
+
 
 > 流程图时序图正在绘制中，即将更新
 
@@ -2788,7 +2794,7 @@ protected ConfigurableListableBeanFactory obtainFreshBeanFactory() {
 }
 ```
 
-我们跟进refreshBeanFactory方法中，这个方法有两个实现方法，其中第一个是xmlIOC调用的，第二个是annoIOC调用的。
+我们跟进refreshBeanFactory方法中，这个方法有两个实现方法，其中第一个是xmlIOC调用的，第二个是annoIOC调用的。（可以自己debug尝试）
 
 ![image-20220322154813941](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220322154813941.png)
 
@@ -2861,22 +2867,28 @@ public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
 
 循环依赖问题是指两个或以上对象互相依赖，最终形成闭环。Spring本身是可以解决单例Bean通过@Autowired和set方法形成的循环依赖的，但是Spring无法解决原型Bean和构造器参数造成的循环依赖问题。
 
-下面我们就来分析一下，Spring如何解决单例Bean的循环依赖问题。在分析之前我们先创建两个循环依赖的Bean：
+> 其实想要弄懂Spring是如何解决循环依赖问题的，只要对Bean的初始化和依赖注入的流程的每一步都熟练的掌握，就自然而然的了解Spring是如何解决循环依赖了。
+>
+> 我们可以建立两个互相循环依赖的两个Bean来进行debug，如下面代码：
+>
+> ~~~java
+> @Component
+> public class CycleA {
+> 	@Autowired
+> 	private CycleB cycleB;
+> }
+> @Component
+> public class CycleB {
+> 	@Autowired
+> 	private CycleA cycleA;
+> }
+> ~~~
 
-~~~
-@Component
-public class CycleA {
-	@Autowired
-	private CycleB cycleB;
-}
-@Component
-public class CycleB {
-	@Autowired
-	private CycleA cycleA;
-}
-~~~
+我们首先先详细的分析一下Spring创建Bean和对Bean依赖注入的详细流程：
 
+![image-20220323140750864](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323140750864.png)
 
+![image-20220323140418914](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323140418914.png)
 
-
+![image-20220323141204497](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323141204497.png)
 
