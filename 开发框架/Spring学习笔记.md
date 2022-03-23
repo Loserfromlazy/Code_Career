@@ -2,7 +2,7 @@
 
 转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
 
-
+此文档同步博客： [Spring学习](https://www.cnblogs.com/yhr520/p/12554829.html)
 
 > 本文参考资料：Spring官方文档、自己的学习和尝试的总结、部分资料来源于网络（源头已无法寻找）
 
@@ -2707,7 +2707,7 @@ protected void inject(Object bean, @Nullable String beanName, @Nullable Property
 			if (multipleBeans != null) {
 				return multipleBeans;
 			}
-			//如果是非复合类型，在这里进行处理，这里会返回一个Map，这是因为一个接口可以有多个实现类，按照类型查找，就会把实现该接口的实现类返回.
+			//如果是非复合类型，在这里进行处理，这里会返回一个Map，这是因为一个接口可以有多个实现类，按照类型查找，就会把实现该接口的实现类返回. findAutowireCandidates查找符合注入属性类型的bean
 			Map<String, Object> matchingBeans = findAutowireCandidates(beanName, type, descriptor);
 			if (matchingBeans.isEmpty()) {
 				//校验是否required是否标注了true
@@ -2886,9 +2886,19 @@ public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
 
 我们首先先详细的分析一下Spring创建Bean和对Bean依赖注入的详细流程：
 
+首先在refresh的finishBeanFactoryInitialization方法中，我们一路debug跟代码最后会进到`beanFactory.preInstantiateSingletons`方法中，如下图，在这个方法中会调用`getBean`方法，然后会进入到doGetBean中，在这里首先会调用个体getSingleton方法，这个方法会依次查询Spring的三个缓存，如果三个缓存中都拿不到就会进行创建Bean，这部分逻辑如下图。
+
 ![image-20220323140750864](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323140750864.png)
+
+在创建Bean的过程中，会先创建Bean实例，然后在进行依赖注入，如下图：
 
 ![image-20220323140418914](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323140418914.png)
 
+在依赖注入整个流程中最后会调用doResolveDependency方法，流程如下：
+
 ![image-20220323141204497](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323141204497.png)
+
+这个方法的源代码在6.2.5中贴过，并给出了注释。那么在这个方法中最终会选举
+
+![image-20220323151600474](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323151600474.png)
 
