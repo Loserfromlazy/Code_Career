@@ -2371,6 +2371,8 @@ public GenericApplicationContext() {
 
 这里我们关注DefaultSingletonBeanRegistry这个类，这个类中有几个需要注意的Field：其中下面前三个就是Spring的三级缓存，用于解决循环依赖问题的。
 
+> 下面这几个对象很重要，在6.2.8循环依赖中我还会在提到，spring的三级缓存主要是解决循环依赖问题的
+
 ```java
 /** Cache of singleton objects: bean name to bean instance.
  * 保存所有的单例对象 */
@@ -2886,20 +2888,49 @@ public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
 
 我们首先先详细的分析一下Spring创建Bean和对Bean依赖注入的详细流程：
 
-首先在refresh的finishBeanFactoryInitialization方法中，我们一路debug跟代码最后会进到`beanFactory.preInstantiateSingletons`方法中，如下图，在这个方法中会调用`getBean`方法，然后会进入到doGetBean中，在这里首先会调用个体getSingleton方法，这个方法会依次查询Spring的三个缓存，如果三个缓存中都拿不到就会进行创建Bean，这部分逻辑如下图。
+首先在refresh的finishBeanFactoryInitialization方法中，我们一路debug跟代码最后会进到`beanFactory.preInstantiateSingletons`方法中，如下图，在这个方法中会调用`getBean`方法，然后会进入到doGetBean中，在这里首先会调用getSingleton方法，这个方法会依次查询Spring的三个缓存，如果三个缓存中都拿不到就会进行创建Bean，这部分逻辑如下图。
+
+> 这里有几个要注意的地方：
+>
+> 1. 这个getSingleton方法中有一个`isSingletonCurrentlyInCreation(beanName)`方法，这个方法其实是从`singletonsCurrentlyInCreation`中获取数据，看当前对象是否是正在创建中。
+> 2. 也要注意getSingleton是有重载的，下面我还会介绍它的重载的调用，不要弄混了。
+> 3. 这里的getSingleton方法的第二个参数allowEarlyReference这里是是传入true的。这个参数的意思是是否应该创建早期引用，实际上就是用来控制，当前传入这个方法的beanNeam是否要从三级缓存升级到二级缓存
 
 ![image-20220323140750864](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323140750864.png)
+
+我们再详细看一下getSingleton方法中，这个方法中会调用lambda表达式也就是上一步的createBean方法。但是这个方法出还有一点需要注意，就是`beforeSingletonCreation`方法，它会将当前类加入到`singletonsCurrentlyInCreation`,在上面重载的getSingleton方法就是通过这个判断当前bean是否是正在创建中。
+
+![image-20220324103903282](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220324103903282.png)
 
 在创建Bean的过程中，会先创建Bean实例，然后在进行依赖注入，如下图：
 
 ![image-20220323140418914](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323140418914.png)
 
-在依赖注入整个流程中最后会调用doResolveDependency方法，流程如下：
+我们详细看一下doCreateBean：
+
+这里我们需要注意一下，spring会判断当前类是否是符合提前暴漏的条件，其中`allowCircularReferences`默认为true表示是否自动尝试解析bean之间的循环引用。如果符合就存入三级缓存，并且会再次调用getSingleton方法，注意此时传入false。这也很好理解，因为我们刚存入三级缓存中，所以不允许升级到二级缓存中
+
+![image-20220324112822017](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220324112822017.png)
+
+然后我们继续分析依赖注入，在依赖注入整个流程中最后会调用doResolveDependency方法，流程如下：
 
 ![image-20220323141204497](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323141204497.png)
 
-这个方法的源代码在6.2.5中贴过，并给出了注释。那么在这个方法中最终会选举
+这个方法的源代码在6.2.5中贴过，并给出了注释。那么在这个方法中在注入bean类型的时候最终会选举，但是本质上还是调用getBean方法。这个getBean又会调用doGetBean方法然后又是我们现在分析的这一轮循环。
 
 ![image-20220323151600474](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323151600474.png)
 
-> 未完结，笔记正在整理中
+综上，我们分析了Bean创建和依赖注入的全部流程，经过这一轮分析其实就可以了解Spring是如何解决循环依赖的问题。那么现在我们再用cycleA和cycleB（以下简称A、B）两个例子类详细解释一下，如下图：
+
+![springCyclePart20220324](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/springCyclePart20220324.png)
+
+经过上面的流程，最后B注入一个半成品A，而A随着B变成完成后，A也可以继续注入依赖，而随着A的完成，B中的A也变成了完成品，因为内存中本质都是一个对象（如下图）。而这样就解决了循环依赖问题。
+
+![cycleApart20220324](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/cycleApart20220324.gif)
+
+> 上面的流程createBeanInstance方法执行完后会执行addSingleton，这里会将完成品的Bean存入到单例池，同时将二级缓存中的Bean移除。这部分流程在6.2.4中进行过介绍这里不再赘述。
+
+## 6.3 Spring5 AOP源码分析
+
+> 注意Spring 如果想用@Aspect注解需要导入aspectjweaver。因为spring是直接使用AspectJ的注解功能，因此不导入是无法使用注解的
+
