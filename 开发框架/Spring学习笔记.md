@@ -1341,6 +1341,8 @@ e.printStackTrace();
 
 < aop:aspectj-autoproxy/>
 
+或者配置类中设置@EnableAspectJAutoProxy
+
 **环绕通知注解配置**
 
 ~~~java
@@ -2189,6 +2191,8 @@ Spring的源码构建只要版本都能对应上，基本上不会有什么问�
 10. 如果出现Kotlin: warnings found and -Werror specified，那就把-Werror删掉即可。原因是-Werror的报错级别太高，具体可以自行研究一下gradle。
 
 > ps：编译的时候是一个模块一个模块来的，哪个模块报这个错就改哪个模块
+>
+> 我每次修改build.gradle都会出现8、9、10的问题，可能是gradle的原因，我对gradle不是特别了解。
 
 ![image-20220310135400465](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220310135400465.png)
 
@@ -2375,15 +2379,15 @@ public GenericApplicationContext() {
 
 ```java
 /** Cache of singleton objects: bean name to bean instance.
- * 保存所有的单例对象 */
+ * 保存所有的单例对象 ，一级缓存*/
 private final Map<String, Object> singletonObjects = new ConcurrentHashMap<>(256);
 
 /** Cache of singleton factories: bean name to ObjectFactory.
- * singletonBean的生产工厂*/
+ * singletonBean的生产工厂，三级缓存*/
 private final Map<String, ObjectFactory<?>> singletonFactories = new HashMap<>(16);
 
 /** Cache of early singleton objects: bean name to bean instance.
- * 保存所有早期创建的Bean对象，这个Bean对象还没有完成DI*/
+ * 保存所有早期创建的Bean对象，这个Bean对象还没有完成DI，二级缓存*/
 private final Map<String, Object> earlySingletonObjects = new ConcurrentHashMap<>(16);
 
 /** Set of registered singletons, containing the bean names in registration order.
@@ -2442,7 +2446,7 @@ this.beanDefinitionMap.put(beanName, beanDefinition);
 
 以上便是加载配置类的全部流程。
 
-### 6.2.4 关键点三 初始化Bean
+### 6.2.4 关键点三 创建Bean实例
 
 在开始初始化Bean这一步之前，我们可以简单了解一下refresh方法（代码见上面）在这个方法最开始我们可以发现这里上了一个锁`synchronized (this.startupShutdownMonitor)`。这个锁锁了一个对象，但是本质上是锁了整个方法，这样做有两个好处：
 
@@ -2522,10 +2526,14 @@ try {
 // Initialize the bean instance.
 Object exposedObject = bean;
 try {
+    //注入依赖
    populateBean(beanName, mbd, instanceWrapper);
+    //初始化Bean
    exposedObject = initializeBean(beanName, exposedObject, mbd);
 }
 ```
+
+> initializeBean是初始化Bean的方法，这部分主要在AOP源码分析中讲解
 
 我们跟进populateBean方法:
 
@@ -2892,13 +2900,13 @@ public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
 
 > 这里有几个要注意的地方：
 >
-> 1. 这个getSingleton方法中有一个`isSingletonCurrentlyInCreation(beanName)`方法，这个方法其实是从`singletonsCurrentlyInCreation`中获取数据，看当前对象是否是正在创建中。
+> 1. 这个getSingleton方法（下图中圈出的第一个）中有一个`isSingletonCurrentlyInCreation(beanName)`方法，这个方法其实是从`singletonsCurrentlyInCreation`中获取数据，看当前对象是否是正在创建中。
 > 2. 也要注意getSingleton是有重载的，下面我还会介绍它的重载的调用，不要弄混了。
-> 3. 这里的getSingleton方法的第二个参数allowEarlyReference这里是是传入true的。这个参数的意思是是否应该创建早期引用，实际上就是用来控制，当前传入这个方法的beanNeam是否要从三级缓存升级到二级缓存
+> 3. 这里的getSingleton方法（下图中圈出的第一个）的第二个参数allowEarlyReference这里是是传入true的。这个参数的意思是是否应该创建早期引用，实际上就是用来控制，当前传入这个方法的beanName对应的bean是否要从三级缓存升级到二级缓存。
 
 ![image-20220323140750864](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220323140750864.png)
 
-我们再详细看一下getSingleton方法中，这个方法中会调用lambda表达式也就是上一步的createBean方法。但是这个方法出还有一点需要注意，就是`beforeSingletonCreation`方法，它会将当前类加入到`singletonsCurrentlyInCreation`,在上面重载的getSingleton方法就是通过这个判断当前bean是否是正在创建中。
+我们再详细看一下getSingleton方法（这里指的是上图中圈出的第二个getSingleton方法），这个方法中会调用lambda表达式也就是上一步的createBean方法。但是这个方法出还有一点需要注意，就是`beforeSingletonCreation`方法，它会将当前类加入到`singletonsCurrentlyInCreation`,在上面重载的getSingleton方法（上图中圈出的第一个getSingleton方法）就是通过这个判断当前bean是否是正在创建中。
 
 ![image-20220324103903282](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220324103903282.png)
 
@@ -2930,7 +2938,196 @@ public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
 
 > 上面的流程createBeanInstance方法执行完后会执行addSingleton，这里会将完成品的Bean存入到单例池，同时将二级缓存中的Bean移除。这部分流程在6.2.4中进行过介绍这里不再赘述。
 
+还有一个问题，通过上面的流程我们可以发现，其实有两个Map就能解决循环依赖的问题了，那为什么Spring要用三级缓存来解决这件事呢？
+
+> 笔记正在整理中，因为这部分与aop有关，需要等aop笔记整理完成
+
 ## 6.3 Spring5 AOP源码分析
 
-> 注意Spring 如果想用@Aspect注解需要导入aspectjweaver。因为spring是直接使用AspectJ的注解功能，因此不导入是无法使用注解的
+> 注意Spring 如果想用@Aspect注解需要导入第三方jar包aspectjweaver。因为spring是直接使用AspectJ的注解功能，因此不导入是无法使用注解的。
+>
+> gradle导入方式如下：
+>
+> ```
+> compile group: 'org.aspectj' , name: 'aspectjweaver' ,version: '1.9.7'
+> ```
+
+我们还是一样先创建测试的AOP类
+
+```java
+@Component
+@Aspect
+public class MyBeanAspect {
+
+   @Pointcut("execution(* com.learn.pojo.*.*(..))")
+   public void pointcut(){
+
+   }
+
+   @Before("pointcut()")
+   public void before(){
+      System.out.println("before");
+   }
+}
+@Component
+public class MyBean {
+	public void doSomething(){
+		System.out.println("doSomething");
+	}
+}
+public class Test {
+	public static void main(String[] args) {
+		AnnotationConfigApplicationContext applicationContext = new AnnotationConfigApplicationContext(MyConfig.class);
+		System.out.println(applicationContext.getBean(MyBean.class));//打断点
+	}
+}
+```
+
+然后在上面的getBean的位置打断点，观察这时的单例池，发现spring已经创建了MyBean对象，而且是已经被代理后的对象，如下图：
+
+![image-20220325124928883](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325124928883.png)
+
+根据IOC的流程，我们一路跟代码到populateBean方法：
+
+![image-20220325125236591](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325125236591.png)
+
+我们可以观察debug，此时exposeObject是MyBean实例，当执行完initializeBean方法后，exposeObject变成了代理类。因此就是initializeBean方法创建了代理对象。我们跟进这个方法，这个方法主要是进行Bean的初始化的：
+
+```java
+//初始化给定的bean实例，应用工厂回调、初始化方法和bean后处理器。
+protected Object initializeBean(String beanName, Object bean, @Nullable RootBeanDefinition mbd) {
+		//执行所有的Aware方法
+		if (System.getSecurityManager() != null) {
+			AccessController.doPrivileged((PrivilegedAction<Object>) () -> {
+				invokeAwareMethods(beanName, bean);
+				return null;
+			}, getAccessControlContext());
+		}
+		else {
+			invokeAwareMethods(beanName, bean);
+		}
+
+		Object wrappedBean = bean;
+		if (mbd == null || !mbd.isSynthetic()) {
+			//执行所有的BeanPostProcessor#postProcessBeforeInitialization 执行后置处理器 before
+			wrappedBean = applyBeanPostProcessorsBeforeInitialization(wrappedBean, beanName);
+		}
+
+		try {
+			//开始执⾏afterPropertiesSet方法 （需实现InitializingBean的接口）和initMethodName方法
+			invokeInitMethods(beanName, wrappedBean, mbd);
+		}
+		catch (Throwable ex) {
+			throw new BeanCreationException(
+					(mbd != null ? mbd.getResourceDescription() : null),
+					beanName, "Invocation of init method failed", ex);
+		}
+		if (mbd == null || !mbd.isSynthetic()) {
+			//Bean初始化完成，执行后置处理器 after 代理对象就是在这里产生
+			wrappedBean = applyBeanPostProcessorsAfterInitialization(wrappedBean, beanName);
+		}
+
+		return wrappedBean;
+	}
+```
+
+这个方法主要是用于初始化Bean的，它主要干了三件事：
+
+1. **执行所有的Aware方法**
+
+   当bean实现了BeanNameAware，BeanClassLoaderAware，BeanFactoryAware三个接口时，就会在bean初始化的时候去调用对应的set方法，设置对应的属性。可以跟进`invokeAwareMethods(beanName, bean)`方法中查看，并同时看看这三个接口代码就能理解。
+
+2. **执行自定义invoke方法**
+
+   在`invokeInitMethods(beanName, wrappedBean, mbd)`方法中进行。
+
+   这个方法中执⾏`afterPropertiesSet方法` （如果bean实现了InitializingBean的接口，就调用该bean的afterPropertiesSet实现方法）和`initMethodName方法`（如果bean有自定义的init方法即指定了 init-method()，就执行对应的方法） init-method就是在xml中配置的属性，见下面代码
+
+   ~~~xml
+   <bean id="mybean" class="com.learn.MyBean" init-method="" destroy-method=""/>
+   ~~~
+
+3. **执行前后置处理器**
+
+   我们可以先看看BeanPostProcessor接口（接口代码略），这个接口有前置方法和后置方法，在bean的初始化前后去对类做操作。
+
+   这里我们主要关注applyBeanPostProcessorsAfterInitialization()方法,当执行到这里时，Bean已将完成了实例的创建、依赖注入和初始化了，这时的Bean已经是一个完整的Bean了。所以如果使用了 spring aop功能，那么代理对象的产生就在这个 `applyBeanPostProcessorsAfterInitialization()` 方法中。
+
+我们跟进这个方法，代码如下：
+
+```java
+@Override
+public Object applyBeanPostProcessorsAfterInitialization(Object existingBean, String beanName)
+      throws BeansException {
+
+   Object result = existingBean;
+    //获取所有实现了 BeanPostProcessors 接口的类，进行遍历
+   for (BeanPostProcessor processor : getBeanPostProcessors()) {
+      Object current = processor.postProcessAfterInitialization(result, beanName);
+      if (current == null) {
+         return result;
+      }
+      result = current;
+   }
+   return result;
+}
+```
+
+这里我们重点关注`postProcessAfterInitialization方法`,这个方法就是BeanPostProcessors 接口提供的方法，我们在debug的过程中，可以找到创建代理对象的processor，如下图：
+
+![image-20220325141554844](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325141554844.png)
+
+这时我们跟进方法，会发现他会执行AbstractAutoProxyCreator#postProcessAfterInitialization方法。在这里会执行wrapIfNecessary方法，这个方法核心代码如下：
+
+```java
+protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) {
+   //.....代码略
+
+   // Create proxy if we have advice.
+    //返回给定的bean是否要被代理，要应用哪些额外的通知(例如AOP Alliance拦截器)和咨询器。
+   Object[] specificInterceptors = getAdvicesAndAdvisorsForBean(bean.getClass(), beanName, null);
+   if (specificInterceptors != DO_NOT_PROXY) {
+      this.advisedBeans.put(cacheKey, Boolean.TRUE);
+       //创建代理对象
+      Object proxy = createProxy(
+            bean.getClass(), beanName, specificInterceptors, new SingletonTargetSource(bean));
+      this.proxyTypes.put(cacheKey, proxy.getClass());
+      return proxy;
+   }
+
+   this.advisedBeans.put(cacheKey, Boolean.FALSE);
+   return bean;
+}
+```
+
+我们继续往下跟代码，流程如下图：
+
+![image-20220325144847924](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325144847924.png)
+
+这里最后会走到ProxyFactory#getProxy方法中，这个方法主要有两步，一是创建代理工厂，二是创建代理。
+
+创建代理工厂会根据是否是接口类来选择是使用jdk代理还是cglib代理：
+
+```java
+//如果targetClass是接口类，使用JDK来生成代理
+if (targetClass.isInterface() || Proxy.isProxyClass(targetClass)) {
+   return new JdkDynamicAopProxy(config);
+}
+//否则使用Cglib来生成代理
+return new ObjenesisCglibAopProxy(config);
+```
+
+创建代理这个方法也有两个实现类，分别对应着jdk的代理工厂和cglib的代理工厂。
+
+![image-20220325145257629](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325145257629.png)
+
+综上，以上是对SpringAop创建代理对象的流程分析。实际上代理对象的创
+
+> 关于jdk和cglib的代理可以见我的另一篇博客，[Java代理](https://www.cnblogs.com/yhr520/p/15601620.html)
+
+## 6.4 Spring 5 声明式事务源码分析
+
+Spring声明式事务有两个关键的注解`@EnableTransactionManagement`和`@Transactional`
+
+> 笔记正在整理中，因为这部分与aop有关，需要等aop笔记整理完成
 
