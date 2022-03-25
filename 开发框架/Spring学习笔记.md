@@ -3121,7 +3121,7 @@ return new ObjenesisCglibAopProxy(config);
 
 ![image-20220325145257629](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325145257629.png)
 
-综上，以上是对SpringAop创建代理对象的流程分析。实际上代理对象的创
+以上是对SpringAop创建代理对象的流程分析。
 
 > 关于jdk和cglib的代理可以见我的另一篇博客，[Java代理](https://www.cnblogs.com/yhr520/p/15601620.html)
 
@@ -3129,5 +3129,23 @@ return new ObjenesisCglibAopProxy(config);
 
 Spring声明式事务有两个关键的注解`@EnableTransactionManagement`和`@Transactional`
 
-> 笔记正在整理中，因为这部分与aop有关，需要等aop笔记整理完成
+我们这里先根据上面AOP的流程debug一下，首先新增事务注解：
+
+```java
+@Component
+public class MyBean {
+   @Transactional(rollbackFor = Exception.class)
+   public void doSomething(){
+      System.out.println("doSomething");//别忘了在配置类上加上启动事务注解
+   }
+}
+```
+
+然后我们按照上面的流程进行debug，当在执行createAopProxy方法创建代理工厂时，我们可以看一下现有的增强集合：
+
+![image-20220325170620923](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325170620923.png)
+
+我们可以看到，这时已经有事务的增强了，代理对象之后在创建就带有这两个增强了。
+
+> 正在整理中
 
