@@ -1,10 +1,10 @@
-# Spring学习笔记
+# Spring学习和源码剖析
 
 转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
 
 此文档同步博客： [Spring学习](https://www.cnblogs.com/yhr520/p/12554829.html)
 
-> 本文参考资料：Spring官方文档、自己的学习和尝试的总结、部分资料来源于网络（源头已无法寻找）
+> 本文参考资料：Spring官方文档、自己的学习和使用的总结、部分资料来源于网络
 
 # 一、概述
 
@@ -2323,6 +2323,8 @@ public void refresh() throws BeansException, IllegalStateException {
 
 refresh方法中定义了整个Spring IOC的流程，每一个方法名字都清晰易懂，可维护性、可读性很强。其中`obtainFreshBeanFactory()`和`finishBeanFactoryInitialization(beanFactory);`是比较关键的方法。
 
+> 我在本文中只分析了refresh这两个方法，因为是分析主要源码和流程，其余方法可以自行debug研究。
+
 其中`obtainFreshBeanFactory()`是用于刷新内部bean工厂并返回新的beanFactory。`finishBeanFactoryInitialization(beanFactory);`是初始化所有的单例Bean。
 
 > 为什么是单例Bean呢，因为Spring中的Bean默认都是单例的，而且单例Bean才需要全局初始化一次，原型Bean在每一次调用都需要初始化。
@@ -2952,6 +2954,8 @@ public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
 > compile group: 'org.aspectj' , name: 'aspectjweaver' ,version: '1.9.7'
 > ```
 
+### 6.3.1 AOP 代理对象的创建流程
+
 我们还是一样先创建测试的AOP类
 
 ```java
@@ -3077,7 +3081,7 @@ public Object applyBeanPostProcessorsAfterInitialization(Object existingBean, St
 
 ![image-20220325141554844](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325141554844.png)
 
-这时我们跟进方法，会发现他会执行AbstractAutoProxyCreator#postProcessAfterInitialization方法。在这里会执行wrapIfNecessary方法，这个方法核心代码如下：
+这时我们跟进方法，会发现有一个processor是处理代理的，它会执行AbstractAutoProxyCreator#postProcessAfterInitialization方法。在这里会执行wrapIfNecessary方法，这个方法核心代码如下：
 
 ```java
 protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) {
@@ -3085,6 +3089,7 @@ protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) 
 
    // Create proxy if we have advice.
     //返回给定的bean是否要被代理，要应用哪些额外的通知(例如AOP Alliance拦截器)和咨询器。
+    //本质上是一个Advisor数组
    Object[] specificInterceptors = getAdvicesAndAdvisorsForBean(bean.getClass(), beanName, null);
    if (specificInterceptors != DO_NOT_PROXY) {
       this.advisedBeans.put(cacheKey, Boolean.TRUE);
@@ -3100,7 +3105,83 @@ protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) 
 }
 ```
 
-我们继续往下跟代码，流程如下图：
+那么Spring如何判断该Bean是否需要被代理呢，很简单，看specificInterceptors数组是否为空，即判断当前Bean是否有与之相关的Advisor。
+
+> 在wrapIfNecessary方法中有两个方法比较重要，getAdvicesAndAdvisorsForBean方法和createProxy方法
+>
+> getAdvicesAndAdvisorsForBean方法会获取当前Bean与之相关的Advisor对象数组。此方法会在6.4声明式事务中详解。
+>
+> createProxy方法会创建代理对象，此方法参数中传入的Advisor数组就是上面方法获取的。
+
+我们继续往下跟代码，跟进createProxy方法，如下图，这个方法中主要关注两个地方，一是buildAdvisors二是getProxy方法
+
+![image-20220328125915505](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220328125915505.png)
+
+首先看buildAdvisors方法会将参数传入的specificInterceptors（这个就是之前查出的与当前Bean相关的顾问或增强）进行处理。我们跟进去，这个方法主要是将所有的specificInterceptors封装成Advisor[]数组
+
+```java
+protected Advisor[] buildAdvisors(@Nullable String beanName, @Nullable Object[] specificInterceptors) {
+   // 解析注册所有的InterceptorName
+   Advisor[] commonInterceptors = resolveInterceptorNames();
+	//将参数存入allInterceptors
+   List<Object> allInterceptors = new ArrayList<>();
+   if (specificInterceptors != null) {
+      if (specificInterceptors.length > 0) {
+         // specificInterceptors may equals PROXY_WITHOUT_ADDITIONAL_INTERCEPTORS
+         allInterceptors.addAll(Arrays.asList(specificInterceptors));
+      }
+      if (commonInterceptors.length > 0) {
+         if (this.applyCommonInterceptorsFirst) {
+            allInterceptors.addAll(0, Arrays.asList(commonInterceptors));
+         }
+         else {
+            allInterceptors.addAll(Arrays.asList(commonInterceptors));
+         }
+      }
+   }
+   if (logger.isTraceEnabled()) {
+      int nrOfCommonInterceptors = commonInterceptors.length;
+      int nrOfSpecificInterceptors = (specificInterceptors != null ? specificInterceptors.length : 0);
+      logger.trace("Creating implicit proxy for bean '" + beanName + "' with " + nrOfCommonInterceptors +
+            " common interceptors and " + nrOfSpecificInterceptors + " specific interceptors");
+   }
+
+   Advisor[] advisors = new Advisor[allInterceptors.size()];
+   for (int i = 0; i < allInterceptors.size(); i++) {
+       //核心  转换参数Object为Advisor
+      advisors[i] = this.advisorAdapterRegistry.wrap(allInterceptors.get(i));
+   }
+   return advisors;
+}
+//将对象封装为Advisor
+@Override
+	public Advisor wrap(Object adviceObject) throws UnknownAdviceTypeException {
+        //如果是Advisor对象直接返回
+		if (adviceObject instanceof Advisor) {
+			return (Advisor) adviceObject;
+		}
+        //如果既不是Advisor也不是Advice则抛出异常无法封装
+		if (!(adviceObject instanceof Advice)) {
+			throw new UnknownAdviceTypeException(adviceObject);
+		}
+        //将Advice转换成对应的Advisor
+		Advice advice = (Advice) adviceObject;
+        //通过MethodInterceptor和AdvisorAdapter 对Advice进行包装
+		if (advice instanceof MethodInterceptor) {
+			// So well-known it doesn't even need an adapter.
+			return new DefaultPointcutAdvisor(advice);
+		}
+		for (AdvisorAdapter adapter : this.adapters) {
+			// Check that it is supported.
+			if (adapter.supportsAdvice(advice)) {
+				return new DefaultPointcutAdvisor(advice);
+			}
+		}
+		throw new UnknownAdviceTypeException(advice);
+	}
+```
+
+然后继续看getProxy方法，它会继续创建代理对象，流程如下图：
 
 ![image-20220325144847924](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325144847924.png)
 
@@ -3117,7 +3198,7 @@ if (targetClass.isInterface() || Proxy.isProxyClass(targetClass)) {
 return new ObjenesisCglibAopProxy(config);
 ```
 
-创建代理这个方法也有两个实现类，分别对应着jdk的代理工厂和cglib的代理工厂。
+创建代理这个方法也有两个实现类，分别对应着jdk的代理工厂和cglib的代理工厂，在往下跟会发现实际上是jdk代理和cglib代理创建代理对象方法的封装。
 
 ![image-20220325145257629](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325145257629.png)
 
@@ -3128,6 +3209,8 @@ return new ObjenesisCglibAopProxy(config);
 ## 6.4 Spring 5 声明式事务源码分析
 
 Spring声明式事务有两个关键的注解`@EnableTransactionManagement`和`@Transactional`
+
+### 6.4.1 Spring 获取增强的流程
 
 我们这里先根据上面AOP的流程debug一下，首先新增事务注解：
 
@@ -3145,7 +3228,53 @@ public class MyBean {
 
 ![image-20220325170620923](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220325170620923.png)
 
-我们可以看到，这时已经有事务的增强了，代理对象之后在创建就带有这两个增强了。
+我们可以看到，这时已经有事务的增强了。那么这个事务的增强是如何获得的呢。这里我们先来分析Spring是如何获取增强的。
 
-> 正在整理中
+我们首先来到AbstractAutoProxyCreator#wrapIfNecessary方法，我们主要关注getAdvicesAndAdvisorsForBean方法，这个方法主要是返回给定的bean是否要被代理，要应用哪些额外的通知(例如AOP Alliance拦截器)和咨询器，即获取当前Bean的与之相关的Advisor。
+
+我们继续跟进这个方法，流程如下：
+
+![image-20220328133910569](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220328133910569.png)
+
+上图主要是方法的调用流程，这里我们主要关注findEligibleAdvisors方法，这个方法中主要有两个方法需要关注：
+
+我们下面来分别看看findCandidateAdvisors和findAdvisorsThatCanApply方法。
+
+**获取所有增强**
+
+首先是findCandidateAdvisors方法，此方法用于获取所有的增强：
+
+![image-20220328143148239](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220328143148239.png)
+
+> 增强一共有两类，一种是通过解析配置文件的时候添加到Spring容器中，只需要获取当前容器中Advisor类型的bean就可以获取到该类增强；另一种是通过注解添加的增强，获取此类增强还需要对bean进行遍历解析，这两种方式分别对应了上图中的两种方法。
+
+**获取当前Bean可用**
+
+接下来我们看findAdvisorsThatCanApply方法，此方法查找所有的Advisor中可应用的某个bean的Advisor。
+
+![image-20220328150530108](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220328150530108.png)
+
+流程如上图，可以看到findAdvisorsThatCanApply方法，将当前类匹配的增强全部返回。
+
+综上，getAdvicesAndAdvisorsForBean方法获取到当前类的增强后进行返回，将增强对象数组传给下一步创建代理对象方法，此方法在进行对象创建。这就是spring获取增强的流程。
+
+### 6.4.2 Spring 声明式事务分析
+
+上面我们分析了，Spring获取增强的流程，在获取所有增强时有两步，第一步是获取配置类或配置文件传入的增强，第二步是扫描注解拿到增强。而我们在使用声明式事务时首先是通过配置文件打开声明式事务或者使用注解打开，因此我们以注解为例来分析一下Spring的声明式事务。
+
+首先看一下@EnableTransactionManagement，代码如下，可以看到这里通过@Import引入了`TransactionManagementConfigurationSelector`
+
+```java
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+@Documented
+@Import(TransactionManagementConfigurationSelector.class)
+public @interface EnableTransactionManagement {
+//略。。。
+}
+```
+
+我们进入`TransactionManagementConfigurationSelector`,这个类继承了ImportSelector，此类中有一个selectImports方法，会根据传入的adviceMode导入组件,如下图：
+
+> 未完结，上次更新时间2022-3-28
 
