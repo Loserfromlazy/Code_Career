@@ -3274,7 +3274,17 @@ public @interface EnableTransactionManagement {
 }
 ```
 
-我们进入`TransactionManagementConfigurationSelector`,这个类继承了ImportSelector，此类中有一个selectImports方法，会根据传入的adviceMode导入组件,如下图：
+我们进入`TransactionManagementConfigurationSelector`,这个类继承了ImportSelector，此类中有一个selectImports方法，会根据传入的adviceMode导入组件，返回类的全限定类名，如下图：
+
+![image-20220328171656706](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220328171656706.png)
+
+我们主要关注PROXY导入的两个类，因为spring在运行时会使用自己封装的aop也就是PROXY这个case（可以自己断点验证，如上图）。
+
+我们首先看AutoProxyRegistrar类，这个类会继承ImportBeanDefinitionRegistrar类，同时有一个复写方法registerBeanDefinitions()这个方法会注册一个BeanDefinition。
+
+
+
+
 
 > 未完结，上次更新时间2022-3-28
 
