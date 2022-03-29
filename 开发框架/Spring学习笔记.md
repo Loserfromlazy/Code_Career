@@ -2940,10 +2940,6 @@ public AnnotationConfigApplicationContext(Class<?>... componentClasses) {
 
 > 上面的流程createBeanInstance方法执行完后会执行addSingleton，这里会将完成品的Bean存入到单例池，同时将二级缓存中的Bean移除。这部分流程在6.2.4中进行过介绍这里不再赘述。
 
-还有一个问题，通过上面的流程我们可以发现，其实有两个Map就能解决循环依赖的问题了，那为什么Spring要用三级缓存来解决这件事呢？
-
-> 笔记正在整理中，因为这部分与aop有关，需要等aop笔记整理完成
-
 ## 6.3 Spring5 AOP源码分析
 
 > 注意Spring 如果想用@Aspect注解需要导入第三方jar包aspectjweaver。因为spring是直接使用AspectJ的注解功能，因此不导入是无法使用注解的。
@@ -3085,7 +3081,16 @@ public Object applyBeanPostProcessorsAfterInitialization(Object existingBean, St
 
 ```java
 protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) {
-   //.....代码略
+   if (StringUtils.hasLength(beanName) && this.targetSourcedBeans.contains(beanName)) {
+			return bean;
+		}
+		if (Boolean.FALSE.equals(this.advisedBeans.get(cacheKey))) {
+			return bean;
+		}
+		if (isInfrastructureClass(bean.getClass()) || shouldSkip(bean.getClass(), beanName)) {
+			this.advisedBeans.put(cacheKey, Boolean.FALSE);
+			return bean;
+		}
 
    // Create proxy if we have advice.
     //返回给定的bean是否要被代理，要应用哪些额外的通知(例如AOP Alliance拦截器)和咨询器。
@@ -3099,7 +3104,7 @@ protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) 
       this.proxyTypes.put(cacheKey, proxy.getClass());
       return proxy;
    }
-
+	//这个advisedBeans是用来缓存当前bean是否创建了代理对象
    this.advisedBeans.put(cacheKey, Boolean.FALSE);
    return bean;
 }
@@ -3206,6 +3211,56 @@ return new ObjenesisCglibAopProxy(config);
 
 > 关于jdk和cglib的代理可以见我的另一篇博客，[Java代理](https://www.cnblogs.com/yhr520/p/15601620.html)
 
+### 6.3.2 为什么Spring用三级缓存而不是用两级
+
+还有一个问题，通过上面的流程我们可以发现，其实有两个Map就能解决循环依赖的问题了，那为什么Spring要用三级缓存来解决这件事呢？
+
+其实是为了解决动态代理产生的对象，三级缓存存的实际上是一个工厂对象，我们在从三级缓存获取Bean时，实际上执行的是这个工厂的getObject方法。
+
+```java
+singletonObject = singletonFactory.getObject();
+```
+
+这个getObject方法实际上会调用匿名方法
+
+```java
+() -> getEarlyBeanReference(beanName, mbd, bean)
+```
+
+我们跟进getEarlyBeanReference，会发现这里会调用后置处理器的方法`ibp.getEarlyBeanReference`，代码如下
+
+```java
+protected Object getEarlyBeanReference(String beanName, RootBeanDefinition mbd, Object bean) {
+   Object exposedObject = bean;
+   if (!mbd.isSynthetic() && hasInstantiationAwareBeanPostProcessors()) {
+      for (BeanPostProcessor bp : getBeanPostProcessors()) {
+         if (bp instanceof SmartInstantiationAwareBeanPostProcessor) {
+            SmartInstantiationAwareBeanPostProcessor ibp = (SmartInstantiationAwareBeanPostProcessor) bp;
+            exposedObject = ibp.getEarlyBeanReference(exposedObject, beanName);
+         }
+      }
+   }
+   return exposedObject;
+}
+```
+
+这个方法会走到AbstractAutoProxyCreator实现类进行调用（因为另一个是事务的实现类，Spring一般会进行升级，所以本质上还是调用这个实现类，在6.4.2中会设计到），代码如下：
+
+```java
+@Override
+public Object getEarlyBeanReference(Object bean, String beanName) {
+   Object cacheKey = getCacheKey(bean.getClass(), beanName);
+   this.earlyProxyReferences.put(cacheKey, bean);
+   return wrapIfNecessary(bean, beanName, cacheKey);
+}
+```
+
+我们可以看到这里会调用wrapIfNecessary方法，这个方法我们已经很熟悉了，是用来创建代理对象的。
+
+因此Spring从三级缓存中获取对象时，实际上会判断bean是否需要代理，如果需要就会将代理对象返回，否则就返回普通对象。
+
+所以Spring使用三级缓存的意义就是在这里，这个三级缓存的工厂是可以提前创建一个动态代理对象，但是这个动态代理对象是新创建的，如果你不把这个bean的动态代理对象存起来，这个时候，在第二个Bean注入第一个Bean的动态代理对象会和第一个Bean在初始化创建**动态代理对象地址不一样**。（一个从三级缓存创建的，一个自己初始化后生成的）
+
 ## 6.4 Spring 5 声明式事务源码分析
 
 Spring声明式事务有两个关键的注解`@EnableTransactionManagement`和`@Transactional`
@@ -3260,7 +3315,7 @@ public class MyBean {
 
 ### 6.4.2 Spring 声明式事务分析
 
-上面我们分析了，Spring获取增强的流程，在获取所有增强时有两步，第一步是获取配置类或配置文件传入的增强，第二步是扫描注解拿到增强。而我们在使用声明式事务时首先是通过配置文件打开声明式事务或者使用注解打开，因此我们以注解为例来分析一下Spring的声明式事务。
+上面我们分析了，Spring获取增强的流程，在获取所有增强时有两步，第一步是获取配置类或配置文件传入的增强，第二步是扫描注解拿到增强。而我们在使用声明式事务时首先是通过配置文件打开声明式事务或者使用注解打开，因此我们以注解为入口来分析一下Spring的声明式事务。
 
 首先看一下@EnableTransactionManagement，代码如下，可以看到这里通过@Import引入了`TransactionManagementConfigurationSelector`
 
@@ -3278,13 +3333,115 @@ public @interface EnableTransactionManagement {
 
 ![image-20220328171656706](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220328171656706.png)
 
-我们主要关注PROXY导入的两个类，因为spring在运行时会使用自己封装的aop也就是PROXY这个case（可以自己断点验证，如上图）。
+我们主要关注PROXY导入的两个类，因为spring在运行时会使用自己封装的aop也就是PROXY这个分支（可以自己断点验证，如上图）。
 
-我们首先看AutoProxyRegistrar类，这个类会继承ImportBeanDefinitionRegistrar类，同时有一个复写方法registerBeanDefinitions()这个方法会注册一个BeanDefinition。
+我们首先看AutoProxyRegistrar类，这个类会继承ImportBeanDefinitionRegistrar类，同时有一个复写方法registerBeanDefinitions()这个方法会注册一个BeanDefinition。我们看一下这个方法：
+
+![image-20220329084925220](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220329084925220.png)
+
+这个方法最终会注册一个`InfrastructureAdvisorAutoProxyCreator`类，这个类的继承关系如下：
+
+![image-20220329085036622](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220329085036622.png)
+
+这个类可以看到继承了AbstractAutoProxyCreator和BeanPostProcessor，说明他是一个Bean的后置处理器，同时也证明了它的事务是AOP的应用，因为我们在6.3.1中使用的Bean的后置处理器就是`AnnotationAwareAspectJAutoProxyCreator`,而这个类就继承自`AbstractAutoProxyCreator`如下图：
+
+![image-20220329085558323](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220329085558323.png)
+
+> 那么为什么我们注入的是`InfrastructureAdvisorAutoProxyCreator`，但是我们在6.3.1中spring使用的是`AnnotationAwareAspectJAutoProxyCreator`类呢？
+>
+> 这里我们要关注AopConfigUtils类，是如下方法注入的InfrastructureAdvisorAutoProxyCreator，
+>
+> ```java
+> @Nullable
+> public static BeanDefinition registerAutoProxyCreatorIfNecessary(
+>       BeanDefinitionRegistry registry, @Nullable Object source) {
+> 
+>    return registerOrEscalateApcAsRequired(InfrastructureAdvisorAutoProxyCreator.class, registry, source);
+> }
+> ```
+>
+> 所以我们进入registerOrEscalateApcAsRequired方法内，在这里我们会发现，它内部有一个类似升级的策略，无论你的这些注解有多少个，无论他们的先后顺序如何，它内部都有优先级提升的机制来保证向下的覆盖兼容。因此一般情况下，我们使用的都是最高级的`AnnotationAwareAspectJAutoProxyCreator`这个自动代理创建器
+>
+> 我们可以在此方法加上方法断点，然后自行debug查看运行结果，具体的等级在此类的静态代码块可见（AopConfigUtils）。
+>
+> ```java
+> @Nullable
+> private static BeanDefinition registerOrEscalateApcAsRequired(
+>       Class<?> cls, BeanDefinitionRegistry registry, @Nullable Object source) {
+> 
+>    Assert.notNull(registry, "BeanDefinitionRegistry must not be null");
+> 	//查找现有的class的优先级和你传进来的class优先级，并做比较同时会将优先级大的变成现有的class的优先级
+>    if (registry.containsBeanDefinition(AUTO_PROXY_CREATOR_BEAN_NAME)) {
+>       BeanDefinition apcDefinition = registry.getBeanDefinition(AUTO_PROXY_CREATOR_BEAN_NAME);
+>       if (!cls.getName().equals(apcDefinition.getBeanClassName())) {
+>          int currentPriority = findPriorityForClass(apcDefinition.getBeanClassName());
+>          int requiredPriority = findPriorityForClass(cls);
+>          if (currentPriority < requiredPriority) {
+>             apcDefinition.setBeanClassName(cls.getName());
+>          }
+>       }
+>       return null;
+>    }
+> 
+>    RootBeanDefinition beanDefinition = new RootBeanDefinition(cls);
+>    beanDefinition.setSource(source);
+>    beanDefinition.getPropertyValues().add("order", Ordered.HIGHEST_PRECEDENCE);
+>    beanDefinition.setRole(BeanDefinition.ROLE_INFRASTRUCTURE);
+>    registry.registerBeanDefinition(AUTO_PROXY_CREATOR_BEAN_NAME, beanDefinition);
+>    return beanDefinition;
+> }
+> ```
+
+然后我们在关注导入的第二个类`ProxyTransactionManagementConfiguration`我们进入源码会发现这个类是一个配置类，也就是说，它会将以下的Bean导入Spring。
+
+> 其实debug观察调用栈就可以看到以下类是在加载配置类的时候在配置类的Bean后置处理器的Before方法中加载的。
+
+```java
+@Configuration(proxyBeanMethods = false)
+@Role(BeanDefinition.ROLE_INFRASTRUCTURE)
+public class ProxyTransactionManagementConfiguration extends AbstractTransactionManagementConfiguration {
+	//事务增强器，会将属性解析器和事务拦截器作为属性注入，同时注册事务增强器的bean
+   @Bean(name = TransactionManagementConfigUtils.TRANSACTION_ADVISOR_BEAN_NAME)
+   @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
+   public BeanFactoryTransactionAttributeSourceAdvisor transactionAdvisor(
+         TransactionAttributeSource transactionAttributeSource, TransactionInterceptor transactionInterceptor) {
+       //事务的增强
+      BeanFactoryTransactionAttributeSourceAdvisor advisor = new BeanFactoryTransactionAttributeSourceAdvisor();
+       //属性解析器
+		advisor.setTransactionAttributeSource(transactionAttributeSource);
+       //事务的拦截器
+		advisor.setAdvice(transactionInterceptor);
+		if (this.enableTx != null) {
+			advisor.setOrder(this.enableTx.<Integer>getNumber("order"));
+		}
+		return advisor;
+   }
+	//属性解析器 内部持有一个set解析器集合，用于分析@Transactional注解的属性
+   @Bean
+   @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
+   public TransactionAttributeSource transactionAttributeSource() {
+      return new AnnotationTransactionAttributeSource();
+   }
+	//事务拦截器，继承MethodInterceptor，内部控制事务的提交和回滚
+   @Bean
+   @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
+   public TransactionInterceptor transactionInterceptor(TransactionAttributeSource transactionAttributeSource) {
+      //略。。。
+   }
+}
+```
+
+我们这里就关注一下属性解析器和事务拦截器。
+
+属性解析器：
+
+![image-20220329134210581](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220329134210581.png)
+
+事务拦截器：
+
+![image-20220329134454030](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220329134454030.png)
+
+综上，Spring在使用声明式事务时会注入以上的Bean（主要是将事务的Advisor增强注入了BeanFactory），在创建其他Bean时，会根据6.4.1中的流程获取一下该Bean是否使用了事务，如果使用了事务则会返回事物的增强，在创建代理对象时会传入事物的增强，完成代理对象的创建并存入单例池（即BeanFactory）。
 
 
-
-
-
-> 未完结，上次更新时间2022-3-28
 
