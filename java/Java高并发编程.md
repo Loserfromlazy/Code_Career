@@ -1,6 +1,8 @@
 # Java高并发编程学习笔记
 
-> 未完结
+转载请声明！！！转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
+
+> 参考资料：Java高并发核心编程卷2、以及菜鸟等互联网资源
 
 # 一、Java多线程
 
@@ -314,8 +316,6 @@ Future<?> submit(Runnable task)
 
 ## 1.3 线程的核心原理
 
-现代操作系统（如Windows、Linux、Solaris）提供了强大的线程管理能力，Java不需要再进行独立的线程管理和调度，而是将线程调度工作委托给操作系统的调度进程去完成。在某些系统（比如Solaris操作系统）上，JVM甚至将每个Java线程一对一地对应到操作系统的本地线程，彻底将线程调度委托给操作系统。
-
 ### 1.3.1 线程的调度与时间片
 
 由于CPU的计算频率非常高，每秒钟现代操作系统（如Windows、Linux、Solaris）提供了强大的线程管理能力，Java不需要再进行独立的线程管理和调度，而是将线程调度工作委托给操作系统的调度进程去完成。在某些系统（比如Solaris操作系统）上，JVM甚至将每个Java线程一对一地对应到操作系统的本地线程，彻底将线程调度委托给操作系统。
@@ -327,11 +327,14 @@ Future<?> submit(Runnable task)
 在Thread类中有一个实例属性和两个实例方法，专门用于进行线程优先级相关的操作。与线程优先级相关的成员属性为：`priority`,方法为
 
 ~~~java
+private int            priority;
 public final int getPriority();//获取线程优先级。
 public final void setPriority(int priority);//设置线程优先级。
 ~~~
 
 Thread实例的priority属性默认是级别5，对应的类常量是NORM_PRIORITY。优先级最大值为10，最小值为1.
+
+Java使用的就是抢占式调度模型
 
 
 

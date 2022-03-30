@@ -1123,7 +1123,7 @@ Java集合的ArrayList、LinkedList、HashSet、TreeSet、HashMap、TreeMap等�
 - 以Concurrent开头的集合类，如ConcurrentHashMap、ConcurrentSkipListMap、ConcurrentSkipListSet、ConcurrentLinkedQueue和ConcurrentLinkedDeque。
 - 以CopyOnWrite开头的集合类，如CopyOnWriteArrayList、CopyOnWriteArraySet。
 
-其中以Concurrent开头的集合类代表了支持并发访问的集合，它们可以支持多个线程并发写入访问，这些写入线程的所有操作都是线程安全的，但读取操作不必锁定。以Concurrent开头的集合类采用了更复杂的算法来保证永远不会锁住整个集合，因此在并发写入时有较好的性能。
+其中以Concurrent开头的集合类代表了支持并发访问的集合，它们可以支持多个线程并发写入访问，这些写入线程的所有操作都是线程安全的，但读取操作不必锁定。
 
 ## 九、volatile关键字
 
@@ -1149,7 +1149,7 @@ Java中synchronized就是悲观锁，AQS框架下的锁是先尝试乐观锁cas�
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/java_lock/java_lock002.png)
 
-- 悲观锁适合写操作多的场景，先加索可以保证写操作时的数据正确
+- 悲观锁适合写操作多的场景，先加锁可以保证写操作时的数据正确
 - 乐观锁适合读操作多的场景，不加锁能保证读操作性能大幅度提升
 
 ~~~java
