@@ -1283,7 +1283,7 @@ applicationContext-dao.xml
 </beans>
 ~~~
 
-## 八、实现SpringMVC
+## 八、实现简单的SpringMVC
 
 SpringMVC的大致原理如下，我们跟据此流程来手写一个简易的SpringMVC框架。
 
@@ -1291,9 +1291,214 @@ SpringMVC的大致原理如下，我们跟据此流程来手写一个简易的Sp
 
 ![springmvc流程20220227](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/springmvc%E6%B5%81%E7%A8%8B20220227.png)
 
+## 九、Spring MVC源码分析
+
+众所周知，SpringMVC最重要的一个类就是`DispatcherServlet`，因此我们从这个类入手，分析一下SpringMVC的源码及请求流程。
+
+### 9.1 DispatcherServlet和请求分析
+
+我们首先看一下这个类的继承结构，如下图：
+
+![image-20220330104641700](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220330104641700.png)
+
+我们可以看到，这个类继承了HttpServlet，说明也是遵循了Servlet规范的。在Servlet中处理业务最重要的方法就是doGet、doPost等请求，因此我们主要关注这些请求。
+
+我们顺着继承从上往下看，首先是HttpServletBean，继承了HttpServlet，类的结构如下，并没有重写父类的doGet等请求。
+
+![image-20220330104914926](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220330104914926.png)
+
+然后我们看FrameworkServlet类，这个类重写了继承的doGet等方法，源码如下：
+
+```java
+@Override
+protected final void doGet(HttpServletRequest request, HttpServletResponse response)
+      throws ServletException, IOException {
+
+   processRequest(request, response);
+}
+
+/**
+ * Delegate POST requests to {@link #processRequest}.
+ * @see #doService
+ */
+@Override
+protected final void doPost(HttpServletRequest request, HttpServletResponse response)
+      throws ServletException, IOException {
+
+   processRequest(request, response);
+}
+```
+
+我们看到这两个方法都访问了processRequest方法，那么我们就跟进这个方法：
+
+![image-20220330105738580](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220330105738580.png)
+
+我们可以看到，这个方法核心逻辑就是调用doService方法，而这个doService方法是一个抽象方法，因此实现是在子类中也就是DispatcherServlet中。**因此一个请求到来后最终会来到DispatcherServlet的doService方法中。**
+
+下面我们就来看看DispatcherServlet类的doService方法：
+
+```java
+@Override
+protected void doService(HttpServletRequest request, HttpServletResponse response) throws Exception {
+   logRequest(request);
+	//设置request的相关属性，保存快照
+		// Keep a snapshot of the request attributes in case of an include,
+		// to be able to restore the original attributes after the include.
+		Map<String, Object> attributesSnapshot = null;
+		if (WebUtils.isIncludeRequest(request)) {
+			attributesSnapshot = new HashMap<>();
+			Enumeration<?> attrNames = request.getAttributeNames();
+			while (attrNames.hasMoreElements()) {
+				String attrName = (String) attrNames.nextElement();
+				if (this.cleanupAfterInclude || attrName.startsWith(DEFAULT_STRATEGIES_PREFIX)) {
+					attributesSnapshot.put(attrName, request.getAttribute(attrName));
+				}
+			}
+		}
+		//把localeResolver、themeResolver以及上下文等放入request的属性中
+		// Make framework objects available to handlers and view objects.
+		request.setAttribute(WEB_APPLICATION_CONTEXT_ATTRIBUTE, getWebApplicationContext());
+		request.setAttribute(LOCALE_RESOLVER_ATTRIBUTE, this.localeResolver);
+		request.setAttribute(THEME_RESOLVER_ATTRIBUTE, this.themeResolver);
+		request.setAttribute(THEME_SOURCE_ATTRIBUTE, getThemeSource());
+	//根据flashMapManager获取重定向的原有的请求参数。
+		if (this.flashMapManager != null) {
+			FlashMap inputFlashMap = this.flashMapManager.retrieveAndUpdate(request, response);
+			if (inputFlashMap != null) {
+				request.setAttribute(INPUT_FLASH_MAP_ATTRIBUTE, Collections.unmodifiableMap(inputFlashMap));
+			}
+			request.setAttribute(OUTPUT_FLASH_MAP_ATTRIBUTE, new FlashMap());
+			request.setAttribute(FLASH_MAP_MANAGER_ATTRIBUTE, this.flashMapManager);
+		}
+    
+   //核心逻辑
+   try {
+      doDispatch(request, response);
+   }
+   finally {
+      if (!WebAsyncUtils.getAsyncManager(request).isConcurrentHandlingStarted()) {
+         // Restore the original attribute snapshot, in case of an include.
+         if (attributesSnapshot != null) {
+            restoreAttributesAfterInclude(request, attributesSnapshot);
+         }
+      }
+   }
+}
+```
+
+这个方法中主要是执行一下设置request的相关属性，保存快照等操作，然后调用doDispatch(request, response);我们进入这个方法：
+
+```java
+protected void doDispatch(HttpServletRequest request, HttpServletResponse response) throws Exception {
+   HttpServletRequest processedRequest = request;
+   HandlerExecutionChain mappedHandler = null;
+   boolean multipartRequestParsed = false;
+
+   WebAsyncManager asyncManager = WebAsyncUtils.getAsyncManager(request);
+
+   try {
+      ModelAndView mv = null;
+      Exception dispatchException = null;
+
+      try {
+          //1.检查是否是上传文件的请求
+         processedRequest = checkMultipart(request);
+         multipartRequestParsed = (processedRequest != request);
+
+          //2.取得当前请求的Controller即Handler处理器
+          //这里并不是直接返回Handler而是返回HandlerExecutionChain处理链对象
+          //这个对象封装了Handler和Inteceptor
+         // Determine handler for the current request.
+         mappedHandler = getHandler(processedRequest);
+         if (mappedHandler == null) {
+             //返回404
+            noHandlerFound(processedRequest, response);
+            return;
+         }
+
+          //3.确定当前请求的处理程序适配器。
+         // Determine handler adapter for the current request.
+         HandlerAdapter ha = getHandlerAdapter(mappedHandler.getHandler());
+
+         // Process last-modified header, if supported by the handler.
+         String method = request.getMethod();
+         boolean isGet = "GET".equals(method);
+         if (isGet || "HEAD".equals(method)) {
+            long lastModified = ha.getLastModified(request, mappedHandler.getHandler());
+            if (new ServletWebRequest(request, response).checkNotModified(lastModified) && isGet) {
+               return;
+            }
+         }
+
+         if (!mappedHandler.applyPreHandle(processedRequest, response)) {
+            return;
+         }
+
+          //4.处理请求返回视图对象ModelAndView
+         // Actually invoke the handler.
+         mv = ha.handle(processedRequest, response, mappedHandler.getHandler());
+
+         if (asyncManager.isConcurrentHandlingStarted()) {
+            return;
+         }
+		//5.处理结果视图对象
+         applyDefaultViewName(processedRequest, mv);
+         mappedHandler.applyPostHandle(processedRequest, response, mv);
+      }
+      catch (Exception ex) {
+         dispatchException = ex;
+      }
+      catch (Throwable err) {
+         // As of 4.3, we're processing Errors thrown from handler methods as well,
+         // making them available for @ExceptionHandler methods and other scenarios.
+         dispatchException = new NestedServletException("Handler dispatch failed", err);
+      }
+       //6.跳转页面渲染视图
+      processDispatchResult(processedRequest, response, mappedHandler, mv, dispatchException);
+   }
+   catch (Exception ex) {
+      triggerAfterCompletion(processedRequest, response, mappedHandler, ex);
+   }
+   catch (Throwable err) {
+      triggerAfterCompletion(processedRequest, response, mappedHandler,
+            new NestedServletException("Handler processing failed", err));
+   }
+   finally {
+      if (asyncManager.isConcurrentHandlingStarted()) {
+         // Instead of postHandle and afterCompletion
+         if (mappedHandler != null) {
+            mappedHandler.applyAfterConcurrentHandlingStarted(processedRequest, response);
+         }
+      }
+      else {
+         // Clean up any resources used by a multipart request.
+         if (multipartRequestParsed) {
+            cleanupMultipart(processedRequest);
+         }
+      }
+   }
+}
+```
+
+这个方法流程在注释中已经标注好了，我们在下一节9.2请求流程分析中详细分析每一个方法
+
+### 9.2 SpringMVC的请求流程分析
+
+我们分析源码一般可以通过debug的方式对源码有更深入的了解，而且debug可以看到整体的调用栈，更方便我们对源码的学习和了解。
+
+首先我们在DispatcherServlet的doService方法上打上断点作为入口，然后发起请求，我们可以看到调用栈，tomcat首先会帮我们找到DispatcherServlet并执行service方法。
+
+> 为什么DispatcherServlet的doService方法作为入口？
+>
+> 因为使用SpringMVC只需要在web.xml中配置DispatcherServlet并拦截所有请求即可，因此tomcat就会找到DispatcherServlet，并执行service方法。（tomcat的源码流程可关注我们另一篇博客[Tomcat学习](https://www.cnblogs.com/yhr520/p/15792651.html)）
+>
+> ![image-20220330103454888](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220330103454888.png)
+>
+> 而经过9.1中对Dispatcher的分析，再结合调用栈我们会发现最后service方法最终会进到DispatcherServlet的doService方法中。
 
 
 
+> 未完结，上次更新时间2022/3/30
 
 
 
