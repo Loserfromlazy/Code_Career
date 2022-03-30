@@ -1496,6 +1496,10 @@ protected void doDispatch(HttpServletRequest request, HttpServletResponse respon
 >
 > 而经过9.1中对Dispatcher的分析，再结合调用栈我们会发现最后service方法最终会进到DispatcherServlet的doService方法中。
 
+我们在doService方法中继续往下跟进入到doDispatch方法，这个方法在9.1中已经给出源码和注释了，现在我们详细分析一下。
+
+
+
 
 
 > 未完结，上次更新时间2022/3/30
