@@ -1,12 +1,12 @@
 # Java高并发编程学习笔记
 
-转载请声明！！！转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
+转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
 
 > 参考资料：Java高并发核心编程卷2、以及菜鸟等互联网资源
 
-# 一、Java多线程
+# 一、Java多线程原理与基本操作
 
-## 1.1 线程和进程
+## 1.1 线程和进程简介
 
 什么是进程呢？简单来说，进程是程序的一次启动执行。什么是程序呢？程序是存放在硬盘中的可执行文件，主要包括代码指令和数据。一个进程是一个程序的一次启动和执行，是操作系统将程序装入内存，给程序分配必要的系统资源，并且开始运行程序的指令。
 
@@ -239,7 +239,7 @@ public interface Future<V> {
 
 FutureTask类是Future接口的实现类，提供了对异步任务的操作的具体实现。但是，FutureTask类不仅实现了Future接口，还实现了Runnable接口，或者更加准确地说，FutureTask类实现了RunnableFuture接口。继承类图如下：
 
-![image-20211213212843822](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgoimage-20211213212843822.png)
+![image-20220331165448008](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220331165448008.png)
 
 通过Callable创建线程步骤：
 
@@ -334,7 +334,147 @@ public final void setPriority(int priority);//设置线程优先级。
 
 Thread实例的priority属性默认是级别5，对应的类常量是NORM_PRIORITY。优先级最大值为10，最小值为1.
 
-Java使用的就是抢占式调度模型
+Java使用的就是抢占式调度模型，在Java中执行机会的获取具有随机性，但是从整体来看高优先级的线程获得的执行机会更多。我们可以通过代码来验证：
 
+```java
+public class PriorityDemo {
+    static class PriorityThread extends Thread{
+        static int noo =1;
 
+        public PriorityThread() {
+            super("thread-"+noo);
+            noo++;
+        }
+        public long opportunity = 0;
+        @Override
+        public void run() {
+            for (int i = 0; ; i++) {
+                opportunity++;
+            }
+        }
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        PriorityThread [] threads = new PriorityThread[10];
+        for (int i = 0; i < threads.length; i++) {
+            threads[i] = new PriorityThread();
+            threads[i].setPriority(i+1);
+        }
+        for (PriorityThread thread : threads) {
+            thread.start();
+        }
+        Thread.sleep(500);
+        for (PriorityThread thread : threads) {
+            thread.stop();
+        }
+        for (PriorityThread thread : threads) {
+            System.out.println(thread.getName()+"  优先级："+thread.getPriority()+"机会："+thread.opportunity);
+        }
+    }
+}
+```
+
+上面我们通过opportunity来表示10个线程在CPU中获得的时间片，我们给10个线程依次给出优先级，运行结果如下：
+
+~~~
+thread-1  优先级：1机会：659209944
+thread-2  优先级：2机会：689254505
+thread-3  优先级：3机会：763575964
+thread-4  优先级：4机会：742457001
+thread-5  优先级：5机会：741392146
+thread-6  优先级：6机会：748299795
+thread-7  优先级：7机会：759256402
+thread-8  优先级：8机会：771598037
+thread-9  优先级：9机会：756852358
+thread-10  优先级：10机会：750843505
+~~~
+
+可以看到，**执行机会的获取具有随机性，但是从整体来看高优先级的线程获得的执行机会更多。**
+
+### 1.3.3 线程的生命周期
+
+Java中线程的生命周期分为6种状态。Thread类有一个实例属性和一个实例方法专门用于保存和获取线程的状态。同时还有一个内部枚举用来描述线程的状态，源码如下:
+
+```java
+/* Java thread status for tools,
+ * initialized to indicate thread 'not yet started'
+ */
+private volatile int threadStatus = 0;
+public enum State {
+        /** 新建,线程尚未启动的状态，即未调用start方法
+         * Thread state for a thread which has not yet started.
+         */
+        NEW,
+
+        /** 可执行，包含操作系统的就绪和运行。Java中线程管理是通过JNI本地调用委托操作系统的线程管理API完成的
+         * Thread state for a runnable thread.  A thread in the runnable
+         * state is executing in the Java virtual machine but it may
+         * be waiting for other resources from the operating system
+         * such as processor.
+         */
+        RUNNABLE,
+
+        /** 阻塞
+         * Thread state for a thread blocked waiting for a monitor lock.
+         * A thread in the blocked state is waiting for a monitor lock
+         * to enter a synchronized block/method or
+         * reenter a synchronized block/method after calling
+         * {@link Object#wait() Object.wait}.
+         */
+        BLOCKED,
+
+        /** 等待状态，调用以下方法会进入此状态
+         * Thread state for a waiting thread.
+         * A thread is in the waiting state due to calling one of the
+         * following methods:
+         * <ul>
+         *   <li>{@link Object#wait() Object.wait} with no timeout</li>
+         *   <li>{@link #join() Thread.join} with no timeout</li>
+         *   <li>{@link LockSupport#park() LockSupport.park}</li>
+         * </ul>
+         *
+         * <p>A thread in the waiting state is waiting for another thread to
+         * perform a particular action.
+         *
+         * For example, a thread that has called <tt>Object.wait()</tt>
+         * on an object is waiting for another thread to call
+         * <tt>Object.notify()</tt> or <tt>Object.notifyAll()</tt> on
+         * that object. A thread that has called <tt>Thread.join()</tt>
+         * is waiting for a specified thread to terminate.
+         */
+        WAITING,
+
+        /** 限时等待，处于一种特殊的等待状态，调用以下方法会进入此状态
+         * Thread state for a waiting thread with a specified waiting time.
+         * A thread is in the timed waiting state due to calling one of
+         * the following methods with a specified positive waiting time:
+         * <ul>
+         *   <li>{@link #sleep Thread.sleep}</li>
+         *   <li>{@link Object#wait(long) Object.wait} with timeout</li>
+         *   <li>{@link #join(long) Thread.join} with timeout</li>
+         *   <li>{@link LockSupport#parkNanos LockSupport.parkNanos}</li>
+         *   <li>{@link LockSupport#parkUntil LockSupport.parkUntil}</li>
+         * </ul>
+         */
+        TIMED_WAITING,
+
+        /** 终止，线程中run方法执行完后就变为终止状态
+         * Thread state for a terminated thread.
+         * The thread has completed execution.
+         */
+        TERMINATED;
+    }
+```
+
+### 1.3.4 Jstack工具
+
+Jstack时Java虚拟机自带的堆栈跟踪工具，它用于导出JVM当前时刻的线程快照，它的语法如下：
+
+~~~
+jstack <pid> //java的进程id，可使用jsp查看
+~~~
+
+> 在实际运行中，建议使用三次快照信息，如果每次都是一个问题，才能确定问题的非偶发性。
+
+Jstack输出的信息包含以下重要信息：
 
