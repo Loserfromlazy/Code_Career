@@ -760,17 +760,39 @@ public class UploadServlet extends HttpServlet {
 4. 配置文件解析器
 
 ~~~xml
+<!--以下是springmvc.xml-->
 <!-- 配置文件上传解析器-->
 <bean id="multipartResolver" <!-- id的值是固定的-->
 class="org.springframework.web.multipart.commons.CommonsMultipartResolver">
+<!-- 如果是Servlet3.0以上也可以使用Spring提供的StandardServletMultipartResolver -->
+<!--<bean id="multipartResolver" class="org.springframework.web.multipart.support.StandardServletMultipartResolver"/>-->
 <!-- 设置上传文件的最大尺寸为5MB -->
 <property name="maxUploadSize">
 <value>5242880</value>
 </property>
 </bean>
-注意：
-文件上传的解析器id是固定的，不能起别的名称，否则无法实现请求参数的绑定。（不光是文件，其他
-字段也将无法绑定）
+<!--StandardServletMultipartResolver需要在web.xml中配置。以下是web.xml-->
+<servlet>
+		<servlet-name>springmvc</servlet-name>
+		<servlet-class>org.springframework.web.servlet.DispatcherServlet</servlet-class>
+		<init-param>
+			<param-name>contextConfigLocation</param-name>
+			<param-value>classpath*:springmvc.xml</param-value>
+		</init-param>
+		<multipart-config>
+			<!--临时文件的目录-->
+			<location>d:/</location>
+			<!-- 上传文件最大2M -->
+			<max-file-size>2097152</max-file-size>
+			<!-- 上传文件整个请求不超过4M -->
+			<max-request-size>4194304</max-request-size>
+		</multipart-config>
+	</servlet>
+
+	<servlet-mapping>
+		<servlet-name>springmvc</servlet-name>
+		<url-pattern>/</url-pattern>
+	</servlet-mapping>
 ~~~
 
 ### 5.3springmvc跨服务器上传
@@ -1295,7 +1317,52 @@ SpringMVC的大致原理如下，我们跟据此流程来手写一个简易的Sp
 
 众所周知，SpringMVC最重要的一个类就是`DispatcherServlet`，因此我们从这个类入手，分析一下SpringMVC的源码及请求流程。
 
-### 9.1 DispatcherServlet和请求分析
+### 9.1 SpringMVC源码测试工程搭建
+
+gradle新建web项目，如下图：
+
+![image-20220402101419155](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220402101419155.png)
+
+编写测试Controller,一个是用于普通请求的，一个是用于上传文件的（注意使用文件上传需要自行配置文件解析的Bean）
+
+```java
+@Controller
+@RequestMapping("/demo")
+public class DemoController {
+
+   @RequestMapping("/handle")
+   public String handle(String id , Map<String,Object> model){
+      System.out.println("id="+id);
+      Date date = new Date();
+      model.put("date",date);
+      return "success";
+   }
+
+   @RequestMapping("/upload")
+   public String upload(MultipartFile file, Map<String,Object> model){
+      System.out.println("file="+file.getName());
+      Date date = new Date();
+      try {
+         InputStream inputStream = file.getInputStream();
+         Reader reader = new InputStreamReader(inputStream);
+         OutputStream outputStream = new ByteArrayOutputStream();
+         byte[] buffer = new byte[1024];
+         int len;
+         while ((len = inputStream.read(buffer))!=-1){
+            outputStream.write(buffer,0,len);
+         }
+      } catch (IOException e) {
+         e.printStackTrace();
+      }
+      model.put("date",file.getName());
+      return "success";
+   }
+}
+```
+
+其余jsp和配置文件略。
+
+### 9.2 DispatcherServlet和请求分析
 
 我们首先看一下这个类的继承结构，如下图：
 
@@ -1482,7 +1549,7 @@ protected void doDispatch(HttpServletRequest request, HttpServletResponse respon
 
 这个方法流程在注释中已经标注好了，我们在下一节9.2请求流程分析中详细分析每一个方法
 
-### 9.2 SpringMVC的请求流程分析
+### 9.3 SpringMVC的请求流程分析
 
 我们分析源码一般可以通过debug的方式对源码有更深入的了解，而且debug可以看到整体的调用栈，更方便我们对源码的学习和了解。
 
@@ -1498,11 +1565,67 @@ protected void doDispatch(HttpServletRequest request, HttpServletResponse respon
 
 我们在doService方法中继续往下跟进入到doDispatch方法，这个方法在9.1中已经给出源码和注释了，现在我们详细分析一下。
 
+在doDispatch中，核心步骤在上面源码的注释中已经给出了，下面再总结一下：
+
+1. 检查是否是上传文件的请求
+2. 调用getHandler获取到能够处理当前请求的执行链HandlerExecutionChain
+3. 调用getHandlerAdapter获取上一步中Handler的适配器
+4. 适配器调用ha.handle()方法，返回一个ModelAndView对象
+5. 调用processDispatchResult()方法完成视图渲染跳转
+
+下面我们对每一步都进行详细的分析。
+
+#### 9.3.1 checkMultipart，检查是否是上传文件的请求
+
+在doDispatch中第一步就是检查当前请求是否是文件上传的请求：
+
+这里会调用checkMultipart方法，这里的逻辑很简单，此方法主要是检查是否是上传文件的请求，（通过content-type检查），如果是文件请求，将普通request对象转换成multipartRequest返回，如果不是则返回传入的request对象。流程图如下：
+
+![image-20220402110930999](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220402110930999.png)
+
+解析器主要有三种实现，如下图（我们呢调试时使用的是第三个标准解析器，因为不用额外导入jar包）：
+
+常用的一般是下图中标出的两个，其中第三个需要Servlet3.0以上且不仅需要配置Bean，还需要配置参数，配置方式见上面的第五章Spring文件上传
+
+![image-20220402101250797](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220402101250797.png)
+
+#### 9.3.2 getHandler 获取Handler
+
+我们跟进getHandler方法，代码如下：
+
+![image-20220402141256861](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220402141256861.png)
+
+这个方法根据当前的HandlerMapping集合获取Handler执行链，（关于HandlerMapping集合初始化将在9.4中讲解），我们debug会发现会在RequestMappingHandlerMapping中获得Handler，实际上这个集合就是从@Controller类的类型和方法级的@RequestMapping注释中创建的RequestMappingInfo实例，（RequestMappingHandlerMapping也是最常用的集合）。
+
+我们继续跟进mapping的getHandler方法，此方法会先根据请求路径去注册的mapping中获取HandlerMethod（封装由方法和bean组成的处理程序方法的信息。提供对方法参数、方法返回值、方法注释等的方便访问。），然后将HandlerMethod封装成处理器对象，封装成处理器链对象的主要目的是将拦截器封装进去。
+
+流程如下：
+
+![image-20220402163953843](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220402163953843.png)
+
+> 这里的HandlerMethod可以看成是对Controller中方法的描述，而包装后的处理器链可以看成是方法和方法对应的拦截器，如下图在debug的过程中可以有更深的体会，也可以自行查阅HandlerMethod的源码：
+>
+> ![image-20220402165054514](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220402165054514.png)
+
+如果getHandler 最后获取不到Handler对象的话，就会输出404.
+
+#### 9.3.3 getHandlerAdapter 获取HandlerAdapter
+
+在获取到Handler（实际上是一个处理器链对象）之后，我们会调用getHandlerAdapter方法获取处理器适配器，我们跟进此方法，代码如下：
+
+![image-20220402165807941](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220402165807941.png)
+
+这个方法与上面getHandler类似，会根据当前的适配器集合中找到可以支持的适配器，常用的是第三个RequestMappingHandlerAdapter适配器
+
+#### 9.3.4 执行handle方法
+
+#### 9.3.5 视图渲染
+
+### 9.4 SpringMVC组件初始化分析
 
 
 
-
-> 未完结，上次更新时间2022/3/30
+> 未完结，上次更新时间2022/4/2
 
 
 
