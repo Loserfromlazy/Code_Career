@@ -1,5 +1,7 @@
 # SpringMVC学习文档
 
+转载请声明！！！本文如有错误，欢迎指正，感激不尽。
+
 springMVC就是类似与Struts2的mvc框架，始于SpringFrameWork的后续产品
 
 为什么要学习SpringMVC？
