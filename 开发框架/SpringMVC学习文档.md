@@ -1510,7 +1510,7 @@ protected void doDispatch(HttpServletRequest request, HttpServletResponse respon
          if (asyncManager.isConcurrentHandlingStarted()) {
             return;
          }
-		//5.处理结果视图对象
+		//5.执行拦截器方法
          applyDefaultViewName(processedRequest, mv);
          mappedHandler.applyPostHandle(processedRequest, response, mv);
       }
@@ -1617,17 +1617,382 @@ protected void doDispatch(HttpServletRequest request, HttpServletResponse respon
 
 ![image-20220402165807941](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220402165807941.png)
 
-这个方法与上面getHandler类似，会根据当前的适配器集合中找到可以支持的适配器，常用的是第三个RequestMappingHandlerAdapter适配器
+这个方法与上面getHandler类似，会根据当前的适配器集合中找到可以支持的适配器，常用的是第三个RequestMappingHandlerAdapter适配器。
+
+RequestMappingHandlerAdapter#support方法就是判断当前的handler是否是HandlerMethod的实例
 
 #### 9.3.4 执行handle方法
 
-#### 9.3.5 视图渲染
+源码如下：
+
+**ha.handle⽅法 核心逻辑是解析出请求传输的参数值，传给反射方法对象。通过反射调用去执行其业务。并将返回结果封装成ModelAndView对象返回。**
+
+```java
+mv = ha.handle(processedRequest, response, mappedHandler.getHandler());
+```
+
+我们跟进handle方法中：
+
+这个方法会执行`handleInternal(request, response, (HandlerMethod) handler);`可以看到其实handler就是HandlerMethod的实例。
+
+我们继续跟进handleInternal，这个方法会检查是否有session需要处理，如果有session需要处理就加锁，没有就直接继续执行
+
+```java
+@Override
+protected ModelAndView handleInternal(HttpServletRequest request,
+      HttpServletResponse response, HandlerMethod handlerMethod) throws Exception {
+
+   ModelAndView mav;
+   checkRequest(request);
+
+    //判断当前是否需要支持在同一个session中只能线性的处理请求
+    //synchronizeOnSession默认false
+   // Execute invokeHandlerMethod in synchronized block if required.
+   if (this.synchronizeOnSession) {
+       //获取session
+      HttpSession session = request.getSession(false);
+      if (session != null) {
+          //获取同步锁
+         Object mutex = WebUtils.getSessionMutex(session);
+         synchronized (mutex) {
+             //加锁执行invokeHandlerMethod方法处理参数并调用
+            mav = invokeHandlerMethod(request, response, handlerMethod);
+         }
+      }
+      else {
+         // No HttpSession available -> no mutex necessary
+         mav = invokeHandlerMethod(request, response, handlerMethod);
+      }
+   }
+   else {
+      // No synchronization on session demanded at all...
+       //不需要对session同步处理，执行invokeHandlerMethod方法处理参数并调用
+      mav = invokeHandlerMethod(request, response, handlerMethod);
+   }
+
+   if (!response.containsHeader(HEADER_CACHE_CONTROL)) {
+      if (getSessionAttributesHandler(handlerMethod).hasSessionAttributes()) {
+         applyCacheSeconds(response, this.cacheSecondsForSessionAttributeHandlers);
+      }
+      else {
+         prepareResponse(response);
+      }
+   }
+
+   return mav;
+}
+```
+
+我们继续跟进invokeHandlerMethod方法，这个方法中主要是配置一些参数和返回值的处理器，然后调用`invocableMethod.invokeAndHandle(webRequest, mavContainer); `
+
+`getModelAndView(mavContainer, modelFactory, webRequest);`
+
+这两个方法，调用目标的handlerMethod并处理返回的ModelAndView。
+
+```java
+@Nullable
+protected ModelAndView invokeHandlerMethod(HttpServletRequest request,
+      HttpServletResponse response, HandlerMethod handlerMethod) throws Exception {
+	//封装request, response
+   ServletWebRequest webRequest = new ServletWebRequest(request, response);
+   try {
+      // 获取容器中全局配置的InitBinder和当前handlerMethod所对应的controller中配置的InitBinder,用于进行参数绑定      
+      WebDataBinderFactory binderFactory = getDataBinderFactory(handlerMethod);
+       // 获取容器中全局配置的ModelAttribute和当前handlerMethod所对应的controller中配置的ModelAttribute,这些配置的方法将会在目标方法调用之前进行执行
+      ModelFactory modelFactory = getModelFactory(handlerMethod, binderFactory);
+	//封装handlerMethod
+      ServletInvocableHandlerMethod invocableMethod = createInvocableHandlerMethod(handlerMethod);
+       //设置容器中配置的所有的参数和返回值的处理器
+      if (this.argumentResolvers != null) {
+         invocableMethod.setHandlerMethodArgumentResolvers(this.argumentResolvers);
+      }
+      if (this.returnValueHandlers != null) {
+         invocableMethod.setHandlerMethodReturnValueHandlers(this.returnValueHandlers);
+      }
+      invocableMethod.setDataBinderFactory(binderFactory);
+      invocableMethod.setParameterNameDiscoverer(this.parameterNameDiscoverer);
+
+      ModelAndViewContainer mavContainer = new ModelAndViewContainer();
+      mavContainer.addAllAttributes(RequestContextUtils.getInputFlashMap(request));
+      // 调用前面获取到的@ModelAttribute标注的方法从而达到@ModelAttribute标注的方法能够在目标handler调用之前执行，可以自行点进方法中查看Spring的官方注释
+      modelFactory.initModel(webRequest, mavContainer, invocableMethod);
+      mavContainer.setIgnoreDefaultModelOnRedirect(this.ignoreDefaultModelOnRedirect);
+
+      AsyncWebRequest asyncWebRequest = WebAsyncUtils.createAsyncWebRequest(request, response);
+      asyncWebRequest.setTimeout(this.asyncRequestTimeout);
+
+      WebAsyncManager asyncManager = WebAsyncUtils.getAsyncManager(request);
+      asyncManager.setTaskExecutor(this.taskExecutor);
+      asyncManager.setAsyncWebRequest(asyncWebRequest);
+      asyncManager.registerCallableInterceptors(this.callableInterceptors);
+      asyncManager.registerDeferredResultInterceptors(this.deferredResultInterceptors);
+
+      if (asyncManager.hasConcurrentResult()) {
+         Object result = asyncManager.getConcurrentResult();
+         mavContainer = (ModelAndViewContainer) asyncManager.getConcurrentResultContext()[0];
+         asyncManager.clearConcurrentResult();
+         LogFormatUtils.traceDebug(logger, traceOn -> {
+            String formatted = LogFormatUtils.formatValue(result, !traceOn);
+            return "Resume with async result [" + formatted + "]";
+         });
+         invocableMethod = invocableMethod.wrapConcurrentResult(result);
+      }
+	  //对请求参数进行处理 调用目标的handlerMethod，并且将返回值封装为一个ModelAndView对象
+      invocableMethod.invokeAndHandle(webRequest, mavContainer);
+      if (asyncManager.isConcurrentHandlingStarted()) {
+         return null;
+      }
+	  // 对封装的ModelAndView进行处理，主要判断当前请求是否进行重定向
+      // 如果进行了重定向还会判断是否需要将flashAttributes封装到新的请求中
+      return getModelAndView(mavContainer, modelFactory, webRequest);
+   }
+   finally {
+      webRequest.requestCompleted();
+   }
+}
+```
+
+我们进入invokeAndHandle方法，这个方法中主要执行`invokeForRequest`和`handleReturnValue`。
+
+所以我们先直接进入invokeForRequest方法中，这个方法会先获取当前方法的参数，然后调用反射执行方法。
+
+```
+handleReturnValue(
+      returnValue, getReturnValueType(returnValue), mavContainer, webRequest);
+```
+
+```java
+@Nullable
+public Object invokeForRequest(NativeWebRequest request, @Nullable ModelAndViewContainer mavContainer,
+      Object... providedArgs) throws Exception {
+	//获取当前方法参数
+   Object[] args = getMethodArgumentValues(request, mavContainer, providedArgs);
+   if (logger.isTraceEnabled()) {
+      logger.trace("Arguments: " + Arrays.toString(args));
+   }
+    //调用反射执行方法
+   return doInvoke(args);
+}
+```
+
+我们可以先进入getMethodArgumentValues方法查看，这里主要就是调用我们之前设置的处理器对参数进行处理并返回。
+
+```java
+protected Object[] getMethodArgumentValues(NativeWebRequest request, @Nullable ModelAndViewContainer mavContainer,
+      Object... providedArgs) throws Exception {
+  // 获取当前handler所声明的所有参数，主要包括参数名，参数类型，参数位置，所标注的注解等等属性
+   MethodParameter[] parameters = getMethodParameters();
+   if (ObjectUtils.isEmpty(parameters)) {
+      return EMPTY_ARGS;
+   }
+
+   Object[] args = new Object[parameters.length];
+   for (int i = 0; i < parameters.length; i++) {
+      MethodParameter parameter = parameters[i];
+      parameter.initParameterNameDiscovery(this.parameterNameDiscoverer);
+       //providedArgs 是调用时提供的参数，主要判断这些参数中是否有当前类型，如果有，就直接使用调用方提供的参数，对于请求处理而言，默认情况下，调用方提供的参数都是长度为0的数组，也就是不提供参数，我们在之前invokeAndHandle调用时也没有传入参数
+      args[i] = findProvidedArgument(parameter, providedArgs);
+      if (args[i] != null) {
+         continue;
+      }
+       //遍历 判断当前的处理器能否解析参数
+      if (!this.resolvers.supportsParameter(parameter)) {
+         throw new IllegalStateException(formatArgumentError(parameter, "No suitable resolver"));
+      }
+      try {
+          //如果能找到对当前参数的进行处理的argumentResolver，就调用其resolveArgument方法从request中获取对应参数并转换
+         args[i] = this.resolvers.resolveArgument(parameter, mavContainer, request, this.dataBinderFactory);
+      }
+      catch (Exception ex) {
+         // Leave stack trace for later, exception may actually be resolved and handled...
+         if (logger.isDebugEnabled()) {
+            String exMsg = ex.getMessage();
+            if (exMsg != null && !exMsg.contains(parameter.getExecutable().toGenericString())) {
+               logger.debug(formatArgumentError(parameter, exMsg));
+            }
+         }
+         throw ex;
+      }
+   }
+   return args;
+}
+```
+
+获取完参数后就会调用`doInvoke(args);`方法。此方法源码略，可以自行进入查看本质上是调用了Java的反射即method.invoke方法。调用完之后会返回方法的返回值。
+
+然后回到invokeAndHandle方法中，之前我们说过这个方法主要执行`invokeForRequest`和`handleReturnValue`，而这个handleReturnValue就是处理返回值的，此方法会将返回值处理返回ModelAndView对象。
+
+我们进入到handleReturnValue，此方法会根据我们的返回值和返回类型获取对应的处理器然后将返回值封装进mavContainer中，这个对象就是ModelAndView的容器对象，就是我们上面介绍invokeHandlerMethod方法。
+
+```java
+@Override
+public void handleReturnValue(@Nullable Object returnValue, MethodParameter returnType,
+      ModelAndViewContainer mavContainer, NativeWebRequest webRequest) throws Exception {
+	//根据我们的返回值和返回类型获取对应的处理器
+   HandlerMethodReturnValueHandler handler = selectHandler(returnValue, returnType);
+   if (handler == null) {
+      throw new IllegalArgumentException("Unknown return value type: " + returnType.getParameterType().getName());
+   }
+    //处理返回值
+   handler.handleReturnValue(returnValue, returnType, mavContainer, webRequest);
+}
+```
+
+> 注意，这里的handleReturnValue会根据我们查询出的HandlerMethodReturnValueHandler不同而执行不同实现类的方法。
+>
+> 比如如果处理@ResponseBody的处理器的源码如下，这里mavContainer.setRequestHandled(true);的意思是请求是否已经在处理程序中被完全处理，即我在此方法中已经处理完了不需要返回视图了。
+>
+> ```java
+> //这个方法会将返回值以流的形式直接输出，不再返回视图
+> @Override
+> public void handleReturnValue(@Nullable Object returnValue, MethodParameter returnType,
+>       ModelAndViewContainer mavContainer, NativeWebRequest webRequest)
+>       throws IOException, HttpMediaTypeNotAcceptableException, HttpMessageNotWritableException {
+> 
+>    mavContainer.setRequestHandled(true);
+>    ServletServerHttpRequest inputMessage = createInputMessage(webRequest);
+>    ServletServerHttpResponse outputMessage = createOutputMessage(webRequest);
+> 	//调用输出流的write和flush方法将返回值直接写回
+>    // Try even with null return value. ResponseBodyAdvice could get involved.
+>    writeWithMessageConverters(returnValue, returnType, inputMessage, outputMessage);
+> }
+> ```
+>
+> 而处理视图的处理器源码如下， mavContainer.setViewName(viewName);
+>
+> ```java
+> //这个方法会将视图名存储，在后面处理视图的渲染时拿出ModelAndView
+> @Override
+> public void handleReturnValue(@Nullable Object returnValue, MethodParameter returnType,
+>       ModelAndViewContainer mavContainer, NativeWebRequest webRequest) throws Exception {
+> 
+>    if (returnValue instanceof CharSequence) {
+>       String viewName = returnValue.toString();
+>        //存储返回的视图名
+>       mavContainer.setViewName(viewName);
+>       if (isRedirectViewName(viewName)) {
+>          mavContainer.setRedirectModelScenario(true);
+>       }
+>    }
+>    else if (returnValue != null) {
+>       // should not happen
+>       throw new UnsupportedOperationException("Unexpected return type: " +
+>             returnType.getParameterType().getName() + " in method: " + returnType.getMethod());
+>    }
+> }
+> ```
+
+#### 9.3.5 渲染视图，跳转页面
+
+在doDispatch方法中，执行完handle之后会执行此Handler的拦截器
+
+```java
+mappedHandler.applyPostHandle(processedRequest, response, mv);
+```
+
+跟进方法后，发现此方法会遍历所有的拦截器然后进行执行。
+
+```java
+void applyPostHandle(HttpServletRequest request, HttpServletResponse response, @Nullable ModelAndView mv)
+      throws Exception {
+
+   HandlerInterceptor[] interceptors = getInterceptors();
+   if (!ObjectUtils.isEmpty(interceptors)) {
+      for (int i = interceptors.length - 1; i >= 0; i--) {
+         HandlerInterceptor interceptor = interceptors[i];
+         interceptor.postHandle(request, response, this.handler, mv);
+      }
+   }
+}
+```
+
+在执行完拦截器后，就会到processDispatchResult方法，此方法主要用于渲染视图并返回前端
+
+```java
+processDispatchResult(processedRequest, response, mappedHandler, mv, dispatchException);
+```
+
+我们跟进这个处理视图的方法，这个方法的核心代码如下：
+
+```java
+// Did the handler return a view to render?
+if (mv != null && !mv.wasCleared()) {
+    //处理视图
+   render(mv, request, response);
+   if (errorView) {
+      WebUtils.clearErrorRequestAttributes(request);
+   }
+}
+else {
+   if (logger.isTraceEnabled()) {
+      logger.trace("No view rendering, null ModelAndView returned.");
+   }
+}
+```
+
+这个方法我们主要关注`render(mv, request, response);`这个方法，源码如下：
+
+```java
+protected void render(ModelAndView mv, HttpServletRequest request, HttpServletResponse response) throws Exception {
+   // Determine locale for request and apply it to the response.
+   Locale locale =
+         (this.localeResolver != null ? this.localeResolver.resolveLocale(request) : request.getLocale());
+   response.setLocale(locale);
+
+   View view;
+   String viewName = mv.getViewName();
+   if (viewName != null) {
+      // We need to resolve the view name.
+       //根据view名称封装View视图对象
+      view = resolveViewName(viewName, mv.getModelInternal(), locale, request);
+      if (view == null) {
+         throw new ServletException("Could not resolve view with name '" + mv.getViewName() +
+               "' in servlet with name '" + getServletName() + "'");
+      }
+   }
+   else {
+      // No need to lookup: the ModelAndView object contains the actual View object.
+      view = mv.getView();
+      if (view == null) {
+         throw new ServletException("ModelAndView [" + mv + "] neither contains a view name nor a " +
+               "View object in servlet with name '" + getServletName() + "'");
+      }
+   }
+
+   // Delegate to the View object for rendering.
+   if (logger.isTraceEnabled()) {
+      logger.trace("Rendering view [" + view + "] ");
+   }
+   try {
+      if (mv.getStatus() != null) {
+         response.setStatus(mv.getStatus().value());
+      }
+       //渲染数据
+      view.render(mv.getModelInternal(), request, response);
+   }
+   catch (Exception ex) {
+      if (logger.isDebugEnabled()) {
+         logger.debug("Error rendering view [" + view + "]", ex);
+      }
+      throw ex;
+   }
+}
+```
+
+这个方法中我们主要关注两个方法`resolveViewName`和`view.render`,一个是用于封装视图对象，另一个是渲染数据的方法。
+
+我们下面跟进这个两个方法中：
+
+1. resolveViewName
+2. view.render
+
+以上就是渲染视图并跳转页面的流程和代码分析
 
 ### 9.4 SpringMVC组件初始化分析
 
 
 
-> 未完结，上次更新时间2022/4/2
+> 未完结，上次更新时间2022/4/6
 
 
 
