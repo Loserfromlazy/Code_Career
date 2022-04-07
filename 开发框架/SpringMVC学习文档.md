@@ -1984,15 +1984,90 @@ protected void render(ModelAndView mv, HttpServletRequest request, HttpServletRe
 我们下面跟进这个两个方法中：
 
 1. resolveViewName
+
+   ```java
+   @Nullable
+   protected View resolveViewName(String viewName, @Nullable Map<String, Object> model,
+         Locale locale, HttpServletRequest request) throws Exception {
+   
+      if (this.viewResolvers != null) {
+         for (ViewResolver viewResolver : this.viewResolvers) {
+            View view = viewResolver.resolveViewName(viewName, locale);
+            if (view != null) {
+               return view;
+            }
+         }
+      }
+      return null;
+   }
+   ```
+
+   在这个方法中会遍历全部ViewResolver然后调用能处理我们视图名的处理器去处理，实际上一般只有一个就是我们配置在springmvc.xml中的视图解析器，如下面代码：
+
+   ```xml
+   <!--配置springmvc的视图解析器-->
+   <bean class="org.springframework.web.servlet.view.InternalResourceViewResolver">
+      <property name="prefix" value="/WEB-INF/"/>
+      <property name="suffix" value=".jsp"/>
+   </bean>
+   ```
+
+   我们跟进viewResolver.resolveViewName方法中，源码如下图：
+
+   ![image-20220407152545803](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220407152545803.png)
+
+   我们跟进createView中，源码如下：
+
+   ![image-20220407152746542](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220407152746542.png)
+
+   一般我们在springmvc.xml中的视图解析器中都会配置前缀和后缀，所以会走到父类的createView中，我们在往下跟源码，流程如下图，最后会根据我们的配置拼装View对象，然后实例化View并返回。
+
+   ![image-20220407154302739](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220407154302739.png)
+
 2. view.render
+
+   这个方法中主要是调用上一步我们创建的view对象的render方法，将Model中的数据存储到request中，然后转发到对应的视图，整理流程如下：
+
+   ![image-20220407160635565](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220407160635565.png)
 
 以上就是渲染视图并跳转页面的流程和代码分析
 
 ### 9.4 SpringMVC组件初始化分析
 
+SpringMVC的组件DispatcherServlet#onRefresh方法中初始化的，SpringMVC一共有九大组件，在这个方法中也能看到，源码如下：
 
+```java
+@Override
+protected void onRefresh(ApplicationContext context) {
+   initStrategies(context);
+}
 
-> 未完结，上次更新时间2022/4/6
+/**
+ * Initialize the strategy objects that this servlet uses.
+ * <p>May be overridden in subclasses in order to initialize further strategy objects.
+ */
+protected void initStrategies(ApplicationContext context) {
+   initMultipartResolver(context);
+   initLocaleResolver(context);
+   initThemeResolver(context);
+   initHandlerMappings(context);
+   initHandlerAdapters(context);
+   initHandlerExceptionResolvers(context);
+   initRequestToViewNameTranslator(context);
+   initViewResolvers(context);
+   initFlashMapManager(context);
+}
+```
+
+那么SpringMVC是在什么时候进行初始化的呢？其实我们可以在onRefresh方法上打上断点，然后debug模式启动项目。
+
+启动项目之后，发送一个请求，我们会发现只有第一次请求的时候会在onRefresh方法停下。我们再观察调用栈，截图如下：
+
+![image-20220407170558129](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220407170558129.png)
+
+我们会发现他在refresh中的finishRefresh方法中进行的初始化，这个方法是Spring容器初始化的最后一步。然后继续一步一步的观察调用栈，发现
+
+> 未完结，上次更新时间2022/4/7
 
 
 
