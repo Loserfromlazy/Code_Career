@@ -4,17 +4,6 @@
 
 springMVC就是类似与Struts2的mvc框架，始于SpringFrameWork的后续产品
 
-为什么要学习SpringMVC？
-
-> | springMVC    |                      与                      | Struts2                                  | 区别                                                         |
-> | ------------ | :------------------------------------------: | ---------------------------------------- | ------------------------------------------------------------ |
-> | 对比项目     |                  SpringMVC                   | Struts2                                  | 优势                                                         |
-> | 国内市场情况 |  有大量用户，一般新项目启动都选择springmvc   | 有部分老用户，一直在使用                 | 国内情况springmvc的shiyonglv已经超过了struts2                |
-> | 框架入口     |                 基于servlet                  | 基于filter                               | 只是配置方式不同                                             |
-> | 框架设计思想 | 控制器基于方法级别的拦截，处理器设计为单实例 | 控制器基于类级别拦截，处理器设计为多实例 | 由于设计本身的原因，造成了struts2只能设计为多实例模式，相比于springmvc设计为单实例模式，struts2会消耗更多服务器内存 |
-> | 参数传递     |               通过方法入参传递               | 通过类的成员变量传递                     | struts2通过成员变量传递参数，导致参数线程不安全，有可能引发并发的问题 |
-> | 与spring整合 |    与spring同一家公司可以与spring无缝整合    | 需要整合包                               | springmvc与spring整合更轻松                                  |
-
 ## 一.概述
 
 ### 1.1SpringMVC入门
@@ -1319,6 +1308,8 @@ SpringMVC的大致原理如下，我们跟据此流程来手写一个简易的Sp
 
 众所周知，SpringMVC最重要的一个类就是`DispatcherServlet`，因此我们从这个类入手，分析一下SpringMVC的源码及请求流程。
 
+这里是使用SpringMVC5.2.x版本。
+
 ### 9.1 SpringMVC源码测试工程搭建
 
 gradle新建web项目，如下图：
@@ -2065,11 +2056,103 @@ protected void initStrategies(ApplicationContext context) {
 
 ![image-20220407170558129](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220407170558129.png)
 
-我们会发现他在refresh中的finishRefresh方法中进行的初始化，这个方法是Spring容器初始化的最后一步。然后继续一步一步的观察调用栈，发现
+我们会发现他在refresh中的finishRefresh方法中进行的初始化，这个方法是Spring容器初始化的最后一步。我们再继续往前看，发现初始化容器是在HttpServletBean中调用的，也就是说是在tomcat获取请求后，会找到DispatcherServlet（tomcat的部分可以查看tomcat的请求流程源码），在HttpServletBean执行init的时候初始化了SpringMVC的容器，同时初始化了SpringMVC的九大组件。
 
-> 未完结，上次更新时间2022/4/7
+这九个组件的初始化流程略有差异，但大体上都是初始化SpringMVC默认指定的Bean，这里我们以initHandlerMappings为例，看一下这个组件的初始化流程。
 
+首先跟进initHandlerMappings方法，源码如下：
 
+```java
+private void initHandlerMappings(ApplicationContext context) {
+   this.handlerMappings = null;
+//先在ApplicationContext中找HandlerMappings
+   if (this.detectAllHandlerMappings) {
+      // Find all HandlerMappings in the ApplicationContext, including ancestor contexts.
+      Map<String, HandlerMapping> matchingBeans =
+            BeanFactoryUtils.beansOfTypeIncludingAncestors(context, HandlerMapping.class, true, false);
+      if (!matchingBeans.isEmpty()) {
+         this.handlerMappings = new ArrayList<>(matchingBeans.values());
+         // We keep HandlerMappings in sorted order.
+         AnnotationAwareOrderComparator.sort(this.handlerMappings);
+      }
+   }
+    
+   else {
+      try {
+         HandlerMapping hm = context.getBean(HANDLER_MAPPING_BEAN_NAME, HandlerMapping.class);
+         this.handlerMappings = Collections.singletonList(hm);
+      }
+      catch (NoSuchBeanDefinitionException ex) {
+         // Ignore, we'll add a default HandlerMapping later.
+      }
+   }
+
+    //如果没有则通过策略模式生成默认的HandlerMappings
+   // Ensure we have at least one HandlerMapping, by registering
+   // a default HandlerMapping if no other mappings are found.
+   if (this.handlerMappings == null) {
+      this.handlerMappings = getDefaultStrategies(context, HandlerMapping.class);
+      if (logger.isTraceEnabled()) {
+         logger.trace("No HandlerMappings declared for servlet '" + getServletName() +
+               "': using default strategies from DispatcherServlet.properties");
+      }
+   }
+}
+```
+
+这个方法主要是先在ApplicationContext中找HandlerMappings如果没有则通过策略模式生成默认的HandlerMappings。
+
+我们在debug时一般在ApplicationContext中是找不到的，这时会进入到else的代码块，我们继续往下跟进入到`getDefaultStrategies(context, HandlerMapping.class);`方法中，源码如下：
+
+```java
+protected <T> List<T> getDefaultStrategies(ApplicationContext context, Class<T> strategyInterface) {
+   String key = strategyInterface.getName();
+    //获取默认策略
+   String value = defaultStrategies.getProperty(key);
+   if (value != null) {
+      String[] classNames = StringUtils.commaDelimitedListToStringArray(value);
+      List<T> strategies = new ArrayList<>(classNames.length);
+      for (String className : classNames) {
+         try {
+            Class<?> clazz = ClassUtils.forName(className, DispatcherServlet.class.getClassLoader());
+             //创建策略类
+            Object strategy = createDefaultStrategy(context, clazz);
+            strategies.add((T) strategy);
+         }
+         catch (ClassNotFoundException ex) {
+            throw new BeanInitializationException(
+                  "Could not find DispatcherServlet's default strategy class [" + className +
+                  "] for interface [" + key + "]", ex);
+         }
+         catch (LinkageError err) {
+            throw new BeanInitializationException(
+                  "Unresolvable class definition for DispatcherServlet's default strategy class [" +
+                  className + "] for interface [" + key + "]", err);
+         }
+      }
+      return strategies;
+   }
+   else {
+      return new LinkedList<>();
+   }
+}
+```
+
+在这个方法中主要关注两个地方:
+
+一个是获取默认策略（` String value = defaultStrategies.getProperty(key);`），
+
+一个是创建策略类（`Object strategy = createDefaultStrategy(context, clazz);`）。
+
+那么默认策略是哪来的呢？我们其实在静态代码块中就能看到数据的来源，如下图
+
+![image-20220408144826447](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220408144826447.png)
+
+实际上所有组件的默认类都是在DispatcherServlet.properties中规定的。
+
+然后我们再看创建策略类的，这里我们跟进去代码会发现实际上是调用了getBean方法，这个方法在Spring源码分析中仔细的讲过了，这里就不再赘述。
+
+综上，就是SpringMVC的组件初始化分析。
 
 
 
