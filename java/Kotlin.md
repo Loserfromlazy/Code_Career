@@ -434,4 +434,32 @@ for (i in 10 downTo 1) print(i)
 
 ## 六、面向对象编程
 
+### 6.1 类和对象
+
+Kotlin 类可以包含：构造函数和初始化代码块、函数、属性、内部类、对象声明。
+
+在Kotlin中使用class声明类，同时也可以想Java一样声明属性和函数：
+
+```kotlin
+class Person {
+    var name = ""
+    var age = 0;
+    fun eat() {
+        println(name + "is eating. And he is" + age + "years old!")
+    }
+}
+fun main() {
+    var p = Person();
+    p.age = 20
+    p.name = "张三"
+    p.eat()
+}
+```
+
+以上就是类和对象的基本用法。
+
+> Kotlin中实例化一个类的方式和Java是基本类似的，只是去掉了new关键字而已。之所以这么设计，是因为当你调用了某个类的构造函数时，你的意图只可能是对这个类进行实例化，因此即使没有new关键字，也能清晰表达出你的意图。Kotlin本着最简化的设计原则，将诸如new、行尾分号这种不必要的语法结构都取消了。
+
+
+
 > 未完结
