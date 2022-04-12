@@ -93,6 +93,58 @@ println(ages1)
 println(ages2)
 ```
 
+### 2.4 默认导入
+
+有多个包会默认导入到每个 Kotlin 文件中：
+
+- kotlin.*
+- kotlin.annotation.*
+- kotlin.collections.*
+- kotlin.comparisons.*
+- kotlin.io.*
+- kotlin.ranges.*
+- kotlin.sequences.*
+- kotlin.text.*
+
+### 2.5 区间
+
+区间表达式由具有操作符形式 **..** 的 rangeTo 函数辅以 in 和 !in 形成。
+
+~~~kotlin
+val range = 0..10
+~~~
+
+上面代码表示创建了一个0到10的区间，并且两端都是闭区间，这意味着0到10这两个端点都是包含在区间中的，用数学的方式表达出来就是[0, 10]。
+
+kotlin还可以使用until关键字创建一个左闭右开的区间：
+
+~~~kotlin
+val range = 0 until 10
+~~~
+
+上面代码表示创建了一个0到10的左闭右开区间用数学的方式表达出来就是[0, 10)。
+
+### 2.6 类型检测
+
+我们可以使用 is 运算符检测一个表达式是否某类型的一个实例(类似于Java中的instanceof关键字)。我们这里直接使用菜鸟教程的例子。
+
+```kotlin
+fun getStringLength(obj: Any): Int? {
+  if (obj is String) {
+    // 做过类型判断以后，obj会被系统自动转换为String类型
+    return obj.length 
+  }
+
+  //在这里还有一种方法，与Java中instanceof不同，使用!is
+  // if (obj !is String){
+  //   // XXX
+  // }
+
+  // 这里的obj仍然是Any类型的引用
+  return null
+}
+```
+
 ## 三、数据类型
 
 ### 3.1 变量
@@ -148,7 +200,7 @@ fun main() {
     val a: Int = 10000
     // true，值相等，对象地址相等
     println(a === a) 
-    //经过了装箱，创建了两个不同的对象，这里会创建新对象是因为 Int? s可空类型而Int不可空，因此会创建新对象
+    //经过了装箱，创建了两个不同的对象，这里会创建新对象是因为 Int? 是可空类型而Int是不可空的类型，因此会创建新对象
     val boxedA: Int? = a
     val anotherBoxedA: Int? = a
 
@@ -176,5 +228,210 @@ val a: Byte = 1 // OK, 字面值是静态检测的
 val b: Int = a.toInt() // OK
 ```
 
+## 四、函数
 
+### 4.1 语法规则
 
+函数是用来运行代码的载体，你可以在一个函数里编写很多行代码，当运行这个函数时，函数中的所有代码会全部运行。像我们前面使用过的main()函数就是一个函数，只不过它比较特殊，是程序的入口函数，即程序一旦运行，就是从main()函数开始执行的。
+
+函数的语法规则如下：
+
+~~~kotlin
+fun methodName(param1:Int ,param2:Int):Int{
+	return 0
+}
+~~~
+
+fun声明函数，然后是函数名，参数:参数类型，最后是返回值，如果没有可以不写，如果熟悉随便一门编程语言都能看到这个语法规则。
+
+### 4.2 可变参数
+
+如果是可变参数则使用vararg标识，举个栗子：
+
+```kotlin
+fun main() {
+    vars(1,2,3,4,5)  // 输出12345
+}
+fun vars(vararg v:Int){
+    for(vt in v){
+        print(vt)
+    }
+}
+```
+
+### 4.3 简化
+
+如果一个函数中只有一行代码则可以简化，举个栗子：
+
+~~~kotlin
+fun main() {
+    println(maxNumbers(1,2))
+    println(maxNumbersSimple(1,2))
+    println(maxNumbersSimpleMore(1,2))
+}
+fun maxNumbers(num1:Int,num2:Int):Int{
+    return max(num1,num2)
+}
+fun maxNumbersSimple(num1:Int,num2:Int):Int = max(num1,num2)
+fun maxNumbersSimpleMore(num1:Int,num2:Int) = max(num1,num2)
+~~~
+
+如果只有一行代码可以省略成maxNumbersSimple函数的样子，而用等号连接了max函数，因此kotlin可以推断maxNumbers函数的返回值，因此又可以省略返回值，最终简化为maxNumbersSimpleMore的形式。
+
+## 五、程序的逻辑控制
+
+### 5.1 if条件语句
+
+kotlin的if语句与Java几乎没有区别，举个栗子：
+
+```kotlin
+fun main() {
+    println(maxNumbers(1,2))
+}
+fun maxNumbers(num1:Int,num2:Int):Int{
+    var value = 0;
+    if (num1>num2){
+        value = num1
+    }else{
+        value = num2
+    }
+    return value
+}
+```
+
+但是这两个语言唯一的区别就是，kotlin的if可以有返回值，返回值就是if语句每一个条件中最后一行代码的返回值。举例：
+
+```kotlin
+fun main() {
+    println(maxNumbers(1,2))
+}
+fun maxNumbers(num1:Int,num2:Int):Int{
+    val value = if (num1>num2){
+        num1
+    }else{
+        num2
+    }
+    return value
+}
+```
+
+上面代码可以简化：
+
+~~~kotlin
+fun maxNumbers(num1:Int,num2:Int):Int{
+    return if (num1>num2){
+        num1
+    }else{
+        num2
+    }
+}
+//再简化
+fun maxNumbers(num1:Int,num2:Int) =if (num1>num2){
+    num1
+}else{
+    num2
+}
+//再简化
+fun maxNumbers(num1:Int,num2:Int) = if (num1>num2) num1 else num2
+~~~
+
+通过kotlin的简单if语句可以发现kotlin的语法特性还是很有趣的，总体来说就是简单。
+
+kotlin的if语句还可以使用区间，举个栗子：
+
+```kotlin
+fun main() {
+    val x = 5
+    val y = 9
+    if (x in 1..8) {
+        println("x 在区间内")
+    }
+}
+```
+
+### 5.2 when条件语句
+
+Kotlin中的when语句有点类似于Java中的switch语句，但它又远比switch语句强大得多。
+
+when语句格式：
+
+~~~
+匹配值 -> { 执行逻辑 }
+~~~
+
+我们直接使用菜鸟教程的例子来体会when的用法：
+
+```kotlin
+fun main() {
+    var x = 0
+    when (x) {
+        //匹配值多个分支可以放在一起
+        0, 1 -> println("x == 0 or x == 1")
+        else -> println("otherwise")
+    }
+
+    when (x) {
+        1 -> println("x == 1")
+        2 -> println("x == 2")
+        //相当于Java中的default块
+        else -> { // 等于default
+            println("x 不是 1 ，也不是 2")
+        }
+    }
+
+    when (x) {
+        //可以使用区间作为匹配值
+        in 0..10 -> println("x 在该区间范围内")
+        else -> println("x 不在该区间范围内")
+    }
+}
+```
+
+when语句中还可以使用is关键字，如下
+
+```kotlin
+fun checkNumber (num:Number){
+    when(num){
+        is Int -> println("Int")
+        is Double -> println("Double")
+        else -> println("not support")
+    }
+}
+```
+
+### 5.3 for循环
+
+Java中主要有两种循环语句：while循环和for循环。而Kotlin也提供了while循环和for循环，其中while循环不管是在语法还是使用技巧上都和Java中的while循环没有任何区别，这里我们直接看kotlin的for循环。
+
+Kotlin在for循环方面做了很大幅度的修改，Java中最常用的for-i循环在Kotlin中直接被舍弃了，而Java中另一种for-each循环则被Kotlin进行了大幅度的加强，变成了for-in循环，所以我们只需要学习for-in循环的用法就可以了。
+
+for 循环可以对任何提供迭代器（iterator）的对象进行遍历，语法如下:
+
+```kotlin
+for (item in collection) print(item)
+```
+
+kotlin的for-in循环不光能遍历集合等对象，而且能遍历kotlin自己的区间：
+
+~~~kotlin
+for (i in 0..10) print(i)
+//输出：012345678910
+~~~
+
+而如果你想跳过其中的一些元素，可以使用step关键字,如下：
+
+~~~kotlin
+for (i in 0..10 step 2) print(i)
+//输出：0246810
+~~~
+
+以上都是升序，如果你想创建一个降序的区间，可以使用downTo关键字，用法如下：
+
+```kotlin
+for (i in 10 downTo 1) print(i)
+//输出：10987654321
+```
+
+## 六、面向对象编程
+
+> 未完结
