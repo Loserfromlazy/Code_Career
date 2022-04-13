@@ -459,7 +459,416 @@ fun main() {
 以上就是类和对象的基本用法。
 
 > Kotlin中实例化一个类的方式和Java是基本类似的，只是去掉了new关键字而已。之所以这么设计，是因为当你调用了某个类的构造函数时，你的意图只可能是对这个类进行实例化，因此即使没有new关键字，也能清晰表达出你的意图。Kotlin本着最简化的设计原则，将诸如new、行尾分号这种不必要的语法结构都取消了。
+>
+> kotlin中的类是有修饰符的。这里我们直接用菜鸟的例子：
+>
+> 类的修饰符包括 classModifier 和_accessModifier_:
+>
+> - classModifier: 类属性修饰符，标示类本身特性。
+>
+>   ```
+>   abstract    // 抽象类  
+>   final       // 类不可继承，默认属性
+>   enum        // 枚举类
+>   open        // 类可继承，类默认是final的
+>   annotation  // 注解类
+>   ```
+>
+> - accessModifier: 访问权限修饰符
+>
+>   ```
+>   private    // 仅在同一个文件中可见
+>   protected  // 同一个文件中或子类可见
+>   public     // 所有调用的地方都可见
+>   internal   // 同一个模块中可见
+>   ```
+>
+> ### 实例
+>
+> ```kotlin
+> // 文件名：example.kt
+> package foo
+> private fun foo() {} // 在 example.kt 内可见
+> public var bar: Int = 5 // 该属性随处可见
+> internal val baz = 6    // 相同模块内可见
+> ```
 
+### 6.2 属性和getter、setter
 
+当然有人可能会很疑惑，上面的属性是public嘛？为什么没有getset方法也能直接访问属性。实际上不是的。其实kotlin会帮我们自动生成getset方法。如下：
 
-> 未完结
+```kotlin
+class Person {
+    var name = ""
+        //以下代码是kotlin默认帮我们生成的，
+        //如果我们get、set方法不做改动是不需要增加的
+        get() = field//注意get不能私有化，也就是说不能加private
+    	//set方法可以私有化，但是私有化后就不能有这种操作了p.age = 20
+        set(name){
+            field =name
+        }
+    var age = 0
+    /*实际上这句话相当于Java的：
+        private Integer age;
+        public final Integer getAge(){
+            return this.age;
+        }
+        public final void setAge(Integer age){
+            this.age=age;
+        }
+
+    */
+    fun eat() {
+        println(name + "is eating. And he is" + age + "years old!")
+    }
+}
+
+fun main() {
+    var p = Person();
+    //表面上是调用属性，实际上是调用get和set方法
+    // Remember in kotlin whenever you write foo.bar = value it will be translated into a setter call instead of a PUT FIELD.
+    p.age = 20
+    p.eat()
+}
+```
+
+其中field是备用字段。因为Kotlin 中类不能有字段。提供了 Backing Fields(后端变量) 机制,备用字段使用field关键字声明,field 关键词只能用于属性的访问器。
+
+**但是我们要注意val定义的字段没有set函数**。
+
+以上代码我们也可以通过反编译来证明，如下图：
+
+![image-20220413094508464](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220413094508464.png)
+
+非空属性必须在定义的时候初始化,kotlin提供了一种可以延迟初始化的方案,使用 **lateinit** 关键字描述属性：
+
+```kotlin
+class MyTest {
+    lateinit var subject:String
+}
+```
+
+### 6.3 继承和构造函数
+
+任何一个面向对象的编程语言都会有构造函数的概念，Kotlin中也有，但是Kotlin将构造函数分成了两种：主构造函数和次构造函数。这也是为什么构造函数要与继承放在一起，因为有继承及必然涉及到构造函数。
+
+我们还是用最经典的Person类举例：
+
+```kotlin
+open class Person {
+    var name = ""
+    var age = 0
+    fun eat() {
+        println(name + "is eating. And he is" + age + "years old!")
+    }
+}
+```
+
+> 注意：如果想让Person可以被继承需要加上open关键字。
+>
+> 在Kotlin中任何一个非抽象类默认都是不可以被继承的，相当于Java中给类声明了final关键字。之所以这么设计，其实和val关键字的原因是差不多的，因为类和变量一样，最好都是不可变的，而一个类允许被继承的话，它无法预知子类会如何实现，因此可能就会存在一些未知的风险。EffectiveJava这本书中明确提到，如果一个类不是专门为继承而设计的，那么就应该主动将它加上final声明，禁止它可以被继承
+
+然后我们定义一个Student，使其继承Person类：
+
+~~~kotlin
+class Student : Person() {
+    var sno = "100000"
+}
+~~~
+
+> Kotlin 中所有类都继承该 Any 类，它是所有类的超类
+
+但是为什么继承的父类要加括号呢？其实这就涉及到构造函数了。我们来看一下Kotlin的构造函数，先说主构造函数，看以下代码：
+
+```kotlin
+fun main() {
+    val teacher =Teacher("111",18)
+}
+//主构造函数中直接定义属性并初始化属性
+class Teacher(val no:String ,val age:Int){
+    init {
+        println("2222")
+    }
+}
+/*
+也可以这样写
+class Teacher(_no:String ,_age:Int){
+	var no =_no
+	var age=_age
+    init {
+        println("2222")
+    }
+}
+
+*/
+```
+
+主构造器中不能包含任何代码，初始化代码可以放在初始化代码段中，初始化代码段使用 init 关键字作为前缀。
+
+接下来我们在回过来看一下继承时的括号，其实这涉及了Java继承特性中的一个规定，子类中的构造函数必须调用父类中的构造函数，这个规定在Kotlin中也要遵守。我们看以下代码：
+
+```kotlin
+class Student(val sno:String) : Person() {
+    init {
+        println("student")
+    }
+}
+```
+
+Student类声明了一个主构造函数，根据继承特性的规定，子类的构造函数必须调用父类的构造函数，可是主构造函数并没有函数体，我们怎样去调用父类的构造函数呢？Kotlin用了另外一种简单但是可能不太好理解的设计方式：括号。子类的主构造函数调用父类中的哪个构造函数，在继承的时候通过括号来指定。
+
+我们现在将Person改造一下：
+
+![image-20220413113924301](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220413113924301.png)
+
+我们会发现编译器报错了，因为Person中没有无参构造函数，所以要改成这样：
+
+```kotlin
+//注意，我们在Student类的主构造函数中增加name和age这两个字段时，不能再将它们声明成val，因为在主构造函数中声明成val或者var的参数将自动成为该类的字段，这就会导致和父类中同名的name和age字段造成冲突
+class Student(val sno:String,name: String,age:Int) : Person(name,age) {
+    init {
+        println("student")
+    }
+}
+```
+
+我们可以在Student类的主构造函数中加上name和age这两个参数，再将这两个参数传给Person类的构造函数。
+
+了解了主构造函数我们接下来在了解一下次构造函数。
+
+Kotlin的任何一个类只能有一个主构造函数，但是可以有多个次构造函数。次构造函数也可以用于实例化一个类，这一点和主构造函数没有什么不同，只不过它是有函数体的。
+
+Kotlin规定，**当一个类既有主构造函数又有次构造函数时，所有的次构造函数都必须调用主构造函数**（包括间接调用）。我们看以下代码：
+
+```kotlin
+class Student(val sno:String,name: String,age:Int) : Person(name,age) {
+    //次构造函数是通过constructor关键字来定义的
+    //第一个次构造函数接收name和age参数，然后它又通过this关键字调用了主构造函数
+    constructor(name: String,age: Int):this("",name,age){
+    }
+    //第二个次构造函数不接收任何参数，它通过this关键字调用了第一个次构造函数
+    //由于第二个次构造函数间接调用了主构造函数，因此这仍然是合法的。
+    constructor():this("111",0)
+}
+```
+
+现在我们就拥有了3种方式来对Student类进行实体化：
+
+```kotlin
+fun main() {
+    val student1 =Student("111","zhangsan",18)
+    val student2 =Student("zhangsan",18)
+    val student = Student()
+}
+```
+
+到此我们也了解了次构造函数，但是在Kotlin中还有一个特殊的情况，那就是没有主构造函数，但是有次构造函数，如下：
+
+```kotlin
+class Student : Person {
+    //由于没有主构造函数，次构造函数只能直接调用父类的构造函数，将this关键字换成super关键字
+    constructor(name: String,age: Int):super(name,age){
+    }
+}
+```
+
+注意这里的代码变化，首先Student类的后面没有显式地定义主构造函数，同时又因为定义了次构造函数，所以现在Student类是没有主构造函数的。那么既然没有主构造函数，继承Person类的时候也就不需要再加上括号了。
+
+**如果一个非抽象类没有声明构造函数(主构造函数或次构造函数)，它会产生一个没有参数的构造函数。构造函数是 public 。如果你不想你的类有公共的构造函数，你就得声明一个空的主构造函数：**
+
+```kotlin
+class DontCreateMe private constructor () {
+}
+```
+
+### 6.4 接口
+
+Java中继承使用的关键字是extends，实现接口使用的关键字是implements，而Kotlin中统一使用冒号，中间用逗号进行分隔。
+
+Kotlin中的接口部分和Java几乎是完全一致的所以，不再赘述，这里直接使用菜鸟的例子。
+
+~~~kotlin
+interface MyInterface {
+    fun bar()    // 未实现
+    fun foo() {  //已实现
+      // 可选的方法体
+      println("foo")
+    }
+}
+class Child : MyInterface {
+    override fun bar() {
+        // 方法体
+    }
+}
+~~~
+
+### 6.5 Kotlin中的数据类和单例
+
+Kotlin 可以创建一个只包含数据的类，关键字为 **data**：
+
+```kotlin
+data class User(val name: String, val age: Int)
+```
+
+Kotlin会根据主构造函数中的参数帮你将equals()、hashCode()、toString()等固定且无实际逻辑意义的方法自动生成，从而大大减少了开发的工作量。
+
+编译器会自动的从主构造函数中根据所有声明的属性提取以下函数：
+
+- `equals()` / `hashCode()`
+- `toString()` 格式如 `"User(name=John, age=42)"`
+- `componentN() functions` 对应于属性，按声明顺序排列
+- `copy()` 函数
+
+如果这些函数在类中已经被明确定义了，或者从超类中继承而来，就不再会生成。
+
+为了保证生成代码的一致性以及有意义，数据类需要满足以下条件：
+
+- 主构造函数至少包含一个参数。
+- 所有的主构造函数的参数必须标识为`val` 或者 `var` ;
+- 数据类不可以声明为 `abstract`, `open`, `sealed` 或者 `inner`;
+- 数据类不能继承其他类 (但是可以实现接口)。
+
+接下来我们再来看另外一个Kotlin中特有的功能——单例类。
+
+在Java中有很多种实现的方式，但是在Kotlin中只需要只需要将class关键字改成object关键字即可。
+
+~~~kotlin
+object Singleton{
+}
+~~~
+
+可以看到，在Kotlin中我们不需要私有化构造函数，也不需要提供getInstance()这样的静态方法，只需要把class关键字改成object关键字，一个单例类就创建完成了。
+
+### 6.6 Lambda表达式
+
+Kotlin从第一个版本开始就支持了Lambda编程，并且Kotlin中的Lambda功能极为强大。
+
+语法格式：
+
+~~~
+{参数名1:参数类型，参数名2:参数类型->函数体}
+~~~
+
+这里给个示例：
+
+```kotlin
+// 测试
+fun main() {
+    val sumLambda: (Int, Int) -> Int = {x,y -> x+y}
+    println(sumLambda(1,2))  // 输出 3
+}
+```
+
+当然，如果你使用Java8以上版本，肯定对lambda表达式比较熟悉，在业务中一大使用场景就是使用lambda操纵集合。这里我们也用kotlin中的lambda操纵集合来了解lambda表达式。
+
+我们先来了解以下Kotlin中的集合的创建，这里主要介绍几个创建集合的Kotlin的API，你也可以使用Java的方式，但是Kotlin的方式也需要掌握。见下面的代码：
+
+![image-20220413132548261](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220413132548261.png)
+
+同理Set集合也是一样，只是将创建集合的方式换成了setOf()和mutableSetOf()函数而已。对于Map，Kotlin中对map可以像数组一样操作，如下：
+
+```kotlin
+fun testKotlinMap(){
+    val map = HashMap<Int,String>()
+    map.put(1,"111")
+    map.put(2,"222")
+    map[3] ="333"
+    println(map.get(1))
+    println(map[3])
+}
+```
+
+当然mapOf()和mutableMapOf()函数也是有的，这里就不在演示。
+
+下面我们通过一个需求来了解kotlin的lambda表达式：
+
+如果有一个`List<String>`集合，我想取出其中最长的String，在Java中可以这么实现：
+
+```java
+List<String> list =new ArrayList<>();
+list.add("apple");
+list.add("banana");
+list.add("strawberry");
+list.add("pear");
+String s = list.stream().max(Comparator.comparingInt(String::length)).get();
+System.out.println(s);
+```
+
+下面我们通过kotlin来实现：
+
+```kotlin
+fun main() {
+    val listKT = listOf("apple","banana","strawberry","pear")
+    val lambda = {fruit:String ->fruit.length}
+    val maxByOrNull = listKT.maxByOrNull(lambda)
+    println(maxByOrNull)
+}
+```
+
+我们下面来简化这段代码：
+
+```kotlin
+val maxByOrNull = listKT.maxByOrNull({fruit:String ->fruit.length})
+//然后Kotlin规定，当Lambda参数是函数的最后一个参数时，可以将Lambda表达式移到函数括号的外面
+val maxByOrNull = listKT.maxByOrNull(){fruit:String ->fruit.length}
+//如果Lambda参数是函数的唯一一个参数的话，还可以将函数的括号省略
+val maxByOrNull = listKT.maxByOrNull{fruit:String ->fruit.length}
+//由于Kotlin拥有出色的类型推导机制，Lambda表达式中的参数列表其实在大多数情况下不必声明参数类型
+val maxByOrNull = listKT.maxByOrNull{fruit ->fruit.length}
+//当Lambda表达式的参数列表中只有一个参数时，也不必声明参数名，而是可以使用it关键字来代替，那么代码就变成了：
+val maxByOrNull = listKT.maxByOrNull{it.length}
+```
+
+我们再看kotlin中的filter和map，其实与Java的写法类似，我们还是以需求为例，这回我们将list中的数据长度小于5全变成大写：
+
+```kotlin
+val listKT = listOf("apple","banana","strawberry","pear")
+val list = listKT.filter { it.length <= 5 }.map { it.toUpperCase() }
+list.forEach { println(it) }
+```
+
+这里仅介绍了常用的kotlin中的lambda表达式的api，但只要掌握了基本的语法规则，其他函数式API的用法只要看一看文档就能掌握了。
+
+**Java函数式API的调用**
+
+接下来我们看一下在Kotlin中调用Java方法时使用函数式API
+
+我们还是通过例子了解：
+
+在Java中启动线程可以这么写：
+
+```java
+new Thread(new Runnable() {
+    @Override
+    public void run() {
+        System.out.println("111");
+    }
+}).start();
+//或是lambda形式
+new Thread(() -> System.out.println("111")).start();
+```
+
+我们给改成Kotlin的版本：
+
+```kotlin
+Thread(object :Runnable{
+    override fun run() {
+        println("111")
+    }
+}).start()
+```
+
+> Kotlin创建匿名类实例的时候就不能再使用new了，而是改用了object关键字
+
+下面我们改成Lambda的形式：
+
+```kotlin
+//Thread类的构造方法是符合Java函数式API的使用条件的，因此简化成这样
+Thread(Runnable{ println("111") }).start()
+//如果一个Java方法的参数列表中有且仅有一个Java单抽象方法接口参数，我们还可以将接口名进行省略
+Thread({ println("111") }).start()
+//根据上面的例子对这个lambda进行简化
+Thread(){ println("111") }.start()
+//再简化
+Thread({ println("111") }.start()
+```
