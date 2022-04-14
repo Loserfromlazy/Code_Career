@@ -1,10 +1,14 @@
-# Java高并发编程学习笔记
+# Java高并发编程学习笔记第一部分多线程篇
 
 转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
 
-> 参考资料：Java高并发核心编程卷2、以及菜鸟等互联网资源
+> 参考资料：Java高并发核心编程卷2尼恩编著、以及菜鸟等互联网资源
 >
-> 本文主要是对Java高并发核心编程卷2一书的学习整理
+> 本文主要是对Java高并发核心编程卷2一书的学习整理，由于原书很长所以分篇章来进行学习整理，本文是第一部分多线程篇。
+>
+> 此笔记中的例子全是根据书中或互联网资源的例子改编而来，并且全部是本人上机操作后的代码。
+>
+> 此笔记中的图片非特殊标注全部是自己根据理解手画的，请勿盗图。
 
 # 一、Java多线程原理与基本操作
 
@@ -500,23 +504,211 @@ Jstack输出的信息包含以下重要信息：
 
 举个栗子：
 
+```java
+public class ThreadNameDemo {
+    static class MyThreadDemo implements Runnable{
+        @Override
+        public void run() {
+            for (int i = 0; i < 2; i++) {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                String name = Thread.currentThread().getName();
+                PoolUtil.print(name);
+            }
+        }
+    }
+    static class PoolUtil{
+        public static void print(String name){
+            //调用线程池异步输出，不影响当前线程执行，ThreadPool是一个单例线程池
+            ThreadPool.getPool().execute(()->{
+                synchronized (System.out){
+                    System.out.println(name);
+                }
+            });
+        }
+    }
 
+    public static void main(String[] args) {
+        MyThreadDemo demo = new MyThreadDemo();
+        new Thread(demo).start();
+        new Thread(demo).start();
+        new Thread(demo,"自定义名称1").start();
+        new Thread(demo,"自定义名称2").start();
+        try {
+            Thread.sleep(Integer.MAX_VALUE);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
 
+执行结果：
 
+自定义名称2 ---0
+Thread-0 ---0
+Thread-1 ---0
+自定义名称1 ---0
+自定义名称2 ---1
+自定义名称1 ---1
+Thread-1 ---1
+Thread-0 ---1
 
+### 1.4.2 sleep
 
+Sleep()方法定义在Thread类中，是一组静态方法，有两个重载版本：
 
+```java
+public static native void sleep(long millis) throws InterruptedException;
+public static void sleep(long millis, int nanos)throws InterruptedException{
+    //处理纳秒，代码略
+    sleep(millis);
+}
+```
 
+我们这里熟练一下jstack工具，将上一节的代码修改一下：
 
+```java
+public class ThreadSleepDemo {
+    static class MyThreadDemo implements Runnable{
+        @Override
+        public void run() {
+            for (int i = 0; i < 50; i++) {
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                String name = Thread.currentThread().getName();
+                ThreadNameDemo.PoolUtil.print("线程"+name+"睡眠第"+i+"次");
+            }
+        }
+    }
 
+    public static void main(String[] args) {
+        for (int i = 0; i < 3; i++) {
+            MyThreadDemo demo = new MyThreadDemo();
+            new Thread(demo,"sleep"+i).start();
+        }
+    }
+}
+```
 
+然后我们运行代码，之后在终端输入jps查询当前ThreadSleepDemo的线程id
 
+![image-20220414104007329](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220414104007329.png)
 
+然后用jstack +id可以查看 我们的线程的状态：
 
+![image-20220414104104353](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220414104104353.png)
 
+### 1.4.3 interrupt
 
+Java语言提供了stop()方法终止正在运行的线程，但是Java将Thread的stop()方法设置为过时，不建议使用。
 
+在程序中，我们是不能随便中断一个线程的，我们无法知道这个线程正运行在什么状态，它可能持有某把锁，强行中断线程可能导致锁不能释放的问题；或者线程可能在操作数据库，强行中断线程可能导致数据不一致的问题。正是由于调用stop()方法来终止线程可能会产生不可预料的结果，因此不推荐调用stop()方法。
 
+Java提供了Thread的interrupt()方法，此方法本质不是用来中断一个线程，而是将线程设置为中断状态。
+
+1. 如果此线程处于阻塞状态（线程被`Object.wait()`、`Thread.join()`和`Thread.sleep()`三种方法之一阻塞），就会立马退出阻塞，并抛出InterruptedException异常，线程就可以通过捕获InterruptedException来做一定的处理，然后让线程退出。
+2. 如果此线程正处于运行之中，线程就不受任何影响，继续运行，仅仅是线程的中断标记被设置为true。所以，程序可以在适当的位置通过调用isInterrupted()方法来查看自己是否被中断，并执行退出操作。
+
+举例，我们将上面的1.4.2的demo修改一下：
+
+```java
+public class ThreadSleepDemo {
+    static class MyThreadDemo implements Runnable{
+        @Override
+        public void run() {
+            String name = Thread.currentThread().getName();
+            try {
+                ThreadNameDemo.PoolUtil.print("线程"+name+"进入睡眠");
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                ThreadNameDemo.PoolUtil.print("线程"+name+"发生异常被打断");
+                return;
+            }
+            /*
+            */
+            ThreadNameDemo.PoolUtil.print("线程"+name+"运行结束");
+        }
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        MyThreadDemo demo = new MyThreadDemo();
+        Thread thread1 = new Thread(demo,"sleep1");
+        thread1.start();
+        Thread thread2 =new Thread(demo,"sleep2");
+        thread2.start();
+        Thread.sleep(2000);
+        thread1.interrupt();
+        Thread.sleep(5000);
+        thread2.interrupt();
+        Thread.sleep(1000);
+        ThreadNameDemo.PoolUtil.print("主程序运行结束");
+
+    }
+}
+```
+
+运行结果：
+
+~~~
+线程sleep2进入睡眠
+线程sleep1进入睡眠
+java.lang.InterruptedException: sleep interrupted
+	at java.lang.Thread.sleep(Native Method)
+	at com.learn.testnginx.threadLearn.ThreadSleepDemo$MyThreadDemo.run(ThreadSleepDemo.java:18)
+	at java.lang.Thread.run(Thread.java:748)
+线程sleep1发生异常被打断
+线程sleep2运行结束
+主程序运行结束
+~~~
+
+我们可以发现sleep1线程在大致睡眠了两秒后，被主线程打断（或者中断）。被打断后停止睡眠，并捕获到InterruptedException异常。程序在异常处理时直接返回，其后面的执行逻辑被跳过。而sleep2线程在睡眠了7秒后，被主线程中断，但是在sleep2线程被中断的时候，已经执行结束了，所以thread2.interrupt()中断操作没有产生实质性的效果。
+
+我们也可以通过isInterrupted来判断线程是否被终止，如下：
+
+```java
+while (true){
+    ThreadNameDemo.PoolUtil.print(Thread.currentThread().isInterrupted()+"");
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+    if (Thread.currentThread().isInterrupted()){
+        return;
+    }
+}
+```
+
+### 1.4.4 join
+
+线程的合并可以这么理解，有AB两个线程，A线程在执行过程中需要依赖B线程执行的流程，线程A需要将线程B的执行流程合并到自己的执行流程中，这就是线程合并，被动方线程B可以叫作被合并线程。
+
+join有三个重载，如下（源码为jdk8）：
+
+```java
+//把当前线程变成TIMED_WAITING，直到被合并线程执行结束，或者等待被合并线程执行millis时间
+public final synchronized void join(long millis)
+throws InterruptedException{
+    //代码略
+}
+//把当前线程变成TIMED_WAITING，直到被合并线程执行结束，或者等待被合并线程执行millis+nanos时间
+public final synchronized void join(long millis, int nanos)
+    throws InterruptedException {
+	//代码略
+}
+//把当前线程变成TIMED_WAITING，直到被合并线程执行结束
+public final void join() throws InterruptedException {
+    join(0);
+}
+```
 
 
 
