@@ -4,9 +4,9 @@
 
 > 参考资料：Java高并发核心编程卷2尼恩编著、以及菜鸟等互联网资源
 >
-> 本文主要是对Java高并发核心编程卷2一书的学习整理，由于原书很长所以分篇章来进行学习整理，本文是第一部分多线程篇。
+> 本文主要是对Java高并发核心编程卷2一书中的知识的学习整理，由于原书很长所以分篇章来进行学习整理，本文是第一部分多线程篇。
 >
-> 此笔记中的例子全是根据书中或互联网资源的例子改编而来，并且全部是本人上机操作后的代码。
+> 此笔记中的例子全部是本人上机操作后的代码。部分源码不会全部展示，请自行去查阅源代码。
 >
 > 此笔记中的图片非特殊标注全部是自己根据理解手画的，请勿盗图。
 
@@ -243,7 +243,7 @@ public interface Future<V> {
 
 总体来说，Future是一个对异步任务进行交互、操作的接口。但是Future仅仅是一个接口，通过它没有办法直接完成对异步任务的操作，JDK提供了一个默认的实现类——FutureTask。
 
-FutureTask类是Future接口的实现类，提供了对异步任务的操作的具体实现。但是，FutureTask类不仅实现了Future接口，还实现了Runnable接口，或者更加准确地说，FutureTask类实现了RunnableFuture接口。继承类图如下：
+FutureTask类是Future接口的实现类，提供了对异步任务的操作的具体实现。但是，FutureTask类不仅实现了Future接口，还实现了Runnable接口，或者更加准确地说，FutureTask类实现了RunnableFuture接口。继承类图（IDEA快捷键crtl+alt+u）如下：
 
 ![image-20220331165448008](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220331165448008.png)
 
@@ -472,6 +472,15 @@ public enum State {
     }
 ```
 
+> 线程的WAITING（等待）状态表示线程在等待被唤醒。处于WAITING状态的线程不会被分配CPU时间片。执行以下两个操作，当前线程将处于WAITING状态：
+>
+> - 执行没有时限（timeout）参数的thread.join()调用：在线程合并场景中，若线程A调用B.join()去合入B线程，则在B执行期间线程A处于WAITING状态，一直等线程B执行完成。
+> - 执行没有时限（timeout）参数的object.wait()调用：指一个拥有object对象锁的线程，进入相应的代码临界区后，调用相应的object的wait()方法去等待其“对象锁”（Object Monitor）上的信号，若“对象锁”上没有信号，则当前线程处于WAITING状态
+>
+> 线程的TIMED_WAITING状态表示在等待唤醒。处于TIMED_WAITING状态的线程不会被分配CPU时间片，它们要等待被唤醒，或者直到等待的时限到期。在线程合入场景中，若线程A在调用B.join()操作时加入了时限参数，则在B执行期间线程A处于TIMED_WAITING状态。若B在等待时限内没有返回，则线程A结束等待TIMED_WAITING状态，恢复成RUNNABLE状态。
+>
+> 总结：其实就是在等待方法执行时有没有时间的期限。
+
 ### 1.3.4 Jstack工具
 
 Jstack时Java虚拟机自带的堆栈跟踪工具，它用于导出JVM当前时刻的线程快照，它的语法如下：
@@ -516,18 +525,8 @@ public class ThreadNameDemo {
                     e.printStackTrace();
                 }
                 String name = Thread.currentThread().getName();
-                PoolUtil.print(name);
+                System.out.println(name+" ---"+i);
             }
-        }
-    }
-    static class PoolUtil{
-        public static void print(String name){
-            //调用线程池异步输出，不影响当前线程执行，ThreadPool是一个单例线程池
-            ThreadPool.getPool().execute(()->{
-                synchronized (System.out){
-                    System.out.println(name);
-                }
-            });
         }
     }
 
@@ -544,6 +543,7 @@ public class ThreadNameDemo {
         }
     }
 }
+
 ```
 
 执行结果：
@@ -583,7 +583,7 @@ public class ThreadSleepDemo {
                     e.printStackTrace();
                 }
                 String name = Thread.currentThread().getName();
-                ThreadNameDemo.PoolUtil.print("线程"+name+"睡眠第"+i+"次");
+                System.out.println("线程"+name+"睡眠第"+i+"次");
             }
         }
     }
@@ -625,16 +625,16 @@ public class ThreadSleepDemo {
         public void run() {
             String name = Thread.currentThread().getName();
             try {
-                ThreadNameDemo.PoolUtil.print("线程"+name+"进入睡眠");
+                System.out.println("线程"+name+"进入睡眠");
                 Thread.sleep(5000);
             } catch (InterruptedException e) {
                 e.printStackTrace();
-                ThreadNameDemo.PoolUtil.print("线程"+name+"发生异常被打断");
+                System.out.println("线程"+name+"发生异常被打断");
                 return;
             }
             /*
             */
-            ThreadNameDemo.PoolUtil.print("线程"+name+"运行结束");
+            System.out.println("线程"+name+"运行结束");
         }
     }
 
@@ -649,7 +649,7 @@ public class ThreadSleepDemo {
         Thread.sleep(5000);
         thread2.interrupt();
         Thread.sleep(1000);
-        ThreadNameDemo.PoolUtil.print("主程序运行结束");
+        System.out.println("主程序运行结束");
 
     }
 }
@@ -675,7 +675,7 @@ java.lang.InterruptedException: sleep interrupted
 
 ```java
 while (true){
-    ThreadNameDemo.PoolUtil.print(Thread.currentThread().isInterrupted()+"");
+    System.out.println(Thread.currentThread().isInterrupted()+"");
     try {
         Thread.sleep(5000);
     } catch (InterruptedException e) {
@@ -709,6 +709,429 @@ public final void join() throws InterruptedException {
     join(0);
 }
 ```
+
+我们可以通过流程图来理解：
+
+![image-20220415095052916](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220415095052916.png)
+
+这里举个例子：
+
+```java
+public class JoinDemo {
+    static class MyThreadDemo extends Thread{
+        private static int num =1;
+        public MyThreadDemo() {
+            super("MyThread"+num);
+            num++;
+        }
+        @Override
+        public void run() {
+            String name = getName();
+            try {
+                System.out.println("线程"+name+"进入睡眠");
+                Thread.sleep(4000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            System.out.println("线程"+name+"运行结束");
+
+        }
+    }
+    public static void main(String[] args) {
+        Thread thread1 = new MyThreadDemo();
+        System.out.println("thread1启动");
+        thread1.start();
+        try {
+            thread1.join();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        Thread thread2 = new MyThreadDemo();
+        System.out.println("thread2启动");
+        thread2.start();
+        try {
+            thread2.join(5000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("主线程运行结束");
+
+    }
+}
+```
+
+运行结果：
+
+~~~
+thread1启动
+线程MyThread1进入睡眠
+线程MyThread1运行结束
+thread2启动
+线程MyThread2进入睡眠
+线程MyThread2运行结束
+主线程运行结束
+//如果将thread2.join(5000);修改为->thread2.join(1000);结果将会变成这样：
+thread1启动
+线程MyThread1进入睡眠
+线程MyThread1运行结束
+thread2启动
+线程MyThread2进入睡眠
+主线程运行结束
+线程MyThread2运行结束
+~~~
+
+上面结果的不同就是因为join中等待时间的不同导致的。
+
+### 1.4.5 yield
+
+线程的yield（让步）操作的作用是让目前正在执行的线程放弃当前的执行，让出CPU的执行权限，使得CPU去执行其他的线程。处于让步状态的JVM层面的线程状态仍然是RUNNABLE状态，但是该线程所对应的操作系统层面的线程从状态上来说会从执行状态变成就绪状态。线程在yield时，线程放弃和重占CPU的时间是不确定的，可能是刚刚放弃CPU，马上又获得CPU执行权限，重新开始执行。
+
+使用方式：`Thread.yield();`
+
+### 1.4.6 daemon
+
+Java中的线程分为两类：守护线程与用户线程。守护线程也称为后台线程，专门指在程序进程运行过程中，在后台提供某种通用服务的线程。比如，每启动一个JVM进程，都会在后台运行一系列的GC（垃圾回收）线程。如果你在上面跟着我用jstack查看信息的话，就可以看到GC的信息。
+
+> 只要JVM实例中尚存在任何一个用户线程没有结束，守护线程就能执行自己的工作；只有当最后一个用户线程结束，守护线程随着JVM一同结束工作。
+
+我们看一下源码，跟守护进程有关的如下：
+
+```java
+/* Whether or not the thread is a daemon thread.实例属性，默认为false */
+private boolean     daemon = false;
+//实例方法，设置当前线程是用户进程还是守护进程
+public final void setDaemon(boolean on) {
+        //代码略
+}
+/**
+ * Tests if this thread is a daemon thread.
+ * 获取状态，判断是不是守护线程
+ * @see     #setDaemon(boolean)
+ */
+public final boolean isDaemon() {
+    return daemon;
+}
+```
+
+我们下面给个例子：
+
+```java
+public class DaemonDemo {
+    static class MyThreadDemo extends Thread{
+        public MyThreadDemo() {
+            super("daemonThread");
+        }
+        @Override
+        public void run() {
+            System.out.println("daemonThread线程开始");
+            //死循环一直跑
+            for (int i = 1; ; i++) {
+                System.out.println("第"+i+"轮");
+                System.out.println("守护状态"+isDaemon());
+                sleepMillSeconds(500);
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        Thread myThreadDemo = new MyThreadDemo();
+        myThreadDemo.setDaemon(true);
+        myThreadDemo.start();
+        Thread userThread = new Thread(()->{
+            for (int i = 0; i < 4; i++) {
+                System.out.println("用户线程第"+i+"轮");
+                System.out.println("用户线程守护状态"+Thread.currentThread().isDaemon());
+                sleepMillSeconds(500);
+            }
+            System.out.println("用户线程结束");
+        });
+        userThread.start();
+        System.out.println("主线程守护状态"+Thread.currentThread().isDaemon());
+        System.out.println("运行结束");
+    }
+    private static void sleepMillSeconds(long mills){
+        try {
+            Thread.sleep(mills);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+输出结果：
+
+~~~
+daemonThread线程开始
+第1轮
+守护状态true
+主线程守护状态false
+运行结束
+用户线程第1轮
+用户线程守护状态false
+第2轮
+守护状态true
+用户线程第2轮
+用户线程守护状态false
+第3轮
+守护状态true
+用户线程结束
+~~~
+
+上面代码执行后，主线程在启动两个线程后就结束了，这时还有个用户线程再跑，当用户线程跑完后，此时没有用户线程了，所以后台进程也结束了。
+
+> - 守护线程必须在启动前将其守护状态设置为true，启动之后不能再将用户线程设置为守护线程，否则JVM会抛出一个InterruptedException异常。
+> - 在守护线程中创建的线程，新的线程都是守护线程。
+> - 守护线程中尽量不去访问系统资源，如文件句柄、数据库连接等
+
+## 1.5 线程池原理
+
+Java线程的创建非常昂贵，需要JVM和OS（操作系统）配合完成大量的工作：
+
+1. 必须为线程堆栈分配和初始化大量内存块，其中包含至少1MB的栈内存。
+2. 需要进行系统调用，以便在OS（操作系统）中创建和注册本地线程。
+
+线程池主要解决了以下两个问题：
+
+1. 提升性能：线程池能独立负责线程的创建、维护和分配。在执行大量异步任务时，可以不需要自己创建线程，而是将任务交给线程池去调度。线程池能尽可能使用空闲的线程去执行异步任务，最大限度地对已经创建的线程进行复用，使得性能提升明显。
+2. 线程管理：每个Java线程池会保持一些基本的线程统计信息，例如完成的任务数量、空闲时间等，以便对线程进行有效管理，使得能对所接收到的异步任务进行高效调度。
+
+> 在主要大厂的编程规范中，不允许在应用中自行显式地创建线程，线程必须通过线程池提供。
+
+### 1.5.1 JUC线程池介绍
+
+在JUC（JUC就是java.util.concurrent工具包的简称）中线程池的大概架构如下：
+
+![image-20220415133016157](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220415133016157.png)
+
+下面介绍一下：
+
+1. Executor
+
+   是Java异步执行目标任务的接口，Executor作为执行者，提供execute方法，目的是将任务提交者和任务执行者分离。
+
+   ```java
+   void execute(Runnable command);
+   ```
+
+2. ExecutorService
+
+   继承于Executor，是Java异步异步执行目标任务的执行者服务接口，对外提供异步任务的接收服务。它提供了接收异步任务转交给执行者的方法，如submit、invokeAll等方法。
+
+3. AbstractExecutorService
+
+   抽象类，实现了ExecutorService接口，为ExecutorService接口提供默认实现。
+
+   > 官方文档：Provides default implementations of ExecutorService execution methods. 
+
+4. ThreadPoolExecutor
+
+   线程池实现类，继承AbstractExecutorService抽象类。ThreadPoolExecutor是JUC线程池的核心实现类。线程的创建和终止需要很大的开销，线程池中预先提供了指定数量的可重用线程，所以使用线程池会节省系统资源，并且每个线程池都维护了一些基础的数据统计，方便线程的管理和监控。
+
+   > 官方文档：An ExecutorService that executes each submitted task using one of possibly several pooled threads, normally configured using Executors factory methods.
+   >
+   > Thread pools address two different problems: they usually provide improved performance when executing large numbers of asynchronous tasks, due to reduced per-task invocation overhead, and they provide a means of bounding and managing the resources, including threads, consumed when executing a collection of tasks. Each ThreadPoolExecutor also maintains some basic statistics, such as the number of completed tasks.
+   > To be useful across a wide range of contexts, this class provides many adjustable parameters and extensibility hooks. 
+
+5. ScheduledExecutorService
+
+   ScheduledExecutorService是一个接口，它继承于ExecutorService。它是一个可以完成“延时”和“周期性”任务的调度线程池接口，其功能和Timer/TimerTask类似。
+
+6. ScheduledThreadPoolExecutor
+
+   继承于ThreadPoolExecutor，它提供了ScheduledExecutorService线程池接口中“延时执行”和“周期执行”等抽象调度方法的具体实现。
+
+   > A ThreadPoolExecutor that can additionally schedule commands to run after a given delay, or to execute periodically. This class is preferable to Timer when multiple worker threads are needed, or when the additional flexibility or capabilities of ThreadPoolExecutor (which this class extends) are required.
+
+7. Executors
+
+   Executors是一个静态工厂类，它通过静态工厂方法返回ExecutorService、ScheduledExecutorService等线程池示例对象，这些静态工厂方法可以理解为一些快捷的创建线程池的方法。
+
+### 1.5.2 Executors中快捷创建线程池的方法
+
+Executors类中提供了快捷创建线程池的方法，我们这里主要介绍四个，因为大部分企业的开发规范都会禁止使用快捷线程池：
+
+1. newSingleThreadExecutor创建“单线程化线程池”
+
+   举个栗子：
+
+   ```java
+   public class ThreadPoolDemo {
+       static class TargetTask implements Runnable{
+           static AtomicInteger integer = new AtomicInteger(1);
+           private String name;
+           public TargetTask() {
+               name = "task-"+integer.get();
+               integer.incrementAndGet();
+           }
+           @Override
+           public void run() {
+               System.out.println(name+"正在执行");
+               sleepMillsSecond(500);
+               System.out.println(name+"运行结束");
+           }
+       }
+       private static void sleepMillsSecond(long mills){
+           try {
+               Thread.sleep(mills);
+           } catch (InterruptedException e) {
+               e.printStackTrace();
+           }
+       }
+       public static void main(String[] args) {
+           ExecutorService service = Executors.newSingleThreadExecutor();
+           for (int i = 0; i < 5; i++) {
+               service.execute(new TargetTask());
+               service.submit(new TargetTask());
+           }
+           sleepMillsSecond(1000);
+           service.shutdown();
+       }
+   }
+   ```
+
+   执行结果：
+
+   ~~~
+   task-1正在执行
+   task-1运行结束
+   task-2正在执行
+   task-2运行结束
+   task-3正在执行
+   task-3运行结束
+   task-4正在执行
+   task-4运行结束
+   task-5正在执行
+   task-5运行结束
+   task-6正在执行
+   task-6运行结束
+   task-7正在执行
+   task-7运行结束
+   task-8正在执行
+   task-8运行结束
+   task-9正在执行
+   task-9运行结束
+   task-10正在执行
+   task-10运行结束
+   ~~~
+
+   我们可以发现该线程池有以下特点：
+
+   （1）单线程化的线程池中的任务是按照提交的次序顺序执行的。
+
+   （2）池中的唯一线程的存活时间是无限的。
+
+   （3）当池中的唯一线程正繁忙时，新提交的任务实例会进入内部的阻塞队列中，并且其阻塞队列是无界的。总体来说，单线程化的线程池所适用的场景是：任务按照提交次序，一个任务一个任务地逐个执行的场景。
+
+2. newFixedThreadPool创建“固定数量的线程池”
+
+   该方法用于创建一个“固定数量的线程池”，其唯一的参数用于设置池中线程的“固定数量”。
+
+   举个栗子，这里的代码与上面基本一致，只修改了主函数，因此这里只展示主函数代码：
+
+   ```java
+   public static void main(String[] args) {
+           //固定大小线程池
+           ExecutorService service = Executors.newFixedThreadPool(3);
+           for (int i = 0; i < 5; i++) {
+               service.execute(new TargetTask());
+               service.submit(new TargetTask());
+           }
+           sleepMillsSecond(1000);
+           service.shutdown();
+       }
+   ```
+
+   执行结果：
+
+   ~~~
+   task-1正在执行
+   task-2正在执行
+   task-3正在执行
+   task-2运行结束
+   task-1运行结束
+   task-3运行结束
+   task-4正在执行
+   task-6正在执行
+   task-5正在执行
+   task-4运行结束
+   task-6运行结束
+   task-7正在执行
+   task-5运行结束
+   task-8正在执行
+   task-9正在执行
+   task-7运行结束
+   task-10正在执行
+   task-8运行结束
+   task-9运行结束
+   task-10运行结束
+   ~~~
+
+   “固定数量的线程池”的特点大致如下：
+
+   （1）如果线程数没有达到“固定数量”，每次提交一个任务线程池内就创建一个新线程，直到线程达到线程池固定的数量。
+
+   （2）线程池的大小一旦达到“固定数量”就会保持不变，如果某个线程因为执行异常而结束，那么线程池会补充一个新线程。
+
+   （3）在接收异步任务的执行目标实例时，如果池中的所有线程均在繁忙状态，新任务会进入阻塞队列中（无界的阻塞队列）。
+
+3. newCachedThreadPool创建“可缓存线程池”
+
+   该方法用于创建一个“可缓存线程池”，如果线程池内的某些线程无事可干成为空闲线程，“可缓存线程池”可灵活回收这些空闲线程。举个栗子，这里同样只展示主函数代码：
+
+   ```java
+   //可缓存的线程池
+   ExecutorService service = Executors.newCachedThreadPool();
+   for (int i = 0; i < 5; i++) {
+       service.execute(new TargetTask());
+       service.submit(new TargetTask());
+   }
+   sleepMillsSecond(1000);
+   service.shutdown();
+   ```
+
+   运行结果：
+
+   ~~~
+   task-1正在执行
+   task-2正在执行
+   task-4正在执行
+   task-3正在执行
+   task-5正在执行
+   task-6正在执行
+   task-8正在执行
+   task-7正在执行
+   task-10正在执行
+   task-9正在执行
+   task-8运行结束
+   task-9运行结束
+   task-2运行结束
+   task-10运行结束
+   task-6运行结束
+   task-5运行结束
+   task-4运行结束
+   task-3运行结束
+   task-1运行结束
+   task-7运行结束
+   ~~~
+
+   此线程池特点：
+
+   （1）在接收新的异步任务target执行目标实例时，如果池内所有线程繁忙，此线程池就会添加新线程来处理任务。
+
+   （2）此线程池不会对线程池大小进行限制，线程池大小完全依赖于操作系统（或者说JVM）能够创建的最大线程大小。
+
+   （3）如果部分线程空闲，也就是存量线程的数量超过了处理任务数量，就会回收空闲（60秒不执行任务）线程。
+
+4. newScheduledThreadPool创建“可调度线程池”
+
+   该方法用于创建一个“可调度线程池”，即一个提供“延时”和“周期性”任务调度功能的ScheduledExecutorService类型的线程池。
+
+asd
+
+
+
+
 
 
 
