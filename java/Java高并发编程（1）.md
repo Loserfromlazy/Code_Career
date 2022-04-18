@@ -941,7 +941,7 @@ Java线程的创建非常昂贵，需要JVM和OS（操作系统）配合完成�
 
    继承于ThreadPoolExecutor，它提供了ScheduledExecutorService线程池接口中“延时执行”和“周期执行”等抽象调度方法的具体实现。
 
-   > A ThreadPoolExecutor that can additionally schedule commands to run after a given delay, or to execute periodically. This class is preferable to Timer when multiple worker threads are needed, or when the additional flexibility or capabilities of ThreadPoolExecutor (which this class extends) are required.
+   > 官方文档：A ThreadPoolExecutor that can additionally schedule commands to run after a given delay, or to execute periodically. This class is preferable to Timer when multiple worker threads are needed, or when the additional flexibility or capabilities of ThreadPoolExecutor (which this class extends) are required.
 
 7. Executors
 
@@ -1125,15 +1125,609 @@ Executors类中提供了快捷创建线程池的方法，我们这里主要介�
 
 4. newScheduledThreadPool创建“可调度线程池”
 
-   该方法用于创建一个“可调度线程池”，即一个提供“延时”和“周期性”任务调度功能的ScheduledExecutorService类型的线程池。
+   该方法用于创建一个“可调度线程池”，即一个提供“延时”和“周期性”任务调度功能的ScheduledExecutorService类型的线程池。举个栗子，这里同样只展示主函数代码：
+   
+   ```java
+   public static void main(String[] args) {
+           ScheduledExecutorService service = Executors.newScheduledThreadPool(2);
+           for (int i = 0; i < 2; i++) {
+               //0是initialDelay，表示首次执行任务的延迟时间，500是period表示每次执行任务的时间间隔
+               service.scheduleAtFixedRate(new TargetTask(),0,500, TimeUnit.MILLISECONDS);
+           }
+           sleepMillsSecond(1000);
+           service.shutdown();
+       }
+   ```
+   
+   执行结果：
+   
+   ~~~
+   task-1正在执行
+   task-2正在执行
+   task-2运行结束
+   task-1运行结束
+   task-2正在执行
+   task-1正在执行
+   task-2运行结束
+   task-1运行结束
+   ~~~
+   
+   ScheduledExecutorService提供了3个方法执行任务，常用的有两个一个是上面例子中的`scheduleAtFixedRate`还有一个是`scheduleWithFixedDelay`，具体参数可以自行查看API文档。
 
-asd
+**PS:尽管Executors的工厂方法使用方便，但是在生产场景中被很多企业（尤其是大厂）的开发规范所禁用。原因如下：**
 
+- 固定大小线程池隐患：
 
+  我们看源码：
 
+  ```java
+  public static ExecutorService newFixedThreadPool(int nThreads) {
+      return new ThreadPoolExecutor(nThreads, nThreads,
+                                    0L, TimeUnit.MILLISECONDS,
+                                    new LinkedBlockingQueue<Runnable>());
+  }
+  ```
 
+  这个快捷线程池使用的是无界队列，如果提交线程的速度大于处理的速度，那么就会出现OOM异常
 
+- 单线程线程池隐患
 
+  源码：
 
+  ```java
+  public static ExecutorService newSingleThreadExecutor() {
+      return new FinalizableDelegatedExecutorService
+          (new ThreadPoolExecutor(1, 1,
+                                  0L, TimeUnit.MILLISECONDS,
+                                  new LinkedBlockingQueue<Runnable>()));
+  }
+  ```
 
+  以上代码首先通过调用工厂方法newFixedThreadPool(1)创建一个数量为1的“固定大小的线程池”，然后使用FinalizableDelegatedExecutorService对该“固定大小的线程池”进行包装，这一层包装的作用是防止线程池的corePoolSize被动态地修改。
 
+  但是这个快捷线程池使用的也是是无界队列，所以会有OOM的风险。
+
+- 可缓存线程池问题
+
+  我们看一下源码：
+
+  ```java
+  public static ExecutorService newCachedThreadPool() {
+      return new ThreadPoolExecutor(0, Integer.MAX_VALUE,
+                                    60L, TimeUnit.SECONDS,
+                                    new SynchronousQueue<Runnable>());
+  }
+  ```
+
+  以上代码通过调用ThreadPoolExecutor标准构造器创建一个核心线程数为0、最大线程数不设限制的线程池。所以，理论上“可缓存线程池”可以拥有无数个工作线程，即线程数量几乎无限制。“可缓存线程池”的workQueue为SynchronousQueue同步队列，这个队列类似于一个接力棒，入队出队必须同时传递，正因为“可缓存线程池”可以无限制地创建线程，不会有任务等待，所以才使用SynchronousQueue。
+
+  此线程池由于没有上限，所以会有OOM问题。
+
+  > SynchronousQueue是一个比较特殊的阻塞队列实现类，SynchronousQueue没有容量，每一个插入操作都要等待对应的删除操作，反之每个删除操作都要等待对应的插入操作。也就是说，如果使用SynchronousQueue，提交的任务不会被真实地保存，而是将新任务交给空闲线程执行，如果没有空闲线程，就创建线程，如果线程数都已经大于最大线程数，就执行拒绝策略。使用这种队列需要将maximumPoolSize设置得非常大，从而使得新任务不会被拒绝。
+
+- 可调度线程池问题
+
+  我们看一下源码：
+  
+  ```java
+  public static ScheduledExecutorService newScheduledThreadPool(int corePoolSize) {
+      return new ScheduledThreadPoolExecutor(corePoolSize);
+  }
+  //-->
+  public ScheduledThreadPoolExecutor(int corePoolSize) {
+          super(corePoolSize, Integer.MAX_VALUE, 0, NANOSECONDS,
+                new DelayedWorkQueue());
+      }
+  ```
+  
+  我们也可以清晰的看到，这里也使用了几乎无限大的线程上限，因此会有OOM问题。
+
+### 1.5.3 标准线程池创建方式
+
+Executors工厂类中创建线程池的快捷工厂方法实际上是调用ThreadPoolExecutor（定时任务使用ScheduledThreadPoolExecutor）线程池的构造方法完成的。最常用的构造器如下（源码jdk8）：
+
+```java
+public ThreadPoolExecutor(int corePoolSize,//核心线程数，线程空闲也不会回收
+                          int maximumPoolSize,//线程数的上限
+                          long keepAliveTime,//最大空闲时长，如果超过这个时间，默认情况下Idle、非Core线程会被回收
+                          TimeUnit unit,
+                          BlockingQueue<Runnable> workQueue,//任务的排队队列，用于暂时接收到的异步任务，如果线程池的核心线程都在忙，那么所接收到的目标任务缓存在阻塞队列中。
+                          ThreadFactory threadFactory,//产生方式
+                          RejectedExecutionHandler handler)//拒绝策略
+```
+
+线程池执行器将会根据corePoolSize和maximumPoolSize自动维护线程池中的工作线程。大致规则为：
+
+- 当前工作线程数少于corePoolSize，创建一个新线程来处理该请求，直到线程数达到corePoolSize
+- 当前工作线程数多于corePoolSize数量，但小于maximumPoolSize数量，仅当任务排队队列已满时才会创建新线程
+
+> 我们下面会介绍这些ThreadPoolExecutord的这些参数的
+
+### 1.5.4 提交任务
+
+源码中共有以下提交任务的方法：
+
+```java
+void execute(Runnable command);
+<T> Future<T> submit(Callable<T> task);
+<T> Future<T> submit(Runnable task, T result);
+Future<?> submit(Runnable task);
+```
+
+- execute()方法只能接收Runnable类型的参数，而submit()方法可以接收Callable、Runnable两种类型的参数。Callable类型的任务是可以返回执行结果的，而Runnable类型的任务不可以返回执行结果。
+- submit()提交任务后会有返回值，而execute()没有
+- submit()方便Exception处理，因为能抛出异常
+
+> ThreadPoolExecutor类的submit()方法本质上还是执行execute()方法，源码如下：
+>
+> ```java
+> public Future<?> submit(Runnable task) {
+>     if (task == null) throw new NullPointerException();
+>     RunnableFuture<Void> ftask = newTaskFor(task, null);
+>     execute(ftask);
+>     return ftask;
+> }
+> ```
+
+### 1.5.5 线程池的任务调度流程
+
+整体流程可以见下面的流程图
+
+<img src="https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/threadPoolcelue20220418.png" alt="threadPoolcelue20220418" style="zoom:50%;" />
+
+在创建线程池时，如果线程池的参数（如核心线程数量、最大线程数量、BlockingQueue等）配置得不合理，就会出现任务不能被正常调度的问题。我们举个错误的例子：
+
+```java
+public static void main(String[] args) {
+    ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(
+            1,
+            100,
+            100,
+            TimeUnit.SECONDS,
+            new ArrayBlockingQueue<Runnable>(50),
+            Executors.defaultThreadFactory(),
+            new ThreadPoolExecutor.AbortPolicy());
+    for (int i = 0; i < 5; i++) {
+        final int taskNo = i;
+        threadPoolExecutor.execute(()->{
+            System.out.println("index="+taskNo);
+            try {
+                //极端测试
+                Thread.sleep(Long.MAX_VALUE);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        });
+    }
+    while (true){
+        System.out.println("activeCount:"+threadPoolExecutor.getActiveCount()+"taskCount:"+threadPoolExecutor.getTaskCount());
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+执行结果：
+
+~~~
+activeCount:1taskCount:5
+index=0
+activeCount:1taskCount:5
+activeCount:1taskCount:5
+activeCount:1taskCount:5
+activeCount:1taskCount:5
+......
+~~~
+
+我们会发现只有1个任务在执行，其他的4个任务都在等待。其他任务被加入到了阻塞队列中，需要等线程执行完第一个任务后，才能依次从阻塞队列取出执行。但是，实例中的第一个任务是一个永远也没有办法完成的任务，所以其他的4个任务只能永远在阻塞队列中等待着。
+
+### 1.5.6 线程工厂
+
+线程工厂主要用于创建线程，线程工厂的接口十分简单，如下：
+
+```java
+public interface ThreadFactory {
+
+    /**
+     * Constructs a new {@code Thread}.  Implementations may also initialize
+     * priority, name, daemon status, {@code ThreadGroup}, etc.
+     *
+     * @param r a runnable to be executed by new thread instance
+     * @return constructed thread, or {@code null} if the request to
+     *         create a thread is rejected
+     */
+    Thread newThread(Runnable r);
+}
+```
+
+在调用ThreadFactory的唯一方法newThread()创建新线程时，可以更改所创建的新线程的名称、线程组、优先级、守护进程状态等。如果newThread()的返回值为null，表示线程工厂未能成功创建线程，线程池可能无法执行任何任务。
+
+如果基于自定义的ThreadFactory实例创建线程池，首先需要实现一个ThreadFactory类，实现其唯一的抽象方法newThread(Runnable)。举例：
+
+```java
+public class ThreadFactoryDemo {
+    static class MyThreadFactory implements ThreadFactory{
+
+        private AtomicInteger threadNo = new AtomicInteger(1);
+        @Override
+        public Thread newThread(Runnable r) {
+            String name ="myThread-"+threadNo.get();
+            System.out.println("create Thread,and its name is "+name);
+            threadNo.incrementAndGet();
+            Thread thread = new Thread(r,name);
+            thread.setDaemon(false);
+            return thread;
+        }
+    }
+
+    public static void main(String[] args) {
+        ExecutorService service = Executors.newFixedThreadPool(1, new MyThreadFactory());
+        service.execute(() ->{
+            System.out.println("running");
+            return;
+        });
+    }
+}
+```
+
+执行结果：
+
+create Thread,and its name is myThread-1
+running
+
+### 1.5.7 任务阻塞队列
+
+Java中的阻塞队列（BlockingQueue）与普通队列相比有一个重要的特点：在阻塞队列为空时会阻塞当前线程的元素获取操作。具体来说，在一个线程从一个空的阻塞队列中获取元素时线程会被阻塞，直到阻塞队列中有了元素；当队列中有元素后，被阻塞的线程会自动被唤醒（唤醒过程不需要用户程序干预）。
+
+Java线程池使用BlockingQueue实例暂时接收到的异步任务，BlockingQueue是JUC包的一个超级接口，比较常用的实现类有：
+
+1. ArrayBlockingQueue：是一个数组实现的有界阻塞队列（有界队列），队列中的元素按FIFO排序。ArrayBlockingQueue在创建时必须设置大小，接收的任务超出corePoolSize数量时，任务被缓存到该阻塞队列中，任务缓存的数量只能为创建时设置的大小，若该阻塞队列已满，则会为新的任务创建线程，直到线程池中的线程总数大于maximumPoolSize。
+2. LinkedBlockingQueue：是一个基于链表实现的阻塞队列，按FIFO排序任务，可以设置容量（有界队列），不设置容量则默认使用Integer.Max_VALUE作为容量（无界队列）。该队列的吞吐量高于ArrayBlockingQueue。如果不设置LinkedBlockingQueue的容量（无界队列），当接收的任务数量超出corePoolSize时，则新任务可以被无限制地缓存到该阻塞队列中，直到资源耗尽。有两个快捷创建线程池的工厂方法Executors.newSingleThreadExecutor和Executors.newFixedThreadPool使用了这个队列，并且都没有设置容量（无界队列）。
+3. PriorityBlockingQueue：是具有优先级的无界队列。
+4. DelayQueue：这是一个无界阻塞延迟队列，底层基于PriorityBlockingQueue实现，队列中每个元素都有过期时间，当从队列获取元素（元素出队）时，只有已经过期的元素才会出队，队列头部的元素是过期最快的元素。快捷工厂方法Executors.newScheduledThreadPool所创建的线程池使用此队列。
+5. SynchronousQueue：（同步队列）是一个不存储元素的阻塞队列，每个插入操作必须等到另一个线程的调用移除操作，否则插入操作一直处于阻塞状态，其吞吐量通常高于LinkedBlockingQueue。快捷工厂方法Executors.newCachedThreadPool所创建的线程池使用此队列。与前面的队列相比，这个队列比较特殊，它不会保存提交的任务，而是直接新建一个线程来执行新来的任务。
+
+类图如下：
+
+![image-20220418152044671](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220418152044671.png)
+
+### 1.5.8 线程池钩子函数
+
+ThreadPoolExecutor线程池调度器为每个任务执行前后都提供了钩子方法。ThreadPoolExecutor类提供了三个钩子方法（空方法），这三个钩子方法一般用作被子类重写，具体如下：
+
+```java
+protected void beforeExecute(Thread t, Runnable r) { }
+protected void afterExecute(Runnable r, Throwable t) { }
+protected void terminated() { }//线程池终止
+```
+
+beforeExecute和afterExecute两个方法在每个任务执行前后被调用，如果钩子（回调方法）引发异常，内部工作线程可能失败并突然终止。
+
+举个钩子函数的例子：
+
+```java
+public class TestHooks {
+    public static void main(String[] args) {
+        ThreadLocal<Long> time =new ThreadLocal<>();
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                2,
+                4,
+                60, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(2),
+                //这里用1.5.6中的线程工厂
+                new ThreadFactoryDemo.MyThreadFactory()){
+            @Override
+            protected void beforeExecute(Thread t, Runnable r) {
+                System.out.println("["+Thread.currentThread().getName()+"]before is running");
+                time.set(System.currentTimeMillis());
+                super.beforeExecute(t, r);
+            }
+
+            @Override
+            protected void afterExecute(Runnable r, Throwable t) {
+                super.afterExecute(r, t);
+                long tempTime = System.currentTimeMillis() - time.get();
+                System.out.println("["+Thread.currentThread().getName()+"]after is running .all time is"+tempTime);
+                time.remove();
+            }
+
+            @Override
+            protected void terminated() {
+                super.terminated();
+                System.out.println("调度器终止");
+            }
+        };
+        for (int i = 0; i < 5; i++) {
+            executor.execute(() -> {
+                try {
+                    Thread.sleep(3000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("["+Thread.currentThread().getName()+"]i am running!");
+            });
+        }
+        try {
+            Thread.sleep(10000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("shutdown pool");
+        executor.shutdown();
+
+    }
+}
+```
+
+~~~
+执行结果：
+create Thread,and its name is myThread-1
+create Thread,and its name is myThread-2
+create Thread,and its name is myThread-3
+[myThread-1]before is running
+[myThread-2]before is running
+[myThread-3]before is running
+[myThread-2]i am running!
+[myThread-1]i am running!
+[myThread-1]after is running .all time is3012
+[myThread-3]i am running!
+[myThread-1]before is running
+[myThread-3]after is running .all time is3012
+[myThread-3]before is running
+[myThread-2]after is running .all time is3012
+[myThread-1]i am running!
+[myThread-1]after is running .all time is3011
+[myThread-3]i am running!
+[myThread-3]after is running .all time is3011
+shutdown pool
+调度器终止
+~~~
+
+我们可以看到，在线程执行之前和之后会调用钩子方法。上面的例子中因为核心线程有两个，队列有两个空位置，且最大线程有4个，因此我们会创建出三个线程来（核心线程塞满，队列塞满，但没超最大线程）。当关闭线程池后执行terminated钩子方法。
+
+### 1.5.9 拒绝策略
+
+在线程池的任务缓存队列为有界队列（有容量限制的队列）的时候，如果队列满了，提交任务到线程池的时候就会被拒绝。总体来说，任务被拒绝有两种情况：
+
+1. 线程池已经被关闭。
+2. 工作队列已满且maximumPoolSize已满。
+
+无论以上哪种情况任务被拒绝，线程池都会调用RejectedExecutionHandler实例的rejectedExecution方法。
+
+RejectedExecutionHandler是拒绝策略的接口，JUC为该接口提供了以下几种实现：
+
+![image-20220418155804778](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220418155804778.png)
+
+- 拒绝策略：使用该策略时，如果线程池队列满了，新任务就会被拒绝，并且抛出RejectedExecutionException异常。该策略是线程池默认的拒绝策略。
+- 抛弃策略 DiscardPolicy：该策略是AbortPolicy的Silent（安静）版本，如果线程池队列满了，新任务就会直接被丢掉，并且不会有任何异常抛出。
+- 抛弃最老任务 DiscardOldestPolicy：抛弃最老任务策略，也就是说如果队列满了，就会将最早进入队列的任务抛弃，从队列中腾出空间，再尝试加入队列。因为队列是队尾进队头出，队头元素是最老的，所以每次都是移除队头元素后再尝试入队。
+- 调用者执行策略。在新任务被添加到线程池时，如果添加失败，那么提交任务线程会自己去执行该任务，不会使用线程池中的线程去执行新任务。
+
+当然，也可以自定义策略，这里给出示例：
+
+```java
+public class MyRejectDemo {
+
+    public static class MyRejectPolicy implements RejectedExecutionHandler {
+
+        @Override
+        public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
+            System.out.println(r + "rejected;"+"getTaskCount:"+executor.getTaskCount());
+        }
+    }
+    public static void main(String[] args) {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(2, 4, 10, 
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<Runnable>(2), 
+                new ThreadFactoryDemo.MyThreadFactory(), //这里用1.5.6中的线程工厂
+                new MyRejectPolicy());
+        //预启动核心线程
+        executor.prestartAllCoreThreads();
+        for (int i = 0; i < 10; i++) {
+            executor.execute(()->{
+                try {
+                    Thread.sleep(3000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("["+Thread.currentThread().getName()+"]i am running!");
+            });
+        }
+        try {
+            Thread.sleep(10000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("关闭线程池");
+        executor.shutdown();
+    }
+}
+```
+
+执行结果：
+
+~~~
+create Thread,and its name is myThread-1
+create Thread,and its name is myThread-2
+create Thread,and its name is myThread-3
+create Thread,and its name is myThread-4
+com.learn.testnginx.threadpool.MyRejectDemo$$Lambda$1/1867750575@4783da3frejected;getTaskCount:6
+com.learn.testnginx.threadpool.MyRejectDemo$$Lambda$1/1867750575@4783da3frejected;getTaskCount:6
+com.learn.testnginx.threadpool.MyRejectDemo$$Lambda$1/1867750575@4783da3frejected;getTaskCount:6
+com.learn.testnginx.threadpool.MyRejectDemo$$Lambda$1/1867750575@4783da3frejected;getTaskCount:6
+[myThread-2]i am running!
+[myThread-4]i am running!
+[myThread-3]i am running!
+[myThread-1]i am running!
+[myThread-2]i am running!
+[myThread-4]i am running!
+关闭线程池
+~~~
+
+我们可以看到最后拒绝了四个，执行了六个。因为最大线程4个加队列中两个一共六个，最后四个就会被拒绝。而且拒绝也是执行我们自己的拒绝策略。
+
+### 1.5.10 线程池的状态和优雅关闭
+
+我们可以先看一下线程池的状态，如下：
+
+```java
+// runState is stored in the high-order bits
+//线程池创建后的初始状态，这种状态下可以执行任务
+private static final int RUNNING    = -1 << COUNT_BITS;
+//该状态下线程池不再接受新任务，但是会将工作队列中的任务执行完毕。
+private static final int SHUTDOWN   =  0 << COUNT_BITS;
+//该状态下线程池不再接受新任务，也不会处理工作队列中的剩余任务，并且将会中断所有工作线程。
+private static final int STOP       =  1 << COUNT_BITS;
+//该状态下所有任务都已终止或者处理完成，将会执行terminated()钩子方法。
+private static final int TIDYING    =  2 << COUNT_BITS;
+//执行完terminated()钩子方法之后的状态。
+private static final int TERMINATED =  3 << COUNT_BITS;
+```
+
+线程池状态转换如下：
+
+![threadpoolStatus20220418](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/threadpoolStatus20220418.png)
+
+优雅地关闭线程池主要涉及的方法有3个：
+
+1. shutdown：源码如下：
+
+   ```java
+   //启动有序关闭，在此过程中执行之前提交的任务，但不接受新任务。调用如果已经关闭，则没有其他效果。
+   //此方法不等待以前提交的任务完成执行。使用awaitTermination来完成。
+   public void shutdown() {
+       final ReentrantLock mainLock = this.mainLock;
+       mainLock.lock();
+       try {
+           //检查状态
+           checkShutdownAccess();
+           //修改状态
+           advanceRunState(SHUTDOWN);
+           //中断空闲线程
+           interruptIdleWorkers();
+           onShutdown(); // hook for ScheduledThreadPoolExecutor
+       } finally {
+           mainLock.unlock();
+       }
+       tryTerminate();
+   }
+   ```
+
+2. shutdownNow
+
+   源码：
+
+   ```java
+   /*尝试停止所有正在执行的任务，停止等待任务的处理，并返回等待执行的任务列表。从该方法返回时，这些任务将从任务队列中抽干(删除)。
+   此方法不等待主动执行的任务终止。使用awaitTermination来完成。
+   除了尽最大努力停止处理正在积极执行的任务外，没有任何保证。这个实现通过Thread.interrupt来取消任务，因此任何无法响应中断的任务都可能永远不会终止。*/
+   public List<Runnable> shutdownNow() {
+       List<Runnable> tasks;
+       final ReentrantLock mainLock = this.mainLock;
+       mainLock.lock();
+       try {
+           //检查状态
+           checkShutdownAccess();
+           //修改状态
+           advanceRunState(STOP);
+           //中断所有线程
+           interruptWorkers();
+           //丢弃队列中剩余任务
+           tasks = drainQueue();
+       } finally {
+           mainLock.unlock();
+       }
+       tryTerminate();
+       return tasks;
+   }
+   ```
+
+3. awaitTermination
+
+   调用了线程池的shutdown()与shutdownNow()方法之后，用户程序都不会主动等待线程池关闭完成，如果需要等待线程池关闭完成，需要调用awaitTermination()进行主动等待。
+
+   此方法源码如下：
+
+   ```java
+   public boolean awaitTermination(long timeout, TimeUnit unit)
+       throws InterruptedException {
+       long nanos = unit.toNanos(timeout);
+       final ReentrantLock mainLock = this.mainLock;
+       mainLock.lock();
+       try {
+       //等待
+           for (;;) {
+           //如果线程池完成关闭，awaitTermination()方法将会返回true，
+           //否则当等待时间超过指定时间后将会返回false。
+               if (runStateAtLeast(ctl.get(), TERMINATED))
+                   return true;
+               if (nanos <= 0)
+                   return false;
+               nanos = termination.awaitNanos(nanos);
+           }
+       } finally {
+           mainLock.unlock();
+       }
+   }
+   ```
+
+我们在关闭线程池时可以遵循以下步骤：
+
+1. 执行shutdown()方法，拒绝新任务的提交，并等待所有任务有序地执行完毕。
+2. 执行awaitTermination方法，指定超时时间，判断是否已经关闭所有任务，线程池关闭完成。
+3. 如果awaitTermination()方法返回false，或者被中断，就调用shutDownNow()方法立即关闭线程池所有任务。
+4. 补充执行awaitTermination方法，判断线程池是否关闭完成。如果超时，就可以进入循环关闭，循环一定的次数（如1000次），不断关闭线程池，直到其关闭或者循环结束。
+
+给出例子：
+
+```java
+public class ShutdownPoolDemo {
+    public static void shutdownThreadPoolGracefully(ExecutorService pool) {
+        //已经关闭返回
+        if (pool.isTerminated()||!(pool instanceof ExecutorService)){
+            return;
+        }
+        try{
+            pool.shutdown();
+        }catch (SecurityException | NullPointerException e){
+            return;
+        }
+        //等待关闭
+        try {
+            if (!pool.awaitTermination(60, TimeUnit.SECONDS)){
+                pool.shutdownNow();
+            }
+            if (!pool.awaitTermination(60, TimeUnit.SECONDS)){
+                System.err.println("线程池任务为正常执行结束");
+            }
+        } catch (InterruptedException e) {
+            pool.shutdownNow();
+        }
+        //还没关闭，循环关闭1000次
+        try {
+            for (int i = 0; i < 1000; i++) {
+                if (pool.awaitTermination(10, TimeUnit.MILLISECONDS)) {
+                    break;
+                }
+                pool.shutdownNow();
+            }
+        } catch (Throwable e){
+            System.err.println(e.getMessage());
+        }
+
+    }
+}
+```
+
+## 1.6 确定线程池的线程数
+
+使用标准构造器ThreadPoolExecutor创建线程池时，会涉及线程数的配置，而线程数的配置与异步任务类型是分不开的。这里将线程池的异步任务大致分为以下三类：
+
+1. IO密集型任务。此类任务主要是执行IO操作。由于执行IO操作的时间较长，导致CPU的利用率不高，这类任务CPU常处于空闲状态。Netty的IO读写操作为此类任务的典型例子。
+2. CPU密集型任务。此类任务主要是执行计算任务。由于响应时间很快，CPU一直在运行，这种任务CPU的利用率很高。
+3. 混合型任务。此类任务既要执行逻辑计算，又要进行IO操作（如RPC调用、数据库访问）。相对来说，由于执行IO操作的耗时较长（一次网络往返往往在数百毫秒级别），这类任务的CPU利用率也不是太高。Web服务器的HTTP请求处理操作为此类任务的典型例子。
+
+## 1.7 ThreadLocal

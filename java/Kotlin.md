@@ -73,7 +73,7 @@ a was 1, but now is 2
 
 ### 2.3 NULL检查
 
-Kotlin的空安全设计对于声明可为空的参数，在使用时要进行空判断处理，有两种处理方式，字段后加!!像Java一样抛出空异常，另一种字段后加?可不做处理返回值为 **null** 或配合 **?:** 做空判断处理。
+Kotlin的空安全设计对于声明可为空的参数，在使用时要进行空判断处理，有两种处理方式，字段后加!!像Java一样抛出空异常，另一种字段后加?可不做处理返回值为 **null** 或配合 **?:** 或**?.**做空判断处理。
 
 举个栗子，下面代码可以自行上机测试体会判空机制。
 
@@ -92,6 +92,36 @@ println(ages)
 println(ages1)
 println(ages2)
 ```
+
+以上代码中变量后加`?`表示这个变量可以为空。如果一个变量后面加`!!`就表示我不需要编译器做检查，我确信这个一定不为空，如果为空你就直接抛出空指针就可以。
+
+**Kotlin中的辅助判空工具**
+
+当然如果你允许一个变量为空了，那么就需要进行判空，一般我们可以这样：
+
+~~~kotlin
+if( a != null){
+    a.doSomething()
+}
+~~~
+
+在kotlin中我们可以用`?.`代替，即：
+
+~~~kotlin
+a?.doSomething()
+~~~
+
+在kotlin中还提供了`?:`的机制类似于三元表达式，举例：
+
+~~~kotlin
+val c = if(a!=null){
+    a
+}else{
+    b
+}
+//kotlin简化
+val c = a?:b
+~~~
 
 ### 2.4 默认导入
 
@@ -144,6 +174,21 @@ fun getStringLength(obj: Any): Int? {
   return null
 }
 ```
+
+### 2.7 函数的参数默认值
+
+次构造函数在Kotlin中很少用，因为Kotlin提供了给函数设定参数默认值的功能，它在很大程度上能够替代次构造函数的作用。举个栗子：
+
+~~~kotlin
+fun printParams(num:Int =20 ,str:String="Hello"){
+    println("num is $num,str is $str")
+}
+
+fun main(){
+    //调用函数时可以通过键值对指定传入的参数
+   printParams(str = "123")
+}
+~~~
 
 ## 三、数据类型
 
@@ -277,6 +322,136 @@ fun maxNumbersSimpleMore(num1:Int,num2:Int) = max(num1,num2)
 ~~~
 
 如果只有一行代码可以省略成maxNumbersSimple函数的样子，而用等号连接了max函数，因此kotlin可以推断maxNumbers函数的返回值，因此又可以省略返回值，最终简化为maxNumbersSimpleMore的形式。
+
+### 4.4 标准函数
+
+Kotlin的标准函数指的是Standard.kt文件中定义的函数，任何Kotlin代码都可以自由地调用所有的标准函数。
+
+#### 4.4.1 let
+
+let既不是操作符，也不是什么关键字，而是一个函数。这个函数提供了函数式API的编程接口，并将原始调用对象作为参数传递到Lambda表达式中。举例：
+
+~~~kotlin
+obj.let{ obj1->
+    //业务逻辑
+}
+~~~
+
+这里的obj1其实就是obj，这样是为了防止重名。
+
+let函数的特性配合?.操作符可以在空指针检查的时候起到很大的作用。这里举例：
+
+```kotlin
+class TestKotlin {
+    fun doThing1(){
+        println("1111")
+    }
+    fun doThing2(){
+        println("2222")
+    }
+}
+
+fun main(){
+    var testKotlin : TestKotlin? = null;
+    doSomething(testKotlin)
+}
+
+fun doSomething(testKotlin:TestKotlin?){
+    //如果我们只用?.判空那么每次调用对象都需要判空，如下：
+    testKotlin?.doThing1()
+    testKotlin?.doThing2()
+    //因此我们可以用let函数统一判空，
+    testKotlin?.let {
+        //lambda中如果只有一个变量可以用it代替
+        it.doThing1()
+        it.doThing2()
+    }
+}
+```
+
+#### 4.4.2 with
+
+with函数接收两个参数：第一个参数可以是一个任意类型的对象，第二个参数是一个Lambda表达式。with函数会在Lambda表达式中提供第一个参数对象的上下文，并使用Lambda表达式中的最后一行代码作为返回值返回。
+
+~~~kotlin
+val result = with(obj){
+	//obj上下文
+	"value" //with函数返回值
+}
+~~~
+
+举例：
+
+```kotlin
+fun eatFruit(){
+    val list = listOf<String>("Apple","Banana","Pear","Orange")
+//    val builder = StringBuilder()
+//    builder.append("Start eating \n")
+//    for (fruit in list) {
+//        builder.append(fruit).append("\n")
+//    }
+//    builder.append("finish \n")
+//    println(builder.toString())
+    //with 改造
+    val result = with(StringBuilder()){
+        append("Start eating \n")
+        for (fruit in list) {
+            append(fruit).append("\n")
+        }
+        append("finish \n")
+        toString()
+    }
+    println(result)
+}
+```
+
+#### 4.4.3 run
+
+run函数。run函数的用法和使用场景其实和with函数是非常类似的，只是稍微做了一些语法改动而已。首先run函数通常不会直接调用，而是要在某个对象的基础上调用；其次run函数只接收一个Lambda参数，并且会在Lambda表达式中提供调用对象的上下文。其他方面和with函数是一样的，包括也会使用Lambda表达式中的最后一行代码作为返回值返回。语法：
+
+~~~kotlin
+val result = obj.run{
+	//obj上下文
+	"value" //run函数返回值
+}
+~~~
+
+我们还是以with函数中的吃水果举例：
+
+```kotlin
+fun eatFruit(){
+    val list = listOf<String>("Apple","Banana","Pear","Orange")
+    val result = StringBuilder().run {
+        append("Start eating \n")
+        for (fruit in list) {
+            append(fruit).append("\n")
+        }
+        append("finish \n")
+        toString()
+    }
+    println(result)
+}
+```
+
+#### 4.4.4 apply
+
+apply函数和run函数也是极其类似的，都要在某个对象上调用，并且只接收一个Lambda参数，也会在Lambda表达式中提供调用对象的上下文，但是apply函数无法指定返回值，而是会自动返回调用对象本身。
+
+~~~kotlin
+fun eatFruit(){
+    val list = listOf<String>("Apple","Banana","Pear","Orange")
+    val result = StringBuilder().apply {
+        append("Start eating \n")
+        for (fruit in list) {
+            append(fruit).append("\n")
+        }
+        append("finish \n")
+    }
+    println(result.toString())
+}
+~~~
+
+
 
 ## 五、程序的逻辑控制
 
@@ -872,3 +1047,62 @@ Thread(){ println("111") }.start()
 //再简化
 Thread({ println("111") }.start()
 ```
+
+### 6.7  静态方法
+
+在Java中定义静态方法如下：
+
+~~~java
+public class Util{
+    public static void adSomething(){
+        System.out.pringln("doSomething")
+    }
+}
+~~~
+
+但是和绝大多数主流编程语言不同的是，Kotlin却极度弱化了静态方法这个概念，想要在Kotlin中定义一个静态方法反倒不是一件容易的事。在Kotlin中可以做到类似Java的效果，如下：
+
+```kotlin
+//使用单例类即可实现上面工具类的这种方式
+object Util{
+    fun doSomething(){
+        println("doSomething")
+    }
+}
+//或者 只是希望让类中的某一个方法变成静态方法的调用方式，如下
+class Util1{
+    fun doSomething(){
+        println("doSomething")
+    }
+    companion object {
+        fun doSomething1(){
+            println("doSomething1")
+        }
+    }
+}
+```
+
+如果你确确实实需要定义真正的静态方法， Kotlin仍然提供了两种实现方式：注解和顶层方法。
+
+注解就是这样：
+
+~~~kotlin
+class Util1{
+    fun doSomething(){
+        println("doSomething")
+    }
+    @JvmStatic
+    companion object {
+        fun doSomething1(){
+            println("doSomething1")
+        }
+    }
+}
+~~~
+
+想要定义一个顶层方法，首先需要创建一个Kotlin文件。对着任意包名右击 → New → KotlinFile/Class，在弹出的对话框中输入文件名即可。注意创建类型要选择File。
+
+如果是在Kotlin代码中调用的话，那就很简单了，所有的顶层方法都可以在任何位置被直接调用，不用管包名路径，也不用创建实例，直接键入方法即可如：doSomething()
+
+但如果是在Java代码中调用，你会发现是找不到doSomething()这个方法的，因为Java中没有顶层方法这个概念，所有的方法必须定义在类中。那么这个doSomething()方法被藏在了哪里呢？比如创建的Kotlin文件名叫作Util.kt，于是Kotlin编译器会自动创建一个叫作Util的Java类，doSomething()方法就是以静态方法的形式定义在Util类里面的，因此在Java中使用Util.doSomething()的写法来调用就可以了。
+

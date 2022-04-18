@@ -2093,6 +2093,38 @@ r">
 
 在 Spring 的配置类上添加 @EnableTransactionManagement 注解即可
 
+### 5.2.4 声明式事务注意事项
+
+**注意点1：**@Transactional注解，常见的事务不生效的场景为：
+
+- @Transactional 应用在非 public 修饰的方法上
+- @Transactional 注解属性 propagation 设置错误
+- @Transactional 注解属性 rollbackFor 设置错误
+- 同一个类中方法调用，导致@Transactional失效
+- 异常被catch捕获导致@Transactional失效
+
+**注意点2：**@Transactional注解有时会有长事务的问题，根本原因就是事务的控制粒度过大导致的，因此可以通过拆分方法或者手动控制事务（手动控制事务就是使用编程式事务，在spring项目中可以使用`TransactionTemplate`类的对象，手动控制事务）
+
+**注意点3：**拆分方法的注意事项：因为同一个类中方法调用，导致@Transactional失效，所以拆分方法是可以采用以下两种方法：
+
+1. 将方法放入另一个类，如新增 `manager层`，通过spring注入，这样符合了在对象之间调用的条件。举例：
+
+   ~~~java
+    @Autowired
+      private OrderManager orderManager;
+   
+       public void createOrder(OrderCreateDTO createDTO){
+          //通过增加manager层控制事务粒度
+           orderManager.saveData(createDTO);
+       }
+   ~~~
+
+2. 启动类添加`@EnableAspectJAutoProxy(exposeProxy = true)`，方法内使用`AopContext.currentProxy()`获得代理类，使用事务。举例：
+
+   ~~~java
+   OrderService orderService = (OrderService)AopContext.currentProxy();
+   ~~~
+
 # 六、Spring源码
 
 ## 6.1 源码构建
