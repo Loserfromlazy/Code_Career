@@ -4,9 +4,9 @@
 
 > 参考资料：Java高并发核心编程卷2尼恩编著、以及菜鸟等互联网资源
 >
-> 本文主要是对Java高并发核心编程卷2一书中的知识的学习整理，由于原书很长所以分篇章来进行学习整理，本文是第一部分多线程篇。
+> 本文主要是对Java高并发核心编程卷2一书中的知识的学习整理以及对不懂的地方进行补充学习记录，由于原书很长所以分篇章来进行学习整理，本文是第一部分多线程篇。
 >
-> 此笔记中的例子全部是本人上机操作后的代码。部分源码不会全部展示，请自行去查阅源代码。
+> 此笔记中的例子全部是本人上机操作后的代码。部分jdk源码不会全部展示，请自行去查阅源代码或[JavaAPI文档](https://docs.oracle.com/javase/8/docs/api/)
 >
 > 此笔记中的图片非特殊标注全部是自己根据理解手画的，请勿盗图。
 
@@ -1722,9 +1722,13 @@ public class ShutdownPoolDemo {
 }
 ```
 
-当然，我们也可以使用JVM注解来关闭线程池。
+当然，我们也可以使用JVM钩子函数来关闭线程池。
 
-
+```java
+static {
+    Runtime.getRuntime().addShutdownHook(new Thread(()-> shutdownThreadPoolGracefully(EXECUTOR)));
+}
+```
 
 ## 1.6 线程池的线程数参考
 
@@ -1734,4 +1738,250 @@ public class ShutdownPoolDemo {
 2. CPU密集型任务。此类任务主要是执行计算任务。由于响应时间很快，CPU一直在运行，这种任务CPU的利用率很高。
 3. 混合型任务。此类任务既要执行逻辑计算，又要进行IO操作（如RPC调用、数据库访问）。相对来说，由于执行IO操作的耗时较长（一次网络往返往往在数百毫秒级别），这类任务的CPU利用率也不是太高。Web服务器的HTTP请求处理操作为此类任务的典型例子。
 
+### 1.6.1 IO密集型示例
+
+由于IO密集型任务的CPU使用率较低，导致线程空余时间很多，因此通常需要开CPU核心数两倍的线程。当IO线程空闲时，可以启用其他线程继续使用CPU，以提高CPU的使用率。
+
+```java
+public class IOThreadUtil {
+    /**
+     * CPU核数
+     */
+    private static final int CPU_COUNT = Runtime.getRuntime().availableProcessors();
+    /**
+     * IO处理线程数
+     * corePoolSize和maximumPoolSize保持一致，使得在接收到新任务时，如果没有空闲工作线程，就优先创建新的线程去执行新任务，
+     * 而不是优先加入阻塞队列，等待现有工作线程空闲后再执行。
+     */
+    private static final int IO_MAX = Math.max(2,CPU_COUNT*2);
+    /**
+     * 保活时长:秒
+     */
+    private static final int KEEP_ALIVE_SECONDS = 30;
+    /**
+     * 有界队列size
+     */
+    private static final int QUEUE_SIZE = 128;
+
+    private static class IoIntenseTargetThreadPoolLazyHolder{
+        private static final ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(
+                IO_MAX,
+                IO_MAX,
+                KEEP_ALIVE_SECONDS,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(QUEUE_SIZE),
+                new MyThreadFactory("io")
+        );
+        static {
+            //keepAliveTime参数所设置的Idle超时策略也将被应用于核心线程，当池中的线程长时间空闲时，可以自行销毁。
+            EXECUTOR.allowCoreThreadTimeOut(true);
+            Runtime.getRuntime().addShutdownHook(new Thread(()-> shutdownThreadPoolGracefully(EXECUTOR)));
+        }
+
+    }
+
+    private IOThreadUtil() {
+    }
+    //懒汉式单例模式
+    public static ThreadPoolExecutor getExecutor(){
+        return IoIntenseTargetThreadPoolLazyHolder.EXECUTOR;
+    }
+
+    static class MyThreadFactory implements ThreadFactory {
+        private final String name;
+        public MyThreadFactory(String name) {
+            this.name = name;
+        }
+        private final AtomicInteger threadNo = new AtomicInteger(1);
+        @Override
+        public Thread newThread(Runnable r) {
+            System.out.println("create Thread,and its name is "+name+threadNo);
+            Thread thread = new Thread(r,name+threadNo);
+            threadNo.incrementAndGet();
+            thread.setDaemon(false);
+            return thread;
+        }
+    }
+
+    /**
+     * 测试类
+     */
+    public static void main(String[] args) {
+        ThreadPoolExecutor executor = IOThreadUtil.getExecutor();
+    }
+
+}
+```
+
+### 1.6.2 CPU密集型示例
+
+CPU密集型任务也叫计算密集型任务，其特点是要进行大量计算而需要消耗CPU资源，比如计算圆周率、对视频进行高清解码等。CPU密集型任务虽然也可以并行完成，但是并行的任务越多，花在任务切换的时间就越多，CPU执行任务的效率就越低，所以要最高效地利用CPU，CPU密集型任务并行执行的数量应当等于CPU的核心数。其余代码与上面一致，这里仅给出核心代码：
+
+```java
+/**
+ * CPU密集型任务处理线程数
+ */
+private static final int CPU_TASK_MAX = CPU_COUNT;
+private static class CPUIntenseTargetThreadPoolLazyHolder{
+    private static final ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(
+            CPU_TASK_MAX,
+            CPU_TASK_MAX,
+            KEEP_ALIVE_SECONDS,
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(QUEUE_SIZE),
+            new MyThreadFactory("cpu")
+    );
+    static {
+        //keepAliveTime参数所设置的Idle超时策略也将被应用于核心线程，当池中的线程长时间空闲时，可以自行销毁。
+        EXECUTOR.allowCoreThreadTimeOut(true);
+        Runtime.getRuntime().addShutdownHook(new Thread(()-> shutdownThreadPoolGracefully(EXECUTOR)));
+    }
+
+}
+```
+
+### 1.6.3 混合型任务示例
+
+混合型任务既要执行逻辑计算，又要进行大量非CPU耗时操作（如RPC调用、数据库访问、网络通信等），所以**混合型任务CPU的利用率不是太高，非CPU耗时往往是CPU耗时的数倍**。比如在Web应用中处理HTTP请求时，一次请求处理会包括DB操作、RPC操作、缓存操作等多种耗时操作。一般来说，一次Web请求的CPU计算耗时往往较少，大致在100～500毫秒，而其他耗时操作会占用500～1000毫秒，甚至更多的时间。在为混合型任务创建线程池时，如何确定线程数呢？业界有一个比较成熟的估算公式（当然公式的估算结果仅仅是理论最佳值，在生产环境中的使用也仅供参考。生产环境需要结合系统网络环境和硬件情况（CPU、内存、硬盘读写速度）不断尝试，获取一个符合实际的线程数值。），具体如下：
+
+> 最佳线程数 = （（线程等待时间 + 线程CPU时间）/线程CPU时间）*CPU核数
+
+**等待时间所占的比例越高，需要的线程就越多；CPU耗时所占的比例越高，需要的线程就越少。**下面举一个例子：比如在Web服务器处理HTTP请求时，假设平均线程CPU运行时间为100毫秒，而线程等待时间（比如包括DB操作、RPC操作、缓存操作等）为900毫秒，如果CPU核数为8，那么根据上面这个公式，估算如下：
+
+> (900ms+100ms)/100ms *8 = 80
+
+这里同样只给出核心代码：
+
+```java
+private static final int MIXED_MAX = 128;
+//可以替换为配置文件等
+private static final String MIXED_THREAD_AMOUNT = "mixed.thread.amount";
+
+private static class MixedIntenseTargetThreadPoolLazyHolder{
+    private static final int max = (System.getProperty(MIXED_THREAD_AMOUNT)!= null)
+            ? Integer.parseInt(System.getProperty(MIXED_THREAD_AMOUNT))
+            :MIXED_MAX;
+    private static final ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(
+            max,
+            max,
+            KEEP_ALIVE_SECONDS,
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(QUEUE_SIZE),
+            new MyThreadFactory("mixed")
+    );
+    static {
+        //keepAliveTime参数所设置的Idle超时策略也将被应用于核心线程，当池中的线程长时间空闲时，可以自行销毁。
+        EXECUTOR.allowCoreThreadTimeOut(true);
+        Runtime.getRuntime().addShutdownHook(new Thread(()-> shutdownThreadPoolGracefully(EXECUTOR)));
+    }
+}
+ /**
+  * 测试类
+  */
+public static void main(String[] args) {
+    System.setProperty("mixed.thread.amount", String.valueOf(80));
+    ThreadPoolExecutor executor = IOThreadUtil.getExecutor();
+    System.out.println("size"+executor.getCorePoolSize());
+    for (int i = 0; i < 100; i++) {
+        try {
+            Thread.sleep(10000);
+            executor.execute(()->{
+                try {
+                    System.out.println("["+Thread.currentThread().getName()+"] is running");
+                    Thread.sleep(3000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            });
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+    try {
+        Thread.sleep(10000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+    System.out.println("关闭线程池");
+}
+```
+
 ## 1.7 ThreadLocal
+
+### 1.7.1 基本使用
+
+ThreadLocal位于JDK的java.lang核心包中。如果程序创建了一个ThreadLocal实例，那么在访问这个变量的值时，每个线程都会拥有一个独立的、自己的本地值。“线程本地变量”可以看成专属于线程的变量，不受其他线程干扰，保存着线程的专属数据。当线程结束后，每个线程所拥有的那个本地值会被释放。在多线程并发操作“线程本地变量”的时候，线程各自操作的是自己的本地值，从而规避了线程安全问题。
+
+> 这个ThreadLocal可以看作是一个Map,key存放线程示例，value存放线程本地变量。
+
+ThreadLocal常用有三个方法操作本地变量：
+
+~~~java
+public T get(){//略}
+public void set(T value){//略}
+public void remove(){//略}
+~~~
+
+这里给出一个ThreadLocal的使用示例：
+
+```java
+public class TestLocal {
+
+    @Data
+    static class MyPojo{
+        static final AtomicInteger AMOUNT = new AtomicInteger(0);
+        int index = 0;
+        int bar =10;
+
+        public MyPojo() {
+            //总数增加并给对象编号
+            index = AMOUNT.incrementAndGet();
+        }
+    }
+    private static final ThreadLocal<MyPojo> LOCAL_MYPOJO = new ThreadLocal<>();
+
+    public static void main(String[] args) {
+        //获取自定义混合型线程池
+        ThreadPoolExecutor executor = IOThreadUtil.getExecutor();
+        for (int i = 0; i < 5; i++) {
+            executor.execute(() -> {
+                //设置当前线程绑定的值
+                if (LOCAL_MYPOJO.get()==null){
+                    LOCAL_MYPOJO.set(new MyPojo());
+                }
+                System.out.println("初始本地值"+LOCAL_MYPOJO.get());
+                for (int j = 0; j < 10; j++) {
+                    MyPojo myPojo = LOCAL_MYPOJO.get();
+                    myPojo.setBar(myPojo.getBar()+1);
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                System.out.println("累加10次后的本地值"+LOCAL_MYPOJO.get());
+                //删除当前线程绑定的值，对线程池中的线程很重要
+                LOCAL_MYPOJO.remove();
+            });
+        }
+    }
+}
+```
+
+执行结果略，本质上是了解ThreadLocal的使用方式，可以自行跑一下上面的代码。
+
+### 1.7.2 使用场景
+
+ThreadLocal是解决线程安全问题的一个较好的方案，它通过为每个线程提供一个独立的本地值去解决并发访问的冲突问题。ThreadLocal的使用场景大致可以分为两类：
+
+1. 线程隔离，ThreadLocal中的数据只属于当前线程，其本地值对别的线程是不可见的，在多线程环境下，可以防止自己的变量被其他线程篡改。另外，由于各个线程之间的数据相互隔离，避免了同步加锁带来的性能损失，大大提升了并发性的性能。ThreadLocal在线程隔离的常用案例为：可以为每个线程绑定一个用户会话信息、数据库连接、HTTP请求等，这样一个线程所有调用到的处理函数都可以非常方便地访问这些资源。常见的ThreadLocal使用场景为数据库连接独享、Session数据管理等。在“线程隔离”场景中，使用ThreadLocal的典型案例为：可以为每个线程绑定一个数据库连接，使得这个数据库连接为线程所独享，从而避免数据库连接被混用而导致操作异常问题。
+2. 跨函数传递数据。通常用于同一个线程内，跨类、跨方法传递数据时，如果不用ThreadLocal，那么相互之间的数据传递势必要靠返回值和参数，这样无形之中增加了这些类或者方法之间的耦合度。由于ThreadLocal的特性，同一线程在某些地方进行设置，在随后的任意地方都可以获取到。线程执行过程中所执行到的函数都能读写ThreadLocal变量的线程本地值，从而可以方便地实现跨函数的数据传递。在“跨函数传递数据”场景中使用ThreadLocal的典型案例为：可以为每个线程绑定一个Session（用户会话）信息，这样一个线程所有调用到的代码都可以非常方便地访问这个本地会话，而不需要通过参数传递。
+
+下面对以上场景进行举例：
+
+
+
+
+
+
+
