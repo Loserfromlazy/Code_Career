@@ -4,13 +4,19 @@
 
 > 参考资料：Java高并发核心编程卷2尼恩编著、以及菜鸟等互联网资源
 >
-> 本文主要是对Java高并发核心编程卷2一书中的知识的学习整理以及对不懂的地方进行补充学习记录，由于原书很长所以分篇章来进行学习整理，本文是第一部分多线程篇。
+> 本文主要是对尼恩大佬的Java高并发核心编程卷2一书中的知识的学习记录以及对不懂的地方进行补充学习记录。
 >
-> 此笔记中的例子全部是本人上机操作后的代码。部分jdk源码不会全部展示，请自行去查阅源代码或[JavaAPI文档](https://docs.oracle.com/javase/8/docs/api/)
+> **本文并不是对原书的照搬，而是对原书学习理解后重新编写代码并记录整理笔记和自己的理解，本文不会发博客，只会存在本人的Github的[Code_Career项目](https://github.com/Loserfromlazy/Code_Career)中**
 >
-> 此笔记中的图片非特殊标注全部是自己根据理解手画的，请勿盗图。
+> 由于原书很长所以分篇章来进行学习整理，本文是第一部分多线程篇。
+>
+> 此笔记中的例子全部是本人上机编写运行后的代码非原书中的代码例子。
+>
+> 此笔记中的图片非特殊标注全部是自己根据理解手画的或者是截图后二次编写的，请勿盗图。
+>
+> 部分jdk源码不会全部展示，请自行去查阅源代码或[JavaAPI文档](https://docs.oracle.com/javase/8/docs/api/)
 
-# 一、Java多线程原理与基本操作
+本文主要是Java多线程原理与基本操作相关的知识
 
 ## 1.1 线程和进程简介
 
@@ -1912,7 +1918,9 @@ public static void main(String[] args) {
 
 ThreadLocal位于JDK的java.lang核心包中。如果程序创建了一个ThreadLocal实例，那么在访问这个变量的值时，每个线程都会拥有一个独立的、自己的本地值。“线程本地变量”可以看成专属于线程的变量，不受其他线程干扰，保存着线程的专属数据。当线程结束后，每个线程所拥有的那个本地值会被释放。在多线程并发操作“线程本地变量”的时候，线程各自操作的是自己的本地值，从而规避了线程安全问题。
 
-> 这个ThreadLocal可以看作是一个Map,key存放线程示例，value存放线程本地变量。
+> 这个ThreadLocal可以看作是一个Map,key存放线程实例，value存放线程本地变量。“线程本地变量”中绑定的值为Value（本地值）。早期版本中的Map结构，其拥有者为ThreadLocal，每一个ThreadLocal实例拥有一个Map实例。
+>
+> 在JDK 8版本中，ThreadLocal的内部结构发生了变化，虽然还是使用了Map结构，但是Map结构的拥有者已经发生了变化，其拥有者为Thread（线程）实例，每一个Thread实例拥有一个Map实例。另外，Map结构也发生了变化，其中ThreadLocal实例为Key，本地数据为Value。
 
 ThreadLocal常用有三个方法操作本地变量：
 
@@ -1977,11 +1985,157 @@ ThreadLocal是解决线程安全问题的一个较好的方案，它通过为每
 1. 线程隔离，ThreadLocal中的数据只属于当前线程，其本地值对别的线程是不可见的，在多线程环境下，可以防止自己的变量被其他线程篡改。另外，由于各个线程之间的数据相互隔离，避免了同步加锁带来的性能损失，大大提升了并发性的性能。ThreadLocal在线程隔离的常用案例为：可以为每个线程绑定一个用户会话信息、数据库连接、HTTP请求等，这样一个线程所有调用到的处理函数都可以非常方便地访问这些资源。常见的ThreadLocal使用场景为数据库连接独享、Session数据管理等。在“线程隔离”场景中，使用ThreadLocal的典型案例为：可以为每个线程绑定一个数据库连接，使得这个数据库连接为线程所独享，从而避免数据库连接被混用而导致操作异常问题。
 2. 跨函数传递数据。通常用于同一个线程内，跨类、跨方法传递数据时，如果不用ThreadLocal，那么相互之间的数据传递势必要靠返回值和参数，这样无形之中增加了这些类或者方法之间的耦合度。由于ThreadLocal的特性，同一线程在某些地方进行设置，在随后的任意地方都可以获取到。线程执行过程中所执行到的函数都能读写ThreadLocal变量的线程本地值，从而可以方便地实现跨函数的数据传递。在“跨函数传递数据”场景中使用ThreadLocal的典型案例为：可以为每个线程绑定一个Session（用户会话）信息，这样一个线程所有调用到的代码都可以非常方便地访问这个本地会话，而不需要通过参数传递。
 
-下面对以上场景进行举例：
+### 1.7.3 ThreadLocal源码分析
 
+ThreadLocal类的结构如下图：
 
+![image-20220419131126046](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220419131126046.png)
 
+我们先看这几个常用方法：
 
+set方法：
 
+```java
+public void set(T value) {
+    //获取当前线程
+    Thread t = Thread.currentThread();
+    //获取当前线程的ThreadLocalMap
+    ThreadLocalMap map = getMap(t);
+    //如果map不为空，将当前ThreadLocal设为key，将值存入map
+    if (map != null)
+        map.set(this, value);
+    //如果为空，则为该线程创建map，然后设置key-value
+    else
+        createMap(t, value);
+}
 
+ThreadLocalMap getMap(Thread t) {
+        return t.threadLocals;
+}
+
+void createMap(Thread t, T firstValue) {
+        t.threadLocals = new ThreadLocalMap(this, firstValue);
+}
+```
+
+get方法：
+
+```java
+public T get() {
+    //获取当前线程和当前线程的ThreadLocalMap成员
+    Thread t = Thread.currentThread();
+    ThreadLocalMap map = getMap(t);
+    //如果map不为空，则以当前ThreadLocal为key获取map中的Entry
+    if (map != null) {
+        ThreadLocalMap.Entry e = map.getEntry(this);
+        //如果Entry不为空则返回value
+        if (e != null) {
+            @SuppressWarnings("unchecked")
+            T result = (T)e.value;
+            return result;
+        }
+    }
+    //如果为空调用setInitialValue方法
+    return setInitialValue();
+}
+
+private T setInitialValue() {
+    //调用钩子函数initialValue获取ThreadLocal初始值，并存入ThreadLocalMap
+        T value = initialValue();
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = getMap(t);
+        if (map != null)
+            map.set(this, value);
+        else
+            createMap(t, value);
+        return value;
+    }
+```
+
+remove方法：移除当前线程的本地变量
+
+```java
+public void remove() {
+    ThreadLocalMap m = getMap(Thread.currentThread());
+    if (m != null)
+        m.remove(this);
+}
+```
+
+initialValue方法：当“线程本地变量”在当前线程的ThreadLocalMap中尚未绑定值时，此方法用于获取初始值。
+
+```java
+//官方文档：Returns the current thread's "initial value" for this thread-local variable. This method will be invoked the first time a thread accesses the variable with the get method, unless the thread previously invoked the set method, in which case the initialValue method will not be invoked for the thread. Normally, this method is invoked at most once per thread, but it may be invoked again in case of subsequent invocations of remove followed by get.
+//This implementation simply returns null; if the programmer desires thread-local variables to have an initial value other than null, ThreadLocal must be subclassed, and this method overridden. Typically, an anonymous inner class will be used.
+//大意是这个方法一般只调用一次。且这是个钩子函数默认返回null，如果不想初始值为null就重写这个方法，通常用匿名内部类重写。
+protected T initialValue() {
+    return null;
+}
+```
+
+> 当然，其实没有必要继承并重写此方法，JDK提供了一个静态子类SuppliedThreadLocal，并提供了个静态工厂方法，方便定义ThreadLocal时设置初始值：
+>
+> ```java
+> public static <S> ThreadLocal<S> withInitial(Supplier<? extends S> supplier) {
+>     return new SuppliedThreadLocal<>(supplier);
+> }
+> ```
+>
+> 用法：
+>
+> ```java
+> private static final ThreadLocal<MyPojo> LOCAL_MYPOJO = ThreadLocal.withInitial(MyPojo::new);
+> ```
+
+当然，ThreadLocal中最重要的还是ThreadLocalMap这个内部类,其实现了一套简单的Map结构，所有的方法基本都围绕者这个来进行，下面我们来分析这个内部类：
+
+![image-20220419142546944](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220419142546944.png)
+
+如上图，这个内部类属性和map类似，实现一个简单的Map结构。对于ThreadLocalMap其中的set、get等方法可以自行查看源码，因为本质和map的方法相似，比如以set方法为例：
+
+![image-20220419143644950](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220419143644950.png)
+
+下面我们主要分析一下，Entry的key为什么需要使用弱引用包裹，
+
+> Java中的弱引用就是：弱引用的对象拥有更短暂的生命周期。GC线程在扫描它所管辖的内存区域的过程中，一旦发现只具有弱引用的对象，就会回收掉这些被弱引用关联的对象。也就是说，无论当前内存是否紧缺，GC都会回收被弱引用关联的对象。
+
+我们举个栗子：
+
+```java
+public class TestLocalMapEntry {
+    public static void main(String[] args) {
+        test();
+    }
+    public static void test(){
+        ThreadLocal<Integer> local = new ThreadLocal<>();
+        local.set(100);
+        local.get();
+    }
+}
+```
+
+当线程执行完test()方法后，test()的方法栈帧将被销毁，强引用local的值也就没有了，但此时线程的ThreadLocalMap中对应的Entry的Key引用还指向ThreadLocal实例。如果Entry的Key引用是强引用，就会导致Key引用指向的ThreadLocal实例及其Value值都不能被GC回收，这将造成严重的内存泄漏问题。如下图：
+
+![ThreadLocalMap20220419](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/ThreadLocalMap20220419.png)
+
+> 什么是内存泄漏？不再用到的内存没有及时释放（归还给系统），就叫作内存泄漏。对于持续运行的服务进程必须及时释放内存，否则内存占用率越来越高，轻则影响系统性能，重则导致进程崩溃甚至系统崩溃。
+
+**使用ThreadLocal的规范**
+
+ThreadLocal实例作为ThreadLocalMap的Key，针对一个线程内的所有操作是共享的，所以建议设置static修饰符，以便被所有的对象共享。由于静态变量会在类第一次被使用时装载，只会分配一次存储空间，此类的所有实例都会共享这个存储空间，所以使用static修饰ThreadLocal就会节约内存空间。另外，为了确保ThreadLocal实例的唯一性，除了使用static修饰之外，还会使用final进行加强修饰，以防止其在使用过程中发生动态变更。
+
+但是使用static、final修饰ThreadLocal实例会使得Thread实例内部的ThreadLocalMap中Entry的Key在Thread实例的生命期内将始终保持为非null，从而导致Key所在的Entry不会被自动清空，这就会让Entry中的Value指向的对象一直存在强引用。**因此需要在使用后调用remove方法**
+
+~~~java
+private static final ThreadLocal<MyPojo> LOCAL_MYPOJO = ThreadLocal.withInitial(MyPojo::new);
+~~~
+
+> 如果使用线程池，可以在afterExecute中调用remote进行释放。
+>
+> ```java
+> @Override
+> protected void afterExecute(Runnable r, Throwable t) {
+>     threadLocal.remove();
+> }
+> ```
 
