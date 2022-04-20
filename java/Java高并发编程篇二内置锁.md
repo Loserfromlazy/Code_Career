@@ -598,7 +598,7 @@ Mark Word字段的结构与Java内置锁的状态强相关。为了让Mark Word�
 
 如何通过Java程序查看Object对象头的结构呢？OpenJDK提供的JOL（Java Object Layout）包是一个非常好的工具，可以帮我们在运行时计算某个对象的大小。
 
-要使用JOL工具，先引入Maven的依赖坐标：
+JOL工具快速入门：首先引入Maven的依赖坐标：
 
 ```xml
 <dependency>
@@ -607,6 +607,8 @@ Mark Word字段的结构与Java内置锁的状态强相关。为了让Mark Word�
     <version>0.11</version>
 </dependency>
 ```
+
+然后编写一个等待进行对象布局分析的Java类：
 
 
 
