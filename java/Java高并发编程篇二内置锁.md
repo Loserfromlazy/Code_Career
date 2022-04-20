@@ -210,7 +210,409 @@ public class TestCompute {
 
 ### 2.3.1 线程不安全示例
 
+我们先定义临界资源：
+
+```java
+public class DataNoSafe<T> {
+    public static final int MAX_COUNT = 10;
+    private List<T> dataList = new LinkedList<>();
+
+    /**
+     * 保存数量
+     */
+    private AtomicInteger count = new AtomicInteger(0);
+
+    /**
+     * 增加元素
+     */
+    public void add(T element) throws Exception{
+        if (count.get()>MAX_COUNT){
+            System.out.println("队列已经满了");
+            return;
+        }
+        dataList.add(element);
+        System.out.println(element);
+        count.incrementAndGet();
+        if (count.get()!=dataList.size()){
+            throw new RuntimeException("count和dataList队列数量不一致，count："+count+"队列数量"+dataList.size());
+        }
+    }
+    public T get() throws Exception{
+        if (count.get()<=0){
+            System.out.println("队列已经空了");
+            return null;
+        }
+        T element = dataList.remove(0);
+        System.out.println(element);
+        count.decrementAndGet();
+        if (count.get()!=dataList.size()){
+            throw new RuntimeException("count和dataList队列数量不一致，count："+count+"队列数量"+dataList.size());
+        }
+        return element;
+    }
+}
+```
+
+然后定义生产者和消费者：
+
+```java
+public class Producer implements Runnable{
+    /**
+     * 生产一次的等待时间默认200ms
+     */
+    public static final int PRODUCE_WAIT =200;
+    /**
+     * 生产总次数
+     */
+    static final AtomicInteger TOTAL_NUM = new AtomicInteger(0);
+    /**
+     * 生产者编号
+     */
+    static final AtomicInteger PNO = new AtomicInteger(1);
+    /**
+     * 生产者名称
+     */
+    String name =null;
+    /**
+     * 生产的动作
+     */
+    Callable action =null;
+    int wait = PRODUCE_WAIT;
+    public Producer(Callable action, int wait) {
+        this.action = action;
+        this.wait = wait;
+        this.name = "生产者-"+ PNO.incrementAndGet();
+    }
+    @Override
+    public void run() {
+        while (true){
+            try {
+                Object product = action.call();
+                if (product!=null){
+                    System.out.println("第"+TOTAL_NUM.get()+"轮生产 "+product);
+                }
+                Thread.sleep(wait);
+                TOTAL_NUM.incrementAndGet();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+
+public class Consumer implements Runnable{
+    /**
+     * 消费一次的等待时间默认200ms
+     */
+    public static final int CONSUME_WAIT =100;
+    /**
+     * 消费总次数
+     */
+    static final AtomicInteger TOTAL_NUM = new AtomicInteger(0);
+    /**
+     * 消费者编号
+     */
+    static final AtomicInteger CNO = new AtomicInteger(1);
+    /**
+     * 消费者名称
+     */
+    String name =null;
+    /**
+     * 消费的动作
+     */
+    Callable action =null;
+
+    int wait = CONSUME_WAIT;
+
+    public Consumer(Callable action, int wait) {
+        this.action = action;
+        this.wait = wait;
+        this.name = "生产者-"+ CNO.incrementAndGet();
+    }
+    @Override
+    public void run() {
+        while (true){
+            TOTAL_NUM.incrementAndGet();
+            try {
+                Object product = action.call();
+                if (product!=null){
+                    System.out.println("第"+TOTAL_NUM.get()+"轮消费 "+product);
+                }
+                Thread.sleep(wait);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+```
+
+然后定义测试类：
+
+```java
+public class ActionAndData {
+    private static DataNoSafe<Goods> data = new DataNoSafe<>();
+
+    static Callable<Goods> producerAction = () -> {
+        Goods one = Goods.getOne();
+        data.add(one);
+        return one;
+    };
+
+    static Callable<Goods> consumerAction = () -> {
+        Goods goods = data.get();
+        return goods;
+    };
+
+    public static void main(String[] args) {
+        final int THREAD_NUM = 20;
+        ExecutorService service = Executors.newFixedThreadPool(THREAD_NUM);
+        for (int i = 0; i < 5; i++) {
+            service.submit(new Producer(producerAction,500));
+            service.submit(new Consumer(consumerAction,1500));
+        }
+    }
+}
+//商品类代码：
+@Data
+public class Goods {
+
+    private static AtomicInteger no = new AtomicInteger(0);
+    private Integer ID;
+    private String name;
+    private Integer price;
+
+
+    public static Goods getOne(){
+        Goods goods = new Goods();
+        goods.setID(no.get());
+        goods.setName("商品"+no);
+        Random random = new Random(100);
+        goods.setPrice(random.nextInt());
+        no.incrementAndGet();
+        return goods;
+    }
+}
+```
+
+运行结果截图：
+
+![image-20220420112455418](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220420112455418.png)
+
+从以上异常可以看出，在向数据缓冲区进行元素的增加或者提取时，多个线程在并发执行对count、dataList两个成员操作时次序已经混乱，导致出现数据不一致和线程安全问题。
+
 ### 2.3.2 线程安全改造
+
+解决线程安全问题很简单，为临界区代码加上synchronized关键字即可，主要修改的是涉及操作两个临界区资源count和dataList的代码，具体为add和get方法。
+
+我们为了对比，将DataNoSafe类复制新建一个DataSafe类，然后进行改造代码如下：
+
+```java
+public class DataSafe<T> {
+   //其余代码略
+    public synchronized void add(T element) throws Exception{
+        //代码略
+    }
+    public synchronized T get() throws Exception{
+        //代码略
+    }
+}
+```
+
+我们再次进行测试（注意测试类的data也要改成DataSafe），测试结果：
+
+![image-20220420124324416](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220420124324416.png)
+
+这时就不会再出现上面的报错了。
+
+## 2.4 Java对象结构
+
+Java内置锁的很多重要信息都存放在对象结构中。作为铺垫，我们先了解一下Java的对象结构
+
+### 2.4.1 Java对象
+
+Java对象（Object实例）结构包括三部分：对象头、对象体和对齐字节，如下图：
+
+<img src="https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/javaobjectstruct20220420.png" alt="javaobjectstruct20220420" style="zoom:50%;" />
+
+Java对象的三部分：
+
+1. 对象头
+
+   对象头包含三个字段，分别是Mark Word、Class Pointer、Array Length。
+
+   `Mark Word`(标记字)用于存储自身运行时的数据，例如GC标志位、哈希码、锁状态等信息。此字段主要用来表示对象的线程锁状态，还可以用来配合GC存放该对象的hashCode。
+
+   `Class Pointer`(类对象指针)用于存放方法区Class对象的地址，虚拟机通过这个指针来确定这个对象是哪个类的实例。
+
+   `Array Length`(数组长度)这是一个可选字段，如果对象是一个Java数组，此字段必须有，用于记录数组长度，如果不是则此字段不存在。此字段占用32位（在32位JVM）字节，这是可选的，只有本对象是一个数组对象时才会有这个部分。
+
+2. 对象体
+
+   对象体包含对象的实例变量，用于成员属性值，包括父类的成员属性值，这部分内存按四字节对齐，占用内存大小取决于对象的属性数量和类型。
+
+3. 对齐字节
+
+   这部分的作用是用来保证Java对象所占内存字节数为8的倍数。HotSpot Vm的内存管理要求对象起始地址必须是8字节的整数倍，对象头本身是8的倍数，如果对象实例变量不是8的倍数时，则需要填充数据保证8字节的对齐。
+
+Mark Word、Class Pointer、Array Length等字段的长度都与JVM的位数有关。在32位JVM虚拟机中，三者都是32位的；在64位JVM虚拟机中，三者都是64位的。但是如果64位JVM开启指针压缩Array Length字段的长度也将由64位压缩至32位。
+
+对于对象指针而言，如果JVM中的对象数量过多，使用64位的指针将浪费大量内存，通过简单统计，64位JVM将会比32位JVM多耗费50%的内存。为了节约内存可以使用选项`+UseCompressedOops`开启指针压缩。UseCompressedOops中的Oop为Ordinary object pointer（普通对象指针）的缩写。
+
+如果开启UseCompressedOops选项，以下类型的指针将从64位压缩至32位：
+
+- Class对象的属性指针（静态变量）。
+- Object对象的属性指针（成员变量）。
+- 普通对象数组的元素指针。
+
+当然，也不是所有的指针都会压缩，一些特殊类型的指针不会压缩，比如指向PermGen（永久代）的Class对象指针（JDK 8中指向元空间的Class对象指针）、本地变量、堆栈元素、入参、返回值和NULL指针等。
+
+
+
+在堆内存小于32GB的情况下，64位虚拟机的UseCompressedOops选项是默认开启的，手动开启指令：`java -XX:+UseCompressedOops mainclass`手动关闭指令：`java -XX:-UseCompressedOops mainclass`
+
+### 2.4.2 Mark Word字段
+
+Java内置锁涉及很多重要信息，这些都存放在对象结构中，并且存放于对象头的Mark Word字段中。
+
+Java内置锁的状态总共有4种，级别由低到高依次为：无锁、偏向锁、轻量级锁和重量级锁。在JDK 1.6之前，Java内置锁是一个重量级锁，在JDK 1.6之后，JVM为了提高锁的获取与释放效率，对synchronized的实现进行了优化，引入了偏向锁和轻量级锁，从此Java内置锁的状态就有了4种（无锁、偏向锁、轻量级锁和重量级锁）。并且内置锁会进行锁升级，即锁的状态不断变化，但是锁不能降级。
+
+Mark Word字段的结构与Java内置锁的状态强相关。为了让Mark Word字段存储更多的信息，JVM将Mark Word最低两个位设置为Java内置锁状态位，不同锁状态下的32位Mark Word结构如下：
+
+<table>
+    <thead>
+        <tr>
+	    <th rowspan="3">内置锁状态</th>
+	    <th colspan="2" >25bit</th>
+	    <th rowspan="3">4bit</th> 
+        <th>1bit</th>
+        <th>2bit</th>
+	</tr>
+	<tr>
+	    <th rowspan="2">23bit</th>
+        <th rowspan="2">2bit</th>
+        <th rowspan="2">biased偏向标志位</th>
+        <th rowspan="2">lock锁状态</th>
+	</tr>
+    </thead>
+	<tbody>
+    	<tr>
+	    <td>无锁</td>
+        <td colspan="2" >对象的hashCode(25bit)</td>
+        <td >分代年龄</td>
+        <td >0</td>
+        <td >01</td>
+	</tr>
+    <tr>
+	    <td>偏向锁</td>
+        <td>线程ID(23bit)</td>
+        <td>epoch(2bit)</td>
+        <td >分代年龄</td>
+        <td >1</td>
+        <td >01</td>
+	</tr>
+    <tr>
+	    <td>轻量级锁</td>
+        <td colspan="4" >ptr_to_lock_record方法栈帧中的锁记录指针(30bit)</td>
+        <td >00</td>
+	</tr>
+    <tr>
+	    <td>重量级锁</td>
+        <td colspan="4" >ptr_to_heavyweight_monitor指向重量级锁监视器的指针(30bit)</td>
+        <td >10</td>
+	</tr>
+    <tr>
+	    <td>GC标志</td>
+        <td colspan="4" >空(30bit)</td>
+        <td >11</td>
+	</tr>
+    </tbody>
+</table>
+
+64位Mark Word结构如下：
+
+<table>
+    <thead>
+        <tr>
+	    <th rowspan="2">内置锁状态</th>
+	    <th rowspan="2" colspan="3" >57bit</th>
+	    <th rowspan="2">4bit</th> 
+        <th>1bit</th>
+        <th>2bit</th>
+	</tr>
+	<tr>
+        <th>biased</th>
+        <th>lock</th>
+	</tr>
+    </thead>
+	<tbody>
+    	<tr>
+	    <td>无锁</td>
+        <td >unused(25bit)</td>
+        <td >对象的hashCode(31bit)</td>
+        <td >unused(1bit)</td>
+        <td >分代年龄</td>
+        <td >0</td>
+        <td >01</td>
+	</tr>
+    <tr>
+	    <td>偏向锁</td>
+        <td>线程ID(54bit)</td>
+        <td>epoch(2bit)</td>
+        <td >unused(1bit)</td>
+        <td >分代年龄</td>
+        <td >1</td>
+        <td >01</td>
+	</tr>
+    <tr>
+	    <td>轻量级锁</td>
+        <td colspan="5" >ptr_to_lock_record方法栈帧中的锁记录指针(62bit)</td>
+        <td >00</td>
+	</tr>
+    <tr>
+	    <td>重量级锁</td>
+        <td colspan="5" >ptr_to_heavyweight_monitor指向重量级锁监视器的指针(62bit)</td>
+        <td >10</td>
+	</tr>
+    <tr>
+	    <td>GC标志</td>
+        <td colspan="5" >空(62bit)</td>
+        <td >11</td>
+	</tr>
+    </tbody>
+</table>
+
+在64位的Mark Word中
+
+- lock：锁状态标记位，占两个二进制位，由于希望用尽可能少的二进制位表示尽可能多的信息，因此设置了lock标记。该标记的值不同，整个Mark Word表示的含义就不同。
+- biased：表示当前对象无锁还是偏向锁
+- age：分代年龄，在GC中，对象在Survivor区复制一次，年龄就增加1，当对象达到设定的阈值就会晋升老年代，默认并行GC的年龄阈值为15，并发GC的年龄阈值是6.因为只有4为所以最大是15.
+- identity_hashcode:对象的hashCode，31位对象标识哈希码采用延迟加载，只有调用`Object.hashCode()`方法或者`System.identityHashCode()`方法计算对象的HashCode后，其结果将被写到该对象头中。当对象被锁定时，该值会移动到Monitor（监视器）中.
+- epoch:偏向时间戳
+- thread：线程ID，54位是持有偏向锁的线程ID
+- ptr_to_lock_record，轻量级锁状态下指向栈帧中锁记录的指针。
+- ptr_to_heavyweight_monitor，重量级锁状态下指向对象监视器的指针。
+
+### 2.4.3 JOL工具
+
+如何通过Java程序查看Object对象头的结构呢？OpenJDK提供的JOL（Java Object Layout）包是一个非常好的工具，可以帮我们在运行时计算某个对象的大小。
+
+要使用JOL工具，先引入Maven的依赖坐标：
+
+```xml
+<dependency>
+    <groupId>org.openjdk.jol</groupId>
+    <artifactId>jol-core</artifactId>
+    <version>0.11</version>
+</dependency>
+```
+
+
+
+
+
+
 
 
 
