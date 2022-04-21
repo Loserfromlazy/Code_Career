@@ -1113,5 +1113,35 @@ ObjectMonitor的内部抢锁过程如图：
 
 ### 2.8.2 Java的wait和notify
 
+Java对象中的wait()、notify()两类方法就如同信号开关，用于等待方和通知方之间的交互。
+
+对象的wait()方法的主要作用是让当前线程阻塞并等待被唤醒。wait()方法与对象监视器紧密相关，使用wait()方法时一定要放在同步块中。Java中wait一共有三种重载，源码如下：
+
+```java
+//显示等待版本
+public final native void wait(long timeout) throws InterruptedException;
+//高精度x
+public final void wait(long timeout, int nanos) throws InterruptedException {
+    if (timeout < 0) {
+        throw new IllegalArgumentException("timeout value is negative");
+    }
+
+    if (nanos < 0 || nanos > 999999) {
+        throw new IllegalArgumentException(
+            "nanosecond timeout value out of range");
+    }
+
+    if (nanos > 0) {
+        timeout++;
+    }
+
+    wait(timeout);
+}
+//基础版本，当前线程调用了同步对象的wait实例方法后，导致当前线程等待，当前线程进入对象的监视器WaitSet，等待被其他线程唤醒。
+public final void wait() throws InterruptedException {
+	wait(0);
+}
+```
+
 ### 2.8.3 生产者消费者改造
 
