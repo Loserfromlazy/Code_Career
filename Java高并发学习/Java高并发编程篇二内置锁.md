@@ -1109,13 +1109,32 @@ ObjectMonitor的内部抢锁过程如图：
 
 线程的通信可以被定义为：当多个线程共同操作共享的资源时，线程间通过某种方式互相告知自己的状态，以避免无效的资源争夺。线程间通信的方式可以有很多种：等待-通知、共享内存、管道流。最常用的就是等待通知模式。
 
-### 2.8.1 剖析低效线程轮询
+### 2.8.1 剖析生产者-消费者案例的问题
+
+在2.3.2中的案例中，存在一个很费性能的问题，就是消费者在每一轮消费中，无论数据区是否为空，都需要进行数据区的询问和判断，做无用的数据区询问工作，白白耗费了CPU的时间片。如下面代码：
+
+~~~java
+if (count.get()<=0){
+    System.out.println("队列已经空了");
+    return null;
+}
+~~~
+
+当然生产者也同理，这里就不再赘述。
+
+如何在生产者或者消费者空闲时节约CPU时间片，免去巨大的CPU资源浪费呢？一个非常有效的办法是：使用“等待-通知”方式进行生产者与消费者之间的线程通信。具体来说，在数据区满（count.get()>MAX_COUNT）时，可以让生产者等待，等到下次数据区中可以加入数据时，给生产者发通知，让生产者唤醒。同样，在数据区为空（count<= 0）时，可以让消费者等待，等到下次数据区中可以取出数据时，消费者才能被唤醒。
+
+那么，由谁去唤醒等待状态的生产者呢？可以在消费者取出一个数据后，由消费者去唤醒等待的生产者。同理，由谁去唤醒等待状态的消费者呢？可以在生产者加入一个数据后，由生产者去唤醒等待的消费者。
+
+> Java语言中“等待-通知”方式的线程间通信使用对象的wait()、notify()两类方法来实现
 
 ### 2.8.2 Java的wait和notify
 
 Java对象中的wait()、notify()两类方法就如同信号开关，用于等待方和通知方之间的交互。
 
-对象的wait()方法的主要作用是让当前线程阻塞并等待被唤醒。wait()方法与对象监视器紧密相关，使用wait()方法时一定要放在同步块中。Java中wait一共有三种重载，源码如下：
+**对象的wait()方法**的主要作用是让当前线程阻塞并等待被唤醒。wait()方法与对象监视器紧密相关，使用wait()方法时一定要放在同步块中。
+
+Java中wait一共有三种重载，源码如下：
 
 ```java
 //显示等待版本
@@ -1143,5 +1162,131 @@ public final void wait() throws InterruptedException {
 }
 ```
 
+对象的wait()方法的核心原理大致如下：
+
+1. 当线程调用了某个同步锁对象（比如之前的jolObject）的wait()方法后，JVM会将当前线程加入jolObject监视器的WaitSet（等待集），等待被其他线程唤醒。
+2. 当前线程会释放jolObject对象监视器的Owner权利，让其他线程可以抢夺jolObject对象的监视器。
+3. 让当前线程等待，其状态变成WAITING。
+
+> wait()方法必须在synchronized同步块的内部调用。在当前线程执行wait()方法前，必须通过synchronized()方法成为对象锁的监视器的Owner。
+
+**对象的notify()方法**的主要作用是唤醒在等待的线程。notify()方法与对象监视器紧密相关，调用notify()方法时也需要放在同步块中。
+
+```java
+//object.notify()调用后，唤醒object监视器等待集中的第一条等待线程；被唤醒的线程进入EntryList，其状态从WAITING变成BLOCKED。
+public final native void notify();
+//object.notifyAll()被调用后，唤醒object监视器等待集中的全部等待线程，所有被唤醒的线程进入EntryList，线程状态从WAITING变成BLOCKED。
+public final native void notifyAll();
+```
+
+对象的notify()或者notifyAll()方法的核心原理大致如下：
+
+1. 当线程调用了某个同步锁对象（比如jolObject）的notify()方法后，JVM会唤醒jolObject监视器WaitSet中的第一条等待线程。
+2. 当线程调用了jolObject的notifyAll()方法后，JVM会唤醒jolObject监视器WaitSet中的所有等待线程。
+3. 等待线程被唤醒后，会从监视器的WaitSet移动到EntryList，线程具备了排队抢夺监视器Owner权利的资格，其状态从WAITING变成BLOCKED。
+4. EntryList中的线程抢夺到监视器的Owner权利之后，线程的状态从BLOCKED变成Runnable，具备重新执行的资格。
+
+> notify()方法也必须在synchronized同步块的内部调用。在执行notify()方法前，当前线程也必须通过synchronized()方法成为对象锁的监视器的Owner。
+
 ### 2.8.3 生产者消费者改造
+
+我们下面通过等待-通知机制来改造上面的案例：
+
+```java
+public class DataWaitNotify<T> {
+
+    public static final int MAX_COUNT = 10;
+    private List<T> dataList = new LinkedList<>();
+    private Integer count = 0;
+
+    private final Object LOCK_OBJECT = new Object();
+    private final Object NOT_FULL = new Object();
+    private final Object NOT_EMPTY = new Object();
+
+
+    public void add(T element) throws Exception{
+        while (count>MAX_COUNT){
+            synchronized (NOT_FULL){
+                System.out.println("队列已经满了");
+                NOT_FULL.wait();
+            }
+        }
+        synchronized (LOCK_OBJECT){
+            dataList.add(element);
+            count++;
+        }
+        synchronized (NOT_EMPTY){
+            //发送通知，当前未空
+            NOT_EMPTY.notify();
+        }
+    }
+
+    public T get() throws InterruptedException {
+        while (count<=0){
+            synchronized (NOT_EMPTY){
+                System.out.println("队列已经空了");
+                NOT_EMPTY.wait();
+            }
+        }
+        T element;
+        synchronized (LOCK_OBJECT){
+            element = dataList.remove(0);
+            count--;
+        }
+        synchronized (NOT_FULL){
+            //发送通知，当前未满
+            NOT_FULL.notify();
+        }
+        return element;
+    }
+
+    //直接在此类进行测试，就不新建测试类了
+    public static void main(String[] args) {
+        DataWaitNotify<Goods> data =new DataWaitNotify<>();
+        Callable<Goods> productAction = ()->{
+            Goods goods =Goods.getOne();
+            data.add(goods);
+            return goods;
+        };
+        Callable<Goods> consumeAction = ()->{
+            Goods goods = data.get();
+            return goods;
+        };
+        final int ALL_THREAD = 20;
+        ExecutorService service = Executors.newFixedThreadPool(ALL_THREAD);
+        final int CONSUME_TOTAL = 10;
+        final int PRODUCE_TOTAL = 1;
+        for (int i = 0; i < PRODUCE_TOTAL; i++) {
+            service.submit(new Producer(productAction,50));
+        }
+        for (int i = 0; i < CONSUME_TOTAL; i++) {
+            service.submit(new Consumer(consumeAction,100));
+        }
+
+    }
+}
+```
+
+注意：调用wait()方法时使用while进行条件判断，如果是在某种条件下进行等待，对条件的判断就不能使用if语句做一次性判断，而是使用while循环进行反复判断。只有这样才能在线程被唤醒后继续检查wait的条件，并在条件没有满足的情况下继续等待。
+
+> 在jdk8的官方文档上是这么定义的：
+>
+> ~~~
+>  As in the one argument version, interrupts and spurious wakeups are possible, and this method should always be used in a loop:
+>            synchronized (obj) {
+>                while (<condition does not hold>)
+>                    obj.wait();
+>                ... // Perform action appropriate to condition
+>            }
+> ~~~
+>
+> 翻译过来就是说一个线程是有可能虚假唤醒或者中断的，因此需要放在while循环中。
+>
+> **本质就是if只会执行一次，执行完会接着向下执行if（）外边的；而while不会，直到条件满足才会向下执行while（）外边的**
+
+
+
+
+
+
 
