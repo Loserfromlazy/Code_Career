@@ -451,6 +451,64 @@ fun eatFruit(){
 }
 ~~~
 
+### 4.5 扩展函数
+
+扩展函数表示即使在不修改某个类的源码的情况下，仍然可以打开这个类，向该类添加新的函数。我们以一个常见的例子开始：
+
+如果想统计字符串中字母的数量，我们可以轻松写下以下函数：
+
+```kotlin
+fun main(){
+    Util.countChar("asdsadasd")
+}
+
+object Util{
+    fun countChar(str:String):Int{
+        var count = 0
+        for (char in str) {
+            if (char.isLetter())
+                count++
+        }
+        return count
+    }
+}
+```
+
+这也是Java编程中最标准的实现思维。但是有了扩展函数之后就不一样了，我们可以使用一种更加面向对象的思维来实现这个功能，比如说将lettersCount()函数添加到String类当中。
+
+定义扩展函数的语法结构如下所示：
+
+~~~kotlin
+fun ClassName.methodName(param1:Int):Int{
+	return 0
+}
+~~~
+
+定义扩展函数只需要在函数名的前面加上一个ClassName.的语法结构，就表示将该函数添加到指定类当中了。
+
+由于我们希望向String类中添加一个扩展函数，因此需要先创建一个String.kt文件。文件名虽然并没有固定的要求，建议向哪个类中添加扩展函数，就定义一个同名的Kotlin文件，这样便于你以后查找。当然，扩展函数也是可以定义在任何一个现有类当中的，并**不一定非要创建新文件。**不过通常来说，最好将它定义成顶层方法，这样可以让扩展函数拥有全局的访问域。
+
+现在在String.kt中编写以下代码：
+
+```kotlin
+fun String.countChar():Int{
+    var count = 0
+    for (char in this) {
+        if (char.isLetter())
+            count++
+    }
+    return count
+}
+```
+
+然后统计某个字符串中的字母数量只需要这样写即可：
+
+```kotlin
+fun main(){
+    println("asdasdas".countChar())
+}
+```
+
 
 
 ## 五、程序的逻辑控制
@@ -1106,3 +1164,52 @@ class Util1{
 
 但如果是在Java代码中调用，你会发现是找不到doSomething()这个方法的，因为Java中没有顶层方法这个概念，所有的方法必须定义在类中。那么这个doSomething()方法被藏在了哪里呢？比如创建的Kotlin文件名叫作Util.kt，于是Kotlin编译器会自动创建一个叫作Util的Java类，doSomething()方法就是以静态方法的形式定义在Util类里面的，因此在Java中使用Util.doSomething()的写法来调用就可以了。
 
+### 6.8 密封类
+
+密封类用来表示受限的类继承结构：当一个值为有限几种的类型, 而不能有任何其他类型时。在某种意义上，他们是枚举类的扩展：枚举类型的值集合 也是受限的，但每个枚举常量只存在一个实例，而密封类 的一个子类可以有可包含状态的多个实例。
+
+声明一个密封类，使用 **sealed** 修饰类，密封类可以有子类，但是所有的子类都必须要内嵌在密封类中。
+
+首先来了解一下密封类具体的作用，这里我们来看一个简单的例子。
+
+```kotlin
+fun main(){
+    println(getResult(Success("ad")))
+
+}
+
+interface Result
+class Success(val msg:String):Result
+class Failure(val error:Exception):Result
+
+fun getResult(result: Result) = when(result){
+        is Success -> result.msg
+        is Failure -> result.error.message
+        else -> throw IllegalArgumentException()
+}
+```
+
+但比较让人讨厌的是，我们不得不再编写一个else条件，否则Kotlin编译器会认为这里缺少条件分支，代码将无法编译通过。
+
+当然，这种为了满足编译器的要求而编写无用条件分支的情况不仅在Kotlin当中存在，在Java或者是其他编程语言当中也普遍存在。
+
+不过好消息是，Kotlin的密封类可以很好地解决这个问题，下面我们就来学习一下。密封类的关键字是sealed class，它的用法同样非常简单，我们可以轻松地将Result接口改造成密封类的写法：
+
+```kotlin
+sealed class Result
+class Success(val msg:String):Result()
+class Failure(val error:Exception):Result()
+
+fun getResult(result: Result) = when(result){
+        is Success -> result.msg
+        is Failure -> result.error.message
+}
+```
+
+那么改成密封类之后有什么好处呢？你会发现现在getResultMsg()方法中的else条件已经不再需要了
+
+这是因为当在when语句中传入一个密封类变量作为条件时，Kotlin编译器会自动检查该密封类有哪些子类，并强制要求你将每一个子类所对应的条件全部处理。这样就可以保证，即使没有编写else条件，也不可能会出现漏写条件分支的情况。而如果我们现在新增一个Unknown类，并也让它继承自Result，此时getResultMsg()方法就一定会报错，必须增加一个Unknown的条件分支才能让代码编译通过。
+
+这就是密封类主要的作用和使用方法了。
+
+> 密封类及其所有子类只能定义在同一个文件的顶层位置，不能嵌套在其他类中，这是被密封类底层的实现机制所限制的。
