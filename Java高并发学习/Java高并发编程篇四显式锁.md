@@ -828,11 +828,11 @@ public class DeadLockDemo {
 
 **Semaphore**
 
-Semaphore可以用来控制在同一时刻访问共享资源的线程数量，通过协调各个线程以保证共享资源的合理使用。Semaphore维护了一组虚拟许可，它的数量可以通过构造器的参数指定。线程在访问共享资源前必须调用Semaphore的acquire()方法获得许可，如果许可数量为0，该线程就一直阻塞。线程访问完资源后，必须调用Semaphore的release()方法释放许可。更形象的说法是：**Semaphore是一个许可管理器**。
+Semaphore**可以用来控制在同一时刻访问共享资源的线程数量**，通过协调各个线程以保证共享资源的合理使用。Semaphore维护了一组虚拟许可，它的数量可以通过构造器的参数指定。线程在访问共享资源前必须调用Semaphore的acquire()方法获得许可，如果许可数量为0，该线程就一直阻塞。线程访问完资源后，必须调用Semaphore的release()方法释放许可。更形象的说法是：**Semaphore是一个许可管理器**。
 
 我们看一下类的结构和主要方法：
 
-
+![image-20220427085205211](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220427085205211.png)
 
 下面举个例子：
 
@@ -868,7 +868,7 @@ public class TestSemaphore {
 }
 ```
 
-运行结果：
+运行结果：每一秒中只有两个线程进入临界区。
 
 ~~~
 Tue Apr 26 21:39:21 GMT+08:00 2022,受理中，服务号1
@@ -925,9 +925,274 @@ public interface ReadWriteLock {
 
 通过ReentrantReadWriteLock类能获取读锁和写锁，它的读锁是可以多线程共享的共享锁，而它的写锁是排他锁，在被占时不允许其他线程再抢占操作。然而其读锁和写锁之间是有关系的：同一时刻不允许读锁和写锁同时被抢占，二者之间是互斥的。
 
+我们举个栗子(●ˇ∀ˇ●)：
 
+```java
+public class TestReadWriteLock {
+    //共享数据
+    final static Map<String,String> MAP = new HashMap<>();
+    //读写锁
+    final static ReentrantReadWriteLock LOCK = new ReentrantReadWriteLock();
+    //读锁
+    final static Lock READ_LOCK = LOCK.readLock();
+    //写锁
+    final static Lock WRITE_LOCK = LOCK.writeLock();
+
+    public static Object put(String key,String value){
+        WRITE_LOCK.lock();
+        try {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"抢占了写锁，执行写操作");
+            Thread.sleep(1000);
+            String put = MAP.put(key, value);
+            return put;
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            WRITE_LOCK.unlock();
+        }
+        return null;
+    }
+
+    public static Object get(String key){
+        READ_LOCK.lock();
+        try {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"抢占了读锁，执行写操作");
+            Thread.sleep(1000);
+            String value = MAP.get(key);
+            return value;
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            READ_LOCK.unlock();
+        }
+        return null;
+    }
+    //测试
+    public static void main(String[] args) {
+        Runnable runnableWrite = ()-> put("key","value");
+        Runnable runnableRead = () -> get("key");
+        for (int i = 0; i < 4; i++) {
+            new Thread(runnableRead,"读线程"+i).start();
+        }
+        for (int i = 0; i < 2; i++) {
+            new Thread(runnableWrite,"写线程"+i).start();
+        }
+    }
+}
+```
+
+运行结果：
+
+~~~
+读线程2] Wed Apr 27 09:04:49 CST 2022抢占了读锁，执行写操作
+读线程0] Wed Apr 27 09:04:49 CST 2022抢占了读锁，执行写操作
+写线程0] Wed Apr 27 09:04:50 CST 2022抢占了写锁，执行写操作
+写线程1] Wed Apr 27 09:04:51 CST 2022抢占了写锁，执行写操作
+读线程1] Wed Apr 27 09:04:52 CST 2022抢占了读锁，执行写操作
+读线程3] Wed Apr 27 09:04:52 CST 2022抢占了读锁，执行写操作
+~~~
+
+从输出结果可以看出：读线程0、2同时获取了读锁，说明可以同时进行共享数据的读操作。但是写线程0、1只能依次获取写锁，说明共享数据的写操作不能同时进行。同时读线程1、3必须等待写线程1释放写锁后才能获取到读锁，说明读写操作是互斥的。
 
 ### 5.6.2 锁的升级与降级
 
+锁升级是指读锁升级为写锁，锁降级指的是写锁降级为读锁。在ReentrantReadWriteLock读写锁中，只支持写锁降级为读锁，而不支持读锁升级为写锁。
+
+我们下面对上面的例子进行修改：
+
+```java
+public class TestReadWriteLock2 {
+    //共享数据
+    final static Map<String,String> MAP = new HashMap<>();
+    //读写锁
+    final static ReentrantReadWriteLock LOCK = new ReentrantReadWriteLock();
+    //读锁
+    final static Lock READ_LOCK = LOCK.readLock();
+    //写锁
+    final static Lock WRITE_LOCK = LOCK.writeLock();
+
+    public static Object put(String key,String value){
+        WRITE_LOCK.lock();
+        try {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"抢占了写锁，执行写操作");
+            Thread.sleep(1000);
+            String put = MAP.put(key, value);
+            System.out.println(Thread.currentThread().getName()+"尝试将写锁降级为读锁");
+            READ_LOCK.lock();
+            System.out.println(Thread.currentThread().getName()+"写锁降级成功");
+            return put;
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            READ_LOCK.unlock();
+            WRITE_LOCK.unlock();
+        }
+        return null;
+    }
+
+    public static Object get(String key){
+        READ_LOCK.lock();
+        try {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"抢占了读锁，执行写操作");
+            Thread.sleep(1000);
+            String value = MAP.get(key);
+            System.out.println(Thread.currentThread().getName()+"读锁尝试升级为写锁");
+            WRITE_LOCK.lock();
+            System.out.println(Thread.currentThread().getName()+"读锁升级写锁成功");
+            return value;
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            WRITE_LOCK.unlock();
+            READ_LOCK.unlock();
+        }
+        return null;
+    }
+    //测试
+    public static void main(String[] args) throws InterruptedException {
+        Runnable runnableWrite = ()-> put("key","value");
+        Runnable runnableRead = () -> get("key");
+        //要先创建写线程，因为读线程不能升级，可能会导致看不到运行结果
+        new Thread(runnableWrite,"写线程").start();
+        new Thread(runnableRead,"读线程").start();
+    }
+}
+```
+
+运行结果：
+
+~~~
+写线程] Wed Apr 27 09:18:47 CST 2022抢占了写锁，执行写操作
+写线程尝试将写锁降级为读锁
+写线程写锁降级成功
+读线程] Wed Apr 27 09:18:48 CST 2022抢占了读锁，执行写操作
+读线程读锁尝试升级为写锁
+~~~
+
+从结果来看，只能降级不能升级。
+
+> ReentrantReadWriteLock不支持读锁的升级，主要是避免死锁，例如两个线程A和B都占了读锁并且都需要升级成写锁，A升级要求B释放读锁，B升级要求A释放读锁，二者就会由于相互等待形成死锁。
+>
+> 与ReentrantLock相比，ReentrantReadWriteLock更适合读多写少的场景
+
 ### 5.6.3 StampedLock
+
+StampedLock（印戳锁）是对ReentrantReadWriteLock读写锁的一种改进，主要的改进为：在没有写只有读的场景下，StampedLock支持不用加读锁而是直接进行读操作，最大程度提升读的效率，只有在发生过写操作之后，再加读锁才能进行读操作。
+
+StampedLock的三种模式如下：
+
+- 悲观读锁：与ReadWriteLock的读锁类似，多个线程可以同时获取悲观读锁，悲观读锁是一个共享锁。
+- 乐观读锁：相当于直接操作数据，不加任何锁，连读锁都不要。
+- 写锁：与ReadWriteLock的写锁类似，写锁和悲观读锁是互斥的。虽然写锁与乐观读锁不会互斥，但是在数据被更新之后，之前通过乐观读锁获得的数据已经变成了脏数据。
+
+与ReentrantReadWriteLock不同，StampedLock没有继承ReadWriteLock接口，而是自己根据实现了锁。类结构有些长，我们这里看主要方法的源码：
+
+```java
+//悲观读锁
+
+//获取普通（悲观）读锁，返回long类型的印戳值
+public long readLock()
+//释放普通（悲观）读锁，以获取的印戳值为参数
+public void unlockRead(long stamp)
+
+//写锁
+
+//获取写锁，返回long类型印戳值
+public long writeLock()
+//释放写锁
+public void unlockWrite(long stamp)
+
+//乐观锁的印戳获取和有效性判断
+
+//获取乐观锁，返回long印戳值，返回0表示答盎前所处于写锁模式，不能乐观读
+public long tryOptimisticRead()
+//判断乐观读的印戳值是否有效，
+public boolean validate(long stamp)
+```
+
+我们举个栗子(●ˇ∀ˇ●)：
+
+```java
+public class TestStampedLock {
+
+    final static Map<String,String> MAP = new HashMap<>();
+    final static StampedLock STAMPED_LOCK = new StampedLock();
+    //写操作
+    public static Object put(String key,String value){
+        long stamp = STAMPED_LOCK.writeLock();
+        try {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"抢占了写锁，执行写操作");
+            Thread.sleep(1000);
+            String put = MAP.put(key, value);
+            return put;
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"释放了写锁");
+            STAMPED_LOCK.unlockWrite(stamp);
+        }
+        return null;
+    }
+    //悲观读
+    public static Object pessimismGet(String key){
+        System.out.println(Thread.currentThread().getName()+"] "+new Date()+"进入过写模式，只能悲观读");
+        long stamp = STAMPED_LOCK.readLock();
+        try {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"抢占了读锁");
+            Thread.sleep(1000);
+            String value = MAP.get(key);
+            return value;
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"释放了读锁");
+            STAMPED_LOCK.unlockRead(stamp);
+        }
+        return null;
+    }
+    //乐观读
+    public static Object optimismGet(String key){
+        String value =null;
+        long stamp = STAMPED_LOCK.tryOptimisticRead();
+        if (stamp!=0){
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"获取乐观读成功");
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            value = MAP.get(key);
+        }else {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"获取乐观读失败");
+            return pessimismGet(key);
+        }
+        //对乐观读是否有效进行验证，判断是否进入过写模式
+        if (!STAMPED_LOCK.validate(stamp)){
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"乐观读已经失效");
+            return pessimismGet(key);
+        }else {
+            System.out.println(Thread.currentThread().getName()+"] "+new Date()+"乐观读没有失效");
+            return value;
+        }
+    }
+    //测试
+    public static void main(String[] args) {
+        Runnable runnableWrite = () -> put("key","value");
+        Runnable runnableRead = () -> optimismGet("key");
+        new Thread(runnableWrite,"写线程").start();
+        new Thread(runnableRead,"读线程").start();
+    }
+}
+```
+
+运行结果：
+
+~~~
+写线程] Wed Apr 27 09:55:55 CST 2022抢占了写锁，执行写操作
+读线程] Wed Apr 27 09:55:55 CST 2022获取乐观读失败
+读线程] Wed Apr 27 09:55:55 CST 2022进入过写模式，只能悲观读
+写线程] Wed Apr 27 09:55:56 CST 2022释放了写锁
+读线程] Wed Apr 27 09:55:56 CST 2022抢占了读锁
+读线程] Wed Apr 27 09:55:57 CST 2022释放了读锁
+~~~
 
