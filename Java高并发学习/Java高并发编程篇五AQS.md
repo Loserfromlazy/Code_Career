@@ -66,6 +66,8 @@ protected final Thread getExclusiveOwnerThread() {
 }
 ```
 
+下面我们来学习一下AQS的内部成员
+
 ### 6.2.1 状态标志位
 
 AQS中维持了一个单一的volatile修饰的状态信息state，AQS使用int类型的state标示锁的状态，可以理解为锁的同步状态。源码如下：
@@ -209,15 +211,504 @@ static final class Node {
    
      waitStatus为0时，表示当前节点处于初始状态。
 
-### 6.2.3 FIFO双向同步队列
+### 6.2.3 AQS和JUC的关系
+
+AQS是java.util.concurrent包的一个同步器，它实现了锁的基本抽象功能，支持独占锁与共享锁两种方式。该类是使用模板模式来实现的，成为构建锁和同步器的框架，使用该类可以简单且高效地构造出应用广泛的同步器（或者等待队列）。java.util.concurrent.locks包中的显式锁如ReentrantLock、ReentrantReadWriteLock，线程同步工具如Semaphore，异步回调工具如FutureTask等，内部都使用了AQS作为等待队列。通过IDEA进行AQS的子类导航会发现大量的AQS子类以内部类的形式使用，如下图：
+
+![image-20220428124922506](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220428124922506.png)
+
+### 6.2.4 AQS与ReentranLock的关系
+
+下面我们以ReentranLock为例，来了解二者的关系。
+
+ReentrantLock是一个可重入的互斥锁，又称为“可重入独占锁”。ReentrantLock锁在同一个时间点只能被一个线程锁持有，而可重入的意思是，ReentrantLock锁可以被单个线程多次获取。
+
+实际上ReentrantLock把所有Lock接口的操作都委派到一个Sync类上，
+
+比如说我们以lock方法和unlock方法源码举例：
+
+```java
+public void lock() {
+    sync.lock();
+}
+public void unlock() {
+    sync.release(1);
+}
+```
+
+Sync类继承了AbstractQueuedSynchronizer，简略源码如下：
+
+```java
+abstract static class Sync extends AbstractQueuedSynchronizer
+```
+
+ReentrantLock为了支持公平锁和非公平锁两种模式，为Sync又定义了两个子类，简略源码如下：
+
+```java
+static final class NonfairSync extends Sync
+static final class FairSync extends Sync
+```
+
+NonfairSync为非公平（或者不公平）同步器，FairSync为公平同步器，默认是不公平的，ReentrantLock构造器源码如下：
+
+```java
+public ReentrantLock() {
+    sync = new NonfairSync();
+}
+
+public ReentrantLock(boolean fair) {
+    sync = fair ? new FairSync() : new NonfairSync();
+}
+```
+
+由于ReentrantLock的显式锁操作是委托（或委派）给一个Sync内部类的实例来完成的。而Sync内部类只是AQS的一个子类，所以本质上ReentrantLock的显式锁操作是委托（或委派）给AQS完成的。类图如下：
+
+![aqsreentranlock20220428](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/aqsreentranlock20220428.png)
+
+聚合关系的特点是，整体由部分构成，但是整体和部分之间并不是强依赖的关系，而是弱依赖的关系，也就是说，即使整体不存在了，部分仍然存在。例如，一个部门由多个员工组成，如果部门撤销了，人员不会消失，人员依然存在。
+
+组合关系的特点是，整体由部分构成，但是整体和部分之间是强依赖的关系，如果整体不存在了，部分也随之消失。例如，一个公司由多个部门组成，如果公司不存在了，部门也将不存在。可以说，组合关系是一种强依赖的、特殊的聚合关系。
+
+由于显式锁与AQS之间是一种强依赖的关系，如果显式锁的实例销毁，其聚合的AQS子类实例也会被销毁，因此显式锁与AQS之间是组合关系。
+
+## 6.3 AQS的模板模式
+
+AQS同步器是基于模板模式设计的，并且是模板模式很经典的一个运用。关于模板模式可以看我的[设计模式的笔记](https://github.com/Loserfromlazy/Code_Career/blob/master/java/%E8%AE%BE%E8%AE%A1%E6%A8%A1%E5%BC%8F.md)关于模板模式的部分
+
+> （这篇笔记除了模板模式以外的其他部分可能不是很全，后续会陆续的补全，但是模板模式是全的）
+
+### 6.3.1 AQS的模板流程
+
+AQS定义了两种资源共享方式：
+
+- Exclusive（独享锁）：只有一个线程能占有锁资源，如ReentrantLock。独享锁又可分为公平锁和非公平锁。
+- Share（共享锁）：多个线程可同时占有锁资源，如Semaphore、CountDownLatch、CyclicBarrier、ReadWriteLock的Read锁。
+
+AQS为不同的资源共享方式提供了不同的模板流程，包括共享锁、独享锁模板流程。这些模板流程完成了具体线程进出等待队列的（如获取资源失败入队/唤醒出队等）基础、通用逻辑。基于基础、通用逻辑，AQS提供了一种实现阻塞锁和依赖FIFO等待队列的同步器的框架，AQS模板为ReentedLocK、CountDownLatch、Semaphore提供了优秀的解决方案。
+
+自定义的同步器只需要**实现共享资源state的获取与释放方式**即可，这些逻辑都编写在钩子方法中。无论是共享锁还是独享锁，AQS在执行模板流程时都会回调自定义的钩子方法。
+
+### 6.3.2 AQS的钩子方法
 
 
 
+自定义同步器时，AQS中需要重写的钩子方法大致如下：
+
+- tryAcquire(int)：独占锁钩子，尝试获取资源，若成功则返回true，若失败则返回false。
+- tryRelease(int)：独占锁钩子，尝试释放资源，若成功则返回true，若失败则返回false。
+- tryAcquireShared(int)：共享锁钩子，尝试获取资源，负数表示失败；0表示成功，但没有剩余可用资源；正数表示成功，且有剩余资源。
+- tryReleaseShared(int)：共享锁钩子，尝试释放资源，若成功则返回true，若失败则返回false。
+- isHeldExclusively()：独占锁钩子，判断该线程是否正在独占资源。只有用到condition条件队列时才需要去实现它。
+
+以上钩子方法的默认实现会抛出UnsupportedOperationException异常。除了这些钩子方法外，AQS类中的其他方法都是final类型的方法，所以无法被其他类继承，只有这几个方法可以被其他类继承。
+
+我们拿ReentranLock的内部类Sync的钩子方法实现来简单看一下：
+
+```java
+protected final boolean tryRelease(int releases) {
+    int c = getState() - releases;//获取当前重入的锁的层数，减去需要释放的层数
+    if (Thread.currentThread() != getExclusiveOwnerThread())
+        throw new IllegalMonitorStateException();
+    boolean free = false;
+    if (c == 0) {//判断是否当前线程的所有锁都释放了
+        free = true;
+        setExclusiveOwnerThread(null);
+    }
+    setState(c);//设置释放后的状态
+    return free;
+}
+```
+
+可以看到我们在实现钩子方法时，只需要对state的获取和释放方式进行实现即可
+
+### 6.3.4 根据AQS自定义一把锁
+
+我们下面模拟ReentrantLock的源码，基于AQS实现一把非常简单的独占锁。
+
+下面来看代码，首先我们定义一个SimpleLock继承Lock接口（我们这里仅实现lock和unlock方法）
+
+```java
+public class SimpleLock implements Lock {
+    @Override
+    public void lock() {
+        
+    }
+
+    @Override
+    public void unlock() {
+
+    }
+	//其余不实现Lock接口的方法这里就略掉了
+    //...
+}
+```
+
+然后我们实现一个内部类Sync继承AQS
+
+```java
+public class SimpleLock implements Lock {
+    private Sync sync = new Sync();
+
+    static class Sync extends AbstractQueuedSynchronizer{
+        //我们这里仅实现两个钩子方法
+        @Override
+        protected boolean tryAcquire(int arg) {
+            if (compareAndSetState(0,1)){
+                setExclusiveOwnerThread(Thread.currentThread());
+                return true;
+            }
+            return false;
+        }
+
+        @Override
+        protected boolean tryRelease(int arg) {
+            if (Thread.currentThread()!= getExclusiveOwnerThread()){
+                throw new IllegalMonitorStateException();
+            }
+            if (getState()==0){
+                throw new IllegalMonitorStateException();
+            }
+            //下面操作不存在并发
+            setExclusiveOwnerThread(null);
+            setState(0);
+            return true;
+        }
+    }
+    @Override
+    public void lock() {
+        //委托给AQS
+        sync.acquire(1);
+    }
+
+    @Override
+    public void unlock() {
+        //委托给AQS
+        sync.release(1);
+    }
+   //其余不实现Lock接口的方法这里就略掉了
+    //...
+}
+```
+
+从代码可以看到我们的锁很简单，且不支持可重入。
+
+SimpleLock的锁抢占和锁释放是委托给Sync实例的acquire()方法和release()方法来完成的。
+
+SimpleLock的内部类Sync继承了AQS类，实际上acquire()、release()是AQS的两个模板方法。在抢占锁时，AQS的模板方法acquire()会调用tryAcquire(int arg)钩子方法；在释放锁时，AQS的模板方法release()会调用tryRelease(int arg)钩子方法。
+
+我们搞个之前经常用的自增案例来测试我们的锁：
+
+```java
+public class TestAQS {
+    public static void main(String[] args) {
+        final int TURNS = 100000;
+        final int THREADS = 10;
+
+        ExecutorService service = Executors.newFixedThreadPool(THREADS);
+        SimpleLock lock = new SimpleLock();
+        CountDownLatch latch = new CountDownLatch(THREADS);
+        long start = System.currentTimeMillis();
+        for (int i = 0; i < THREADS; i++) {
+            service.submit(() -> {
+                for (int j = 0; j < TURNS; j++) {
+                    DataPlus.lockAndPlus(lock);
+                }
+                latch.countDown();
+            });
+        }
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        float time = (System.currentTimeMillis() - start) /1000F;
+        System.out.println("运行时长"+time);
+        System.out.println("结果"+DataPlus.sum);
+    }
+}
+```
+
+运行结果：
+
+运行时长0.065
+结果1000000
+
+## 6.4 AQS的抢锁原理
+
+> Java并发的作者道格李专门除了一篇论文来阐述关于JavaAQS，原文是这样的
+>
+> ![image-20220428172322567](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220428172322567.png)
+>
+> 大概意思是说节点全部都是原子入队的，每一个节点的状态都保存在他的前一个节点中，自旋之后的出队列操作只需要将头部字段设置为刚刚获得锁的节点
+>
+> The main additional modification needed to use CLH queues for blocking synchronizers is to provide an efficient way for one node to locate its successor. In spinlocks, a node need only change its status, which will be noticed on next spin by its successor, so links are unnecessary. But in a blocking synchronizer, a node needs to explicitly wake up (unpark) its successor.
+
+我们下面根据上面自定义SimpleLock来分析一下AQS的抢锁原理。首先给出抢锁的流程图：
+
+下面来分析，在SimpleLock中，加锁是委托给AQS的，代码如下：
+
+```java
+@Override
+public void lock() {
+    //委托给AQS
+    sync.acquire(1);
+}
+```
+
+### 6.5.2 模板方法acquire()
+
+我们跟进acquire方法，会调用AQS的模板方法：
+
+```java
+public final void acquire(int arg) {
+    if (!tryAcquire(arg) &&
+        acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+        selfInterrupt();
+}
+```
+
+### 6.5.3 钩子实现tryAcquire()
+
+在模板方法中首先执行一次钩子方法，而钩子方法是锁实现的，所以会执行SimpleLock的tryAcquire：
+
+```java
+@Override
+protected boolean tryAcquire(int arg) {
+    if (compareAndSetState(0,1)){
+        setExclusiveOwnerThread(Thread.currentThread());
+        return true;
+    }
+    return false;
+}
+```
+
+> SimpleLock的实现非常简单，是不可以重入的，仅仅为了学习AQS而编写。
+
+### 6.5.4 直接入队addWaiter
+
+SimpleLock的tryAcquire逻辑不在赘述，然后在acquire模板方法中，如果钩子方法tryAcquire尝试获取同步状态失败的话，就构造同步节点（独占式节点模式为Node.EXCLUSIVE），通过addWaiter(Node node,int args)方法将该节点加入同步队列的队尾。addWaiter方法源码如下：
 
 
 
+```java
+private Node addWaiter(Node mode) {
+    //创建新节点，将当前线程存入节点，并表示此节点是共享的还是独占的
+    Node node = new Node(Thread.currentThread(), mode);
+    // Try the fast path of enq; backup to full enq on failure
+    //尝试将目前队列的对位作为自己的前驱结点
+    Node pred = tail;
+    if (pred != null) {
+        node.prev = pred;
+        //尝试CAS方式修改队尾节点为当前最新建的节点
+        if (compareAndSetTail(pred, node)) {
+            //如果修改成功就将新节点加到队列的尾部
+            pred.next = node;
+            return node;
+        }
+    }
+    //尝试加入队列尾部失败，自旋
+    enq(node);
+    return node;
+}
+```
+
+### 6.5.5 自旋入队enq
+
+addWaiter()第一次尝试在尾部添加节点失败，意味着有并发抢锁发生，需要进行自旋。enq()方法通过CAS自旋将节点添加到队列尾部。enq方法源码如下：
+
+```java
+private Node enq(final Node node) {
+    for (;;) {
+        Node t = tail;
+        //t==null表示当前队列为空，需要初始化
+        if (t == null) { // Must initialize
+            //将头尾节点都初始化成新节点
+            if (compareAndSetHead(new Node()))
+                tail = head;
+        } else {
+            //当前队列不为空，新节点插入队列尾部
+            node.prev = t;
+            if (compareAndSetTail(t, node)) {
+                t.next = node;
+                return t;
+            }
+        }
+    }
+}
+```
+
+### 6.5.6 自旋抢锁acquireQueued
+
+addWaiter这个方法我们已经了解了，下面我们回到模板方法acquire(),在addWaiter将节点入队之后，启动自旋抢锁的流程（也就是acquireQueued方法）。
+
+**acquireQueued()方法的主要逻辑**：当前Node节点线程在死循环中不断获取同步状态，并且不断在前驱节点上自旋，只有当前驱节点是头节点时才能尝试获取锁，原因是：
+
+- 头节点是成功获取同步状态（锁）的节点，而头节点的线程释放了同步状态以后，将会唤醒其后继节点，后继节点的线程被唤醒后要检查自己的前驱节点是否为头节点。
+- 维护同步队列的FIFO原则，节点进入同步队列之后，就进入了自旋的过程，每个节点都在不断地执行for死循环。
 
 
 
+我们现在看一下acquireQueued方法源码：
 
+```java
+final boolean acquireQueued(final Node node, int arg) {
+    boolean failed = true;
+    try {
+        boolean interrupted = false;
+        //自旋不断检查当前节点的前驱节点是否是头节点
+        for (;;) {
+            //获取节点的前驱节点
+            final Node p = node.predecessor();
+            //如果前驱节点是头节点，那么就执行tryAcquire进行抢锁
+            if (p == head && tryAcquire(arg)) {
+                //抢锁成功后将当前节点设置为头节点，移除之前的头节点
+                setHead(node);
+                p.next = null; // help GC
+                failed = false;
+                return interrupted;
+            }
+            //检查前一个节点的状态，预判当前线程获取锁失败是否要挂起
+            //如果需要挂起就执行parkAndCheckInterrupt挂起当前线程，直到被唤醒
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                parkAndCheckInterrupt())
+                interrupted = true;//两个操作都为true，就设置为true
+        }
+    } finally {
+        //如果等待过程中没有成功获取到资源（如timeout，或者可中断的情况下被中断），那么就取消节点在队列的等待
+        if (failed)
+            //取消请求，将当前节点从队列中移除
+            cancelAcquire(node);
+    }
+}
+```
 
+此方法的关键点：
+
+- acquireQueued()自旋过程中会阻塞线程，等待被前驱节点唤醒后才启动循环。如果成功就返回，否则执行shouldParkAfterFailedAcquire()、parkAndCheckInterrupt()来达到阻塞的效果。
+- 调用acquireQueued()方法的线程一定是node所绑定的线程（由它的thread属性所引用），该线程也是最开始调用lock()方法抢锁的那个线程，在acquireQueued()的死循环中，该线程可能重复进行阻塞和被唤醒。
+- AQS队列上每一个节点所绑定的线程在抢锁的过程中都会自旋执行acquireQueued()方法的死循环，也就是说，AQS队列上每个节点的线程都不断自旋
+- 如果头节点获取了锁，那么该节点绑定的线程会终止acquireQueued()自旋，线程会去执行临界区代码。此时，其余的节点处于自旋状态，处于自旋状态的线程当然也不会执行无效的空循环而导致CPU资源浪费，而是被挂起（Park）进入阻塞状态。AQS队列的节点自旋不像CLH节点那样在空自旋而耗费资源。
+
+我们下面来分析一下此方法中的shouldParkAfterFailedAcquire()、parkAndCheckInterrupt()
+
+### 6.5.7 挂起预判shouldParkAfterFailedAcquire
+
+acquireQueued()自旋在阻塞自己的线程之前会进行挂起预判。shouldParkAfterFailedAcquire()方法的主要功能是：将当前节点的有效前驱节点（是指有效节点不是CANCELLED类型的节点）找到，并且将有效前驱节点的状态设置为SIGNAL，如果返回true代表当前线程可以马上被阻塞了。具体可以分为三种情况，见代码。
+
+我们看一下源码：
+
+```java
+private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
+    //pred是传入的前驱结点，node是传入的当前节点
+    int ws = pred.waitStatus;//获取前驱节点的状态
+    //如果是SIGNAL就直接返回
+    if (ws == Node.SIGNAL)
+        /*
+         * This node has already set status asking a release
+         * to signal it, so it can safely park.
+         */
+        return true;
+    //如果是CANCELLED，说明前驱节点已经取消
+    if (ws > 0) {
+        /*
+         * Predecessor was cancelled. Skip over predecessors and
+         * indicate retry.
+         */
+        do {
+            //不断循环，找到有效的前驱节点（就是状态不是CANCELLED的节点）
+            node.prev = pred = pred.prev;//这句话的意思就是将node的前驱变成pred的前驱
+            //如果不理解可以将上面这句话分解，分解成这样
+            //pred = pred.prev;//将pred变成前驱的前驱，就是pred的前驱，node的前前驱
+            //node.prev = pred;//当前指针指向pred的前驱
+        } while (pred.waitStatus > 0);
+        pred.next = node;
+    } else {
+        /*
+         * waitStatus must be 0 or PROPAGATE.  Indicate that we
+         * need a signal, but don't park yet.  Caller will need to
+         * retry to make sure it cannot acquire before parking.
+         */
+        //如果前驱状态不是CANCELLED也不是SIGNAL（PROPAGATE共享锁等待、CONDITION条件等待、0（初始状态））那么就设置成SIGNAL
+        compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
+        //设置成SIGNAL此方法返回false，表示线程不可用，被阻塞
+    }
+    return false;
+}
+```
+
+在独占锁的场景中，shouldParkAfterFailedAcquire()方法是在acquireQueued()方法的死循环中被调用的，由于此方法返回false时acquireQueued()不会阻塞当前线程，只有此方法返回true时当前线程才阻塞，**因此在一般情况下，此方法至少需要执行两次，当前线程才会被阻塞**。
+
+> 在第一次进入此方法时，首先会进入后一个if判断的else分支，通过CAS设置pred前驱的waitStatus为SIGNAL，然后返回false。此方法返回false之后，获取独占锁的acquireQueued()方法会继续进行for循环去抢锁：（1）假设node的前驱节点是头节点，tryAcquire()抢锁成功，则获取到锁。（2）假设node的前驱节点不是头节点，或者tryAcquire()抢锁失败，仍然会再次调用此方法。第二次进入此方法时，由于上一次进入时已经将pred.waitStatus设置为?1（SIGNAL）了，因此这次会进入第一个判断条件，直接返回true，表示应该调用parkAndCheckInterrupt()阻塞当前线程，等待前一个节点执行完成之后唤醒。
+
+**什么时候遇到前驱节点状态waitStatus等于0（初始状态）的场景呢**？分为两种情况：
+
+1. node节点刚成为新队尾，但还没有将旧队尾的状态设置为SIGNAL。
+2. node节点的前驱节点为head。
+
+前驱节点为waitStatus等于0的情况是最常见的。比如现在AQS的等待队列中有很多节点正在等待，当前线程刚执行完毕addWaiter()（节点刚成为新队尾），然后现在开始执行获取锁的死循环（独占锁对应的是acquireQueued()里的死循环，共享锁对应的是doAcquireShared()里的死循环），此时节点的前驱（也就是旧队尾的状态）肯定还是0（也就是默认初始化的值），然后死循环执行两次，第一次执行shouldParkAfterFailedAcquire()自然会检测到前驱状态为0，然后将0设置为SIGNAL，第二次执行shouldParkAfterFailedAcquire()，由于前驱节点为SIGNAL，当前线程直接返回true，去执行自我阻塞。
+
+**什么时候会遇到前驱节点的状态waitStatus大于0的场景呢**？当pred前驱节点的抢锁请求被取消，后期状态为CANCELLED（值为1）时，当前节点（如果被唤醒）就会循环移除所有被取消的前驱节点，直到找到未被取消的前驱。在移除所有被取消的前驱节点后，此方法将返回false，再次去执行acquireQueued()的自旋抢占。
+
+**什么时候遇到前驱节点状态waitStatus等于-3（PROPAGATE）的场景呢**？PROPAGATE只能在使用共享锁的时候出现，并且只可能设置在head上。所以，对于非队尾节点，如果它的状态为0或PROPAGATE，那么它肯定是head。当等待队列中有多个节点时，如果head的状态为0或PROPAGATE，说明head处于一种中间状态，且此时有线程刚才释放锁了。而对于抢锁线程来说，如果检测到这种状态，说明再次执行acquire()方法是极有可能获得锁的。
+
+### 6.5.8 线程挂起parkAndCheckInterrupt 
+
+parkAndCheckInterrupt()的主要任务是暂停当前线程：
+
+```java
+private final boolean parkAndCheckInterrupt() {
+    LockSupport.park(this);//阻塞当前线程
+    return Thread.interrupted();//如果被唤醒看看当前线程是否被中断
+}
+```
+
+AQS会把所有的等待线程构成一个阻塞等待队列，当一个线程执行完lock.unlock()时，会激活其后继节点，通过调用LockSupport.unpark(postThread)完成后继线程的唤醒。
+
+### 6.5.9 取消请求cancelAcquire
+
+```java
+private void cancelAcquire(Node node) {
+    // 当前节点不存在忽略
+    if (node == null)
+        return;
+
+    node.thread = null;
+
+    // Skip cancelled predecessors
+    Node pred = node.prev;
+    //如果前驱状态为取消CANCELLED
+    while (pred.waitStatus > 0)
+        node.prev = pred = pred.prev;//将node的前驱变成pred的前驱
+
+    // predNext is the apparent node to unsplice. CASes below will
+    // fail if not, in which case, we lost race vs another cancel
+    // or signal, so no further action is necessary.
+    Node predNext = pred.next;
+
+    // Can use unconditional write instead of CAS here.
+    // After this atomic step, other Nodes can skip past us.
+    // Before, we are free of interference from other threads.
+    node.waitStatus = Node.CANCELLED;
+
+    // If we are the tail, remove ourselves.
+    if (node == tail && compareAndSetTail(node, pred)) {
+        compareAndSetNext(pred, predNext, null);
+    } else {
+        // If successor needs signal, try to set pred's next-link
+        // so it will get one. Otherwise wake it up to propagate.
+        int ws;
+        if (pred != head &&
+            ((ws = pred.waitStatus) == Node.SIGNAL ||
+             (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL))) &&
+            pred.thread != null) {
+            Node next = node.next;
+            if (next != null && next.waitStatus <= 0)
+                compareAndSetNext(pred, predNext, next);
+        } else {
+            unparkSuccessor(node);
+        }
+
+        node.next = node; // help GC
+    }
+}
+```
