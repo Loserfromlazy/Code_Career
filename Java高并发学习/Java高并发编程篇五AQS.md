@@ -435,17 +435,39 @@ public class TestAQS {
 
 ## 6.4 AQS的抢锁原理
 
-> Java并发的作者道格李专门除了一篇论文来阐述关于JavaAQS，原文是这样的
->
-> ![image-20220428172322567](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220428172322567.png)
->
-> 大概意思是说节点全部都是原子入队的，每一个节点的状态都保存在他的前一个节点中，自旋之后的出队列操作只需要将头部字段设置为刚刚获得锁的节点
->
-> The main additional modification needed to use CLH queues for blocking synchronizers is to provide an efficient way for one node to locate its successor. In spinlocks, a node need only change its status, which will be noticed on next spin by its successor, so links are unnecessary. But in a blocking synchronizer, a node needs to explicitly wake up (unpark) its successor.
+### 6.4.1 抢锁的原理
 
-我们下面根据上面自定义SimpleLock来分析一下AQS的抢锁原理。首先给出抢锁的流程图：
+Java并发的作者道格李专门除了一篇[论文](http://gee.cs.oswego.edu/dl/papers/aqs.pdf)来阐述关于JavaAQS，我们这里根据AQS的部分原文，来简单了解一下AQS抢锁的原理：
 
-下面来分析，在SimpleLock中，加锁是委托给AQS的，代码如下：
+首先Lea介绍了CLH锁的优点，比如CLH锁入队出队非常快，且是无阻塞的，在判断是否有线程等待时也只需要判断首尾节点是否相同。而且通过显式地在节点中维护前继节点字段，CLH锁可以处理超时和其他形式的取消:如果节点的前任取消了，节点可以向上滑到使用前一个节点的状态字段。关于CLH的介绍，原文图片如下：
+
+![image-20220429111628900](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220429111628900.png)
+
+所以Lea最终选择了CLH作为AQS同步阻塞器的实现基础（这也是上一篇简单实现CLH锁的原因）。然后其对变动进行了说明。
+
+首先就是CLH锁没有后继节点，因为自旋锁只需要改变自己的状态，但是AQS阻塞队列需要显式的唤醒后继节点。
+
+其次AQS阻塞队列是通过保存在每一个节点的状态来控制线程的阻塞，而不是像CLH中那样通过普通自旋来完成。而且队列节点状态字段也用于避免不必要的park and unpark操作。在调用park阻塞当前线程之前会设置一个通知状态（也就是SIGNAL），然后再次进行检查。这么做可以避免线程不必要地频繁阻塞，特别是对于锁相关的类，在这些锁类中，等待下一个符合条件的线程获得锁的时间会加剧竞争。
+
+AQS的主要特点就是利用GC来管理节点的存储回收，从而避免了复杂性和开销。基本acquire操作(独占的、不可中断的、不定时的情况)的结果实现的一般形式如下图:
+
+![image-20220429112817123](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220429112817123.png)
+
+释放操作如下图：
+
+![image-20220429112850242](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220429112850242.png)
+
+
+
+
+
+
+
+
+
+
+
+我们下面根据上面自定义SimpleLock来分析一下AQS的抢锁原理。在SimpleLock中，加锁是委托给AQS的，代码如下：
 
 ```java
 @Override
@@ -455,7 +477,7 @@ public void lock() {
 }
 ```
 
-### 6.5.2 模板方法acquire()
+### 6.4.2 模板方法acquire()
 
 我们跟进acquire方法，会调用AQS的模板方法：
 
@@ -467,7 +489,7 @@ public final void acquire(int arg) {
 }
 ```
 
-### 6.5.3 钩子实现tryAcquire()
+### 6.4.3 钩子实现tryAcquire()
 
 在模板方法中首先执行一次钩子方法，而钩子方法是锁实现的，所以会执行SimpleLock的tryAcquire：
 
@@ -484,18 +506,16 @@ protected boolean tryAcquire(int arg) {
 
 > SimpleLock的实现非常简单，是不可以重入的，仅仅为了学习AQS而编写。
 
-### 6.5.4 直接入队addWaiter
+### 6.4.4 直接入队addWaiter
 
-SimpleLock的tryAcquire逻辑不在赘述，然后在acquire模板方法中，如果钩子方法tryAcquire尝试获取同步状态失败的话，就构造同步节点（独占式节点模式为Node.EXCLUSIVE），通过addWaiter(Node node,int args)方法将该节点加入同步队列的队尾。addWaiter方法源码如下：
-
-
+SimpleLock的tryAcquire逻辑不再赘述，然后在acquire模板方法中，如果钩子方法tryAcquire尝试获取同步状态失败的话，就构造同步节点（独占式节点模式为Node.EXCLUSIVE），通过addWaiter(Node node,int args)方法将该节点加入同步队列的队尾。addWaiter方法源码如下：
 
 ```java
 private Node addWaiter(Node mode) {
     //创建新节点，将当前线程存入节点，并表示此节点是共享的还是独占的
     Node node = new Node(Thread.currentThread(), mode);
     // Try the fast path of enq; backup to full enq on failure
-    //尝试将目前队列的对位作为自己的前驱结点
+    //尝试将目前队列的末尾作为自己的前驱结点
     Node pred = tail;
     if (pred != null) {
         node.prev = pred;
@@ -512,7 +532,7 @@ private Node addWaiter(Node mode) {
 }
 ```
 
-### 6.5.5 自旋入队enq
+### 6.4.5 自旋入队enq
 
 addWaiter()第一次尝试在尾部添加节点失败，意味着有并发抢锁发生，需要进行自旋。enq()方法通过CAS自旋将节点添加到队列尾部。enq方法源码如下：
 
@@ -537,11 +557,11 @@ private Node enq(final Node node) {
 }
 ```
 
-### 6.5.6 自旋抢锁acquireQueued
+### 6.4.6 自旋抢锁acquireQueued
 
 addWaiter这个方法我们已经了解了，下面我们回到模板方法acquire(),在addWaiter将节点入队之后，启动自旋抢锁的流程（也就是acquireQueued方法）。
 
-**acquireQueued()方法的主要逻辑**：当前Node节点线程在死循环中不断获取同步状态，并且不断在前驱节点上自旋，只有当前驱节点是头节点时才能尝试获取锁，原因是：
+**acquireQueued()方法的主要逻辑**：当前Node节点线程在死循环中不断获取同步状态，并且**不断在前驱节点上自旋**，只有当前驱节点是头节点时才能尝试获取锁，原因是：
 
 - 头节点是成功获取同步状态（锁）的节点，而头节点的线程释放了同步状态以后，将会唤醒其后继节点，后继节点的线程被唤醒后要检查自己的前驱节点是否为头节点。
 - 维护同步队列的FIFO原则，节点进入同步队列之后，就进入了自旋的过程，每个节点都在不断地执行for死循环。
@@ -575,6 +595,7 @@ final boolean acquireQueued(final Node node, int arg) {
         }
     } finally {
         //如果等待过程中没有成功获取到资源（如timeout，或者可中断的情况下被中断），那么就取消节点在队列的等待
+        //由于超时或中断而被取消的线程会设置它的节点状态并取消它的后继节点，这样它就可以重置链接
         if (failed)
             //取消请求，将当前节点从队列中移除
             cancelAcquire(node);
@@ -591,7 +612,7 @@ final boolean acquireQueued(final Node node, int arg) {
 
 我们下面来分析一下此方法中的shouldParkAfterFailedAcquire()、parkAndCheckInterrupt()
 
-### 6.5.7 挂起预判shouldParkAfterFailedAcquire
+### 6.4.7 挂起预判shouldParkAfterFailedAcquire
 
 acquireQueued()自旋在阻塞自己的线程之前会进行挂起预判。shouldParkAfterFailedAcquire()方法的主要功能是：将当前节点的有效前驱节点（是指有效节点不是CANCELLED类型的节点）找到，并且将有效前驱节点的状态设置为SIGNAL，如果返回true代表当前线程可以马上被阻塞了。具体可以分为三种情况，见代码。
 
@@ -651,7 +672,7 @@ private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
 
 **什么时候遇到前驱节点状态waitStatus等于-3（PROPAGATE）的场景呢**？PROPAGATE只能在使用共享锁的时候出现，并且只可能设置在head上。所以，对于非队尾节点，如果它的状态为0或PROPAGATE，那么它肯定是head。当等待队列中有多个节点时，如果head的状态为0或PROPAGATE，说明head处于一种中间状态，且此时有线程刚才释放锁了。而对于抢锁线程来说，如果检测到这种状态，说明再次执行acquire()方法是极有可能获得锁的。
 
-### 6.5.8 线程挂起parkAndCheckInterrupt 
+### 6.4.8 线程挂起parkAndCheckInterrupt 
 
 parkAndCheckInterrupt()的主要任务是暂停当前线程：
 
@@ -664,7 +685,13 @@ private final boolean parkAndCheckInterrupt() {
 
 AQS会把所有的等待线程构成一个阻塞等待队列，当一个线程执行完lock.unlock()时，会激活其后继节点，通过调用LockSupport.unpark(postThread)完成后继线程的唤醒。
 
-### 6.5.9 取消请求cancelAcquire
+### 6.4.9 取消请求cancelAcquire
+
+> 关于取消请求，Doug Lea的论文中对其介绍如下
+>
+> Cancellation support mainly entails checking for interrupt or timeout upon each return from park inside the acquire loop. A cancelled thread due to timeout or interrupt sets its node status and unparks its successor so it may reset links. With cancellation, determining predecessors and successors and resetting status may include O(n) traversals (where n is the length of the queue). Because a thread never again blocks for a cancelled operation, links and status fields tend to restabilize quickly.
+>
+> 
 
 ```java
 private void cancelAcquire(Node node) {
@@ -678,7 +705,7 @@ private void cancelAcquire(Node node) {
     Node pred = node.prev;
     //如果前驱状态为取消CANCELLED
     while (pred.waitStatus > 0)
-        node.prev = pred = pred.prev;//将node的前驱变成pred的前驱
+        node.prev = pred = pred.prev;//将node的前驱变成pred的前驱，可以见6.5.7中的注释
 
     // predNext is the apparent node to unsplice. CASes below will
     // fail if not, in which case, we lost race vs another cancel
@@ -712,3 +739,191 @@ private void cancelAcquire(Node node) {
     }
 }
 ```
+
+## 6.5 AQS释放锁原理
+
+根据上面自定义SimpleLock来分析一下AQS的锁释放的原理。
+
+### 6.5.1 AQS模板方法 release()
+
+SimpleMockLock的unlock()方法被调用时，会调用AQS的release(…)的模板方法。AQS的release(…)的模板方法代码如下：
+
+```java
+public final boolean release(int arg) {
+    //如果同步状态的钩子方法执行成功
+    if (tryRelease(arg)) {
+        Node h = head;
+        //当head指向的头节点不为null，并且该节点的状态值不为0时，执行unparkSuccessor()方法
+        if (h != null && h.waitStatus != 0)
+            unparkSuccessor(h);
+        return true;
+    }
+    return false;
+}
+```
+
+### 6.5.2 AQS 钩子实现 tryRelease()
+
+~~~java
+ @Override
+protected boolean tryRelease(int arg) {
+    if (Thread.currentThread()!= getExclusiveOwnerThread()){
+        throw new IllegalMonitorStateException();
+    }
+    if (getState()==0){
+        throw new IllegalMonitorStateException();
+    }
+    //下面操作不存在并发
+    setExclusiveOwnerThread(null);
+    setState(0);
+    return true;
+}
+~~~
+
+此方法不再赘述
+
+### 6.5.3 唤醒后继结点
+
+release()钩子执行tryRelease()钩子成功之后，使用unparkSuccessor()唤醒后继节点，具体的代码如下：
+
+```java
+/**
+ * Wakes up node's successor, if one exists.
+ *
+ * @param node the node
+ */
+private void unparkSuccessor(Node node) {
+    /*
+     * If status is negative (i.e., possibly needing signal) try
+     * to clear in anticipation of signalling.  It is OK if this
+     * fails or if status is changed by waiting thread.
+     */
+    int ws = node.waitStatus;
+    //如果头节点的状态小于0，将其置为0，表示初始状态
+    if (ws < 0)
+        compareAndSetWaitStatus(node, ws, 0);
+
+    /*
+     * Thread to unpark is held in successor, which is normally
+     * just the next node.  But if cancelled or apparently null,
+     * traverse backwards from tail to find the actual
+     * non-cancelled successor.
+     */
+    Node s = node.next;
+    if (s == null || s.waitStatus > 0) {
+        //如果节点已经被取消
+        s = null;
+        //从队列尾部开始，往前去找前面一个waitStatus小于0的节点
+        for (Node t = tail; t != null && t != node; t = t.prev)
+            if (t.waitStatus <= 0)
+                s = t;
+    }
+    //唤醒后继结点队对应的线程
+    if (s != null)
+        LockSupport.unpark(s.thread);
+}
+```
+
+## 6.6 节点的入队和出队
+
+对于上面AQS原理的一个比较重要的关键点在于掌握节点的入队和出队。
+
+### 6.6.1 节点的入队
+
+节点在第一次入队失败后，就会开始自旋入队，分为以下两种情况：
+
+1. 如果AQS的队列非空，新节点入队的插入位置在队列的尾部，并且通过CAS方式插入，插入之后AQS的tail将指向新的尾节点。
+2. 如果AQS的队列为空，新节点入队时，AQS通过CAS方法将新节点设置为头节点head，并且将tail指针指向新节点。
+
+~~~java
+private Node enq(final Node node) {
+    for (;;) {
+        Node t = tail;
+        //t==null表示当前队列为空，需要初始化
+        if (t == null) { // Must initialize
+            //将头尾节点都初始化成新节点
+            if (compareAndSetHead(new Node()))
+                tail = head;
+        } else {
+            //当前队列不为空，新节点插入队列尾部
+            node.prev = t;
+            if (compareAndSetTail(t, node)) {
+                t.next = node;
+                return t;
+            }
+        }
+    }
+}
+~~~
+
+### 6.6.2 节点的出队
+
+节点出队的算法在acquireQueued()方法中，这是一个非常重要的模板方法。acquireQueued()方法不断在前驱节点上自旋（for死循环），如果前驱节点是头节点并且当前线程使用钩子方法tryAcquire(arg)获得了锁，就移除头节点，将当前节点设置为头节点。
+
+~~~java
+final boolean acquireQueued(final Node node, int arg) {
+    boolean failed = true;
+    try {
+        boolean interrupted = false;
+        //自旋不断检查当前节点的前驱节点是否是头节点
+        for (;;) {
+            //获取节点的前驱节点
+            final Node p = node.predecessor();
+            //如果前驱节点是头节点，通过子类的tryAcquire进行抢锁
+            if (p == head && tryAcquire(arg)) {
+                //抢锁成功后将当前节点设置为头节点，移除之前的头节点
+                setHead(node);
+                p.next = null; // help GC
+                failed = false;
+                return interrupted;
+            }
+            //检查前一个节点的状态，预判当前线程获取锁失败是否要挂起
+            //如果需要挂起就执行parkAndCheckInterrupt挂起当前线程，直到被唤醒
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                parkAndCheckInterrupt())
+                interrupted = true;//两个操作都为true，就设置为true
+        }
+    } finally {
+        //如果等待过程中没有成功获取到资源（如timeout，或者可中断的情况下被中断），那么就取消节点在队列的等待
+        //由于超时或中断而被取消的线程会设置它的节点状态并取消它的后继节点，这样它就可以重置链接
+        if (failed)
+            //取消请求，将当前节点从队列中移除
+            cancelAcquire(node);
+    }
+}
+~~~
+
+节点加入队列尾部后，如果其前驱节点不是头节点，通常情况下，该新节点所绑定的线程会被无限期阻塞，而不会去执行无效循环，从而导致CPU资源的浪费。
+
+那么阻塞的线程何时唤醒？
+
+对于公平锁而言，头节点就是占用锁的节点，在释放锁时，将会唤醒其后继节点所绑定的线程。后继节点的线程被唤醒后会重新执行以上acquireQueued()的自旋（for死循环）抢锁逻辑，检查自己的前驱节点是否为头节点，如果是，在抢锁成功之后会移除旧的头节点。
+
+### 6.6.3 入队出队总结
+
+我们通过例子来了解整个入队出队的流程：
+
+假设现在有五个线程同时抢一个临界资源，如图：
+
+![image-20220429142331058](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220429142331058.png)
+
+每一个线程抢锁的流程都是这样的，如下图：
+
+![image-20220429143019209](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220429143019209.png)
+
+现在假设五个线程只有线程1抢到了锁，其余线程没抢到锁都加入了队列，那么队列结构如下：
+
+head->node1->node2->node3->node4->node5
+
+> 这里我们假设node1中的线程就是thread1以此类推。上面只是举个例子，实际上不一定这么正好按顺序加入队列。
+
+因为每一个节点都在执行自旋检查，我们这里就拿node1和node5两个典型的node来看他们的自旋过程：
+
+首先是node1，
+
+
+
+
+
+
+
