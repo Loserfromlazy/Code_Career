@@ -899,29 +899,9 @@ final boolean acquireQueued(final Node node, int arg) {
 
 对于公平锁而言，头节点就是占用锁的节点，在释放锁时，将会唤醒其后继节点所绑定的线程。后继节点的线程被唤醒后会重新执行以上acquireQueued()的自旋（for死循环）抢锁逻辑，检查自己的前驱节点是否为头节点，如果是，在抢锁成功之后会移除旧的头节点。
 
-### 6.6.3 入队出队总结
+## 6.7 ReentrantLock抢锁原理
 
-我们通过例子来了解整个入队出队的流程：
-
-假设现在有五个线程同时抢一个临界资源，如图：
-
-![image-20220429142331058](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220429142331058.png)
-
-每一个线程抢锁的流程都是这样的，如下图：
-
-![image-20220429143019209](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220429143019209.png)
-
-现在假设五个线程只有线程1抢到了锁，其余线程没抢到锁都加入了队列，那么队列结构如下：
-
-head->node1->node2->node3->node4->node5
-
-> 这里我们假设node1中的线程就是thread1以此类推。上面只是举个例子，实际上不一定这么正好按顺序加入队列。
-
-因为每一个节点都在执行自旋检查，我们这里就拿node1和node5两个典型的node来看他们的自旋过程：
-
-首先是node1，
-
-
+下面结合AbstractQueuedSynchronizer()的模板方法详细说明ReentrantLock的实现过程。ReentrantLock有两种模式：
 
 
 
