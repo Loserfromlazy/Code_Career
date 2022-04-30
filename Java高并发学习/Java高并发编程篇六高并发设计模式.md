@@ -32,7 +32,178 @@ Master-Worker模式是一种常见的高并发模式，它的核心思想是任�
 
 ### 7.2.1 Master-Worker模式的参考实现
 
+j举个例子需要执行N个任务，将这些任务的结果进行累加求和，如果任务太多，就可以采用Master-Worker模式来实现。Master持有workerCount个Worker，并且负责接收任务，然后分发给Worker，最后在回调函数中对Worker的结果进行归并求和。
 
+先创建一个任务类：
+
+```java
+@Data
+public class Task<R> {
+    static AtomicInteger index =new AtomicInteger(1);
+    //Consumer表示接受单个输入参数但不返回结果的操作。
+    //任务的回调函数
+    public Consumer<Task<R>> resultAction;
+    //任务的id
+    private int id;
+    //worker ID
+    private int workerId;
+    //计算结果
+    R result = null;
+
+    public Task() {
+        this.id = index.getAndIncrement();
+    }
+
+    public void execute(){
+        this.result = this.doExecute();
+        resultAction.accept(this);
+    }
+
+    /**
+     * 由子类实现
+     * @return R 执行结果
+     */
+    protected R doExecute(){
+        return null;
+    }
+}
+```
+
+然后创建一个Worker类
+
+```java
+public class Worker<T extends Task, R> {
+
+    //接收任务的阻塞队列
+    private LinkedBlockingQueue<T> taskQueue = new LinkedBlockingQueue<>();
+    //Worker的编号
+    static AtomicInteger index = new AtomicInteger(1);
+    //worker id
+    private int workerId;
+    //执行任务的线程
+    private Thread thread = null;
+
+    public Worker() {
+        this.workerId = index.getAndIncrement();
+        thread = new Thread(this::run);
+        thread.start();
+    }
+
+    //轮询执行任务
+    public void run() {
+        for (; ; ) {
+            try {
+                T task = this.taskQueue.take();
+                task.setWorkerId(workerId);
+                task.execute();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    //接收任务到异步队列
+    public void submit(T task, Consumer<R> action){
+        //设置任务的回调函数
+        task.resultAction = action;
+        try {
+            this.taskQueue.put(task);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+然后在创建一个Master类：
+
+```java
+public class Master<T extends Task, R> {
+    //所有worker的集合
+    private HashMap<String, Worker<T, R>> workers = new HashMap<>();
+    //任务的集合
+    private LinkedBlockingDeque<T> taskQueue = new LinkedBlockingDeque<>();
+    //线程处理结果集合
+    protected Map<String, R> resultMap = new ConcurrentHashMap<>();
+    //Master的任务调度线程
+    private Thread thread = null;
+    //保持最终的和
+    private AtomicLong sum = new AtomicLong(0);
+
+    public Master(int workerCount) {
+        //每个worker对象都需要有queue的引用，用于领任务和提交结果
+        for (int i = 0; i < workerCount; i++) {
+            Worker<T, R> worker = new Worker<>();
+            workers.put("子节点" + i, worker);
+        }
+        thread = new Thread(() -> this.execute());
+        thread.start();
+    }
+
+    //提交任务
+    public void submit(T task) {
+        taskQueue.add(task);
+    }
+
+    //获取worker结果处理的回调函数
+    private void resultCallBack(Object o) {
+        Task<R> task = (Task<R>) o;
+        String taskName = "Worker:" + task.getWorkerId() + "- Task:" + task.getId();
+        R result = task.getResult();
+        resultMap.put(taskName, result);
+
+        sum.getAndAdd(Long.parseLong(result.toString()));
+    }
+
+    //启动所有的子任务
+    public void execute() {
+        for (; ; ) {
+            for (Map.Entry<String, Worker<T, R>> entry : workers.entrySet()) {
+                T task = null;
+                try {
+                    task = this.taskQueue.take();
+                    Worker<T, R> worker = entry.getValue();
+                    worker.submit(task, this::resultCallBack);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    public void printResult() {
+        System.out.println("---sum is" + sum.get());
+        for (Map.Entry<String, R> entry : resultMap.entrySet()) {
+            String key = entry.getKey();
+            System.out.println(key + " -value:" + entry.getValue());
+        }
+    }
+
+}
+```
+
+最后编写测试类：
+
+```java
+public class Test {
+    static class SimpleTask extends Task<Integer>{
+        @Override
+        protected Integer doExecute() {
+            System.out.println("task"+getId()+"is done");
+            return getId();
+        }
+    }
+
+    public static void main(String[] args) {
+        Master<SimpleTask,Integer> master = new Master(10);
+        //这里测试方便，生产环境禁止
+        ScheduledExecutorService service = Executors.newScheduledThreadPool(20);
+        //定期向master提交任务
+        service.scheduleAtFixedRate(()-> master.submit(new SimpleTask()),2,2, TimeUnit.SECONDS);
+        //定期从master获取结果
+        service.scheduleAtFixedRate(() -> master.printResult(),5,5, TimeUnit.SECONDS);
+    }
+}
+```
 
 ### 7.2.2 Netty中Master-Worker模式的实现
 
