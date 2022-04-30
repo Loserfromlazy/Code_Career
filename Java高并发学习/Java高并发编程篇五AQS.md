@@ -20,9 +20,9 @@
 
 > 解决CAS恶性空自旋的有效方式之一是以空间换时间，较为常见的方案有两种：分散操作热点和使用队列削峰。JUC并发包使用的是队列削峰的方案解决CAS的性能问题，并提供了一个基于双向队列的削峰基类——抽象基础类AbstractQueuedSynchronizer（抽象同步器类，简称为AQS）。
 
-# AQS抽象同步器的核心原理
+# 六、AQS抽象同步器的核心原理
 
-
+AQS建立在CAS原子操作和volatile可见性变量的基础之上，为上层的显式锁、同步工具类、阻塞队列、线程池、并发容器、Future异步工具提供线程之间同步的基础设施。所以，AQS在JUC框架中的使用是非常广泛的。
 
 ## 6.1 队列和锁的关系
 
@@ -899,9 +899,162 @@ final boolean acquireQueued(final Node node, int arg) {
 
 对于公平锁而言，头节点就是占用锁的节点，在释放锁时，将会唤醒其后继节点所绑定的线程。后继节点的线程被唤醒后会重新执行以上acquireQueued()的自旋（for死循环）抢锁逻辑，检查自己的前驱节点是否为头节点，如果是，在抢锁成功之后会移除旧的头节点。
 
-## 6.7 ReentrantLock抢锁原理
+## 6.7 AQS同步队列
 
-下面结合AbstractQueuedSynchronizer()的模板方法详细说明ReentrantLock的实现过程。ReentrantLock有两种模式：
+Condition是JUC用来替代传统Object的wait()/notify()线程间通信与协作机制的新组件，相比调用Object的wait()/notify()，调用Condition的await()/signal()这种方式实现线程间协作更加高效。
+
+原作者道格李的关于AQS的论文中是这么描述等待和唤醒的流程：
+
+~~~
+The basic await operation is:
+ create and add new node to condition queue;
+ release lock;
+ block until node is on lock queue;
+ re-acquire lock;
+And the signal operation is:
+ transfer the first node from condition queue to lock queue;
+~~~
+
+### 6.7.1 Condition原理
+
+Condition与Object的wait()/notify()作用是相似的，都是使得一个线程等待某个条件，只有当该条件具备signal()或者signalAll()方法被调用时等待线程才会被唤醒，从而重新争夺锁。不同的是，Object的wait()/notify()由JVM底层实现，而Condition接口与实现类完全使用Java代码实现。当需要进行线程间的通信时，建议结合使用ReetrantLock与Condition，通过Condition的await()和signal()方法进行线程间的阻塞与唤醒。
+
+ConditionObject类是实现条件队列的关键，每个ConditionObject对象都维护一个单独的条件等待队列。每个ConditionObject对应一个条件队列，它记录该队列的头节点和尾节点。
+
+ConditionObject类是AQS中Condition接口的实现类，我们看一下ConditionObject的部分源码
+
+```java
+public class ConditionObject implements Condition, java.io.Serializable {
+    private static final long serialVersionUID = 1173984872572414699L;
+    /** First node of condition queue. */
+    //队列头节点
+    private transient Node firstWaiter;
+    /** Last node of condition queue. */
+    //队列尾节点
+    private transient Node lastWaiter;
+
+    /**
+     * Creates a new {@code ConditionObject} instance.
+     */
+    public ConditionObject() { }
+    //其他方法略....
+}
+```
+
+当然，在一个显式锁上，我们可以创建多个等待任务队列，这点和内置锁不同，Java内置锁上只有唯一的一个等待队列。
+
+> 举个例子：
+>
+> ~~~java
+> private Lock lock = new ReentrantLock();
+> private Condition firstCon = lock.newCondition();
+> private Condition secondCon = lock.newCondition();
+> ~~~
+
+Condition条件队列是单向的，而AQS同步队列是双向的，AQS节点会有前驱指针。一个AQS实例可以有多个条件队列，是聚合关系；但是一个AQS实例只有一个同步队列，是逻辑上的组合关系。
+
+### 6.7.2 Condition的await()原理
+
+当线程调用await()方法时，说明当前线程的节点为当前AQS队列的头节点，正好处于占有锁的状态，await()方法需要把该线程从AQS队列挪到Condition等待队列里。
+
+await()方法源码如下：
+
+```java
+public final void await() throws InterruptedException {
+    if (Thread.interrupted())
+        throw new InterruptedException();
+    //执行await()方法时，会创建一个新节点并放入Condition队列中
+    Node node = addConditionWaiter();
+    //然后释放锁，并唤醒AQS头节点的下一个节点
+    int savedState = fullyRelease(node);
+    int interruptMode = 0;
+    //执行while循环，将该节点的线程阻塞，直到该节点离开等待队列，重新回到同步队列成为同步节点后，线程才退出while循环
+    while (!isOnSyncQueue(node)) {
+        LockSupport.park(this);
+        if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)
+            break;
+    }
+    //退出循环后调用acquireQueued尝试拿到锁
+    if (acquireQueued(node, savedState) && interruptMode != THROW_IE)
+        interruptMode = REINTERRUPT;
+    //拿到锁后会清空Condition队列中被取消的节点
+    if (node.nextWaiter != null) // clean up if cancelled
+        unlinkCancelledWaiters();
+    if (interruptMode != 0)
+        reportInterruptAfterWait(interruptMode);
+}
+```
+
+放入Condition队列的addConditionWaiter方法源码
+
+```java
+/**
+ * Adds a new waiter to wait queue.
+ * @return its new wait node
+ */
+private Node addConditionWaiter() {
+    Node t = lastWaiter;
+    // If lastWaiter is cancelled, clean out.
+    //如果尾节点取消，重新定位尾节点
+    if (t != null && t.waitStatus != Node.CONDITION) {
+        unlinkCancelledWaiters();
+        t = lastWaiter;
+    }
+    //创建新Node
+    Node node = new Node(Thread.currentThread(), Node.CONDITION);
+    //将新Node放入等待队列
+    if (t == null)
+        firstWaiter = node;
+    else
+        t.nextWaiter = node;
+    lastWaiter = node;
+    return node;
+}
+```
+
+### 6.7.3 signal()唤醒原理
+
+线程在某个ConditionObject对象上调用signal()方法后，等待队列中的firstWaiter会被加入同步队列中，等待节点被唤醒。
+
+signal方法源码如下：
+
+```java
+public final void signal() {
+    //如果当前线程不是锁的持有者，就抛出异常
+    if (!isHeldExclusively())
+        throw new IllegalMonitorStateException();
+    Node first = firstWaiter;
+    if (first != null)
+        doSignal(first);//唤醒头节点
+}
+//执行唤醒操作
+private void doSignal(Node first) {
+    do {
+        //first出队，firstWaiter指向下一个节点
+        if ( (firstWaiter = first.nextWaiter) == null)
+            lastWaiter = null;//如果下一个节点是空的，那么尾部也是空的
+        //将原来头部first的后继节点置为空，help for GC
+        first.nextWaiter = null;
+    } while (!transferForSignal(first) &&
+             (first = firstWaiter) != null);
+}
+//将被唤醒的节点转移到同步队列
+final boolean transferForSignal(Node node) {
+    /*
+    * If cannot change waitStatus, the node has been cancelled.
+    */
+    if (!compareAndSetWaitStatus(node, Node.CONDITION, 0))
+        return false;
+	//通过enq自旋将条件队列的头节点放入AQS同步队列
+    Node p = enq(node);
+    int ws = p.waitStatus;
+    ////如果前驱节点的状态是取消状态，或者设置前驱节点的Signal状态失败，就唤醒当前节点的线程，否则节点在同步队列的尾部，参与排队
+    if (ws > 0 || !compareAndSetWaitStatus(p, ws, Node.SIGNAL))
+        //线程被唤醒之后，表示重新获得了显式锁，然后执行Condition.await()后面的临近区代码
+        LockSupport.unpark(node.thread);
+    return true;
+}
+```
 
 
 
