@@ -978,6 +978,8 @@ pool-1-thread-2泡茶喝
 
 Netty官方文档说明Netty的网络操作都是异步的。Netty源码中大量使用了异步回调处理模式。在Netty的业务开发层面，处于Netty应用的Handler处理程序中的业务处理代码也都是异步执行的。Netty和Guava一样，实现了自己的异步回调体系：Netty继承和扩展了JDKFuture系列异步回调的API，定义了自身的Future系列接口和类，实现了异步任务的监控、异步执行结果的获取。
 
+> 关于Netty的使用可以见我的博客[NIO与Netty学习笔记](https://www.cnblogs.com/yhr520/p/15384520.html)
+
 Netty对Java Future异步任务的扩展如下：
 
 1. 继承Java的Future接口得到了一个新的属于Netty自己的Future异步任务接口，该接口对原有的接口进行了增强，使得Netty异步任务能够非阻塞地处理回调结果。注意，Netty没有修改Future的名称，只是调整了所在的包名，Netty的Future类的包名和Java的Future接口的包不同。
@@ -988,9 +990,37 @@ Netty对Java Future异步任务的扩展如下：
 > - Netty的Future接口可以对应到Guava的ListenableFuture接口。
 > - Netty的GenericFutureListener接口可以对应到Guava的FutureCallback接口。
 
+### 8.6.1 GenericFutureListener接口
 
+和Guava的FutureCallback一样，Netty新增了一个接口，用来封装异步非阻塞回调的逻辑，那就是GenericFutureListener接口。我们看一下GenericFutureListener的源代码：
 
+```java
+public interface GenericFutureListener<F extends Future<?>> extends EventListener {
 
+    /**
+     * Invoked when the operation associated with the {@link Future} has been completed.
+     *
+     * @param future  the source {@link Future} which called this callback
+     */
+    void operationComplete(F future) throws Exception;
+}
+```
+
+GenericFutureListener拥有一个回调方法operationComplete()，表示异步任务操作完成，在Future异步任务执行完成后回调此方法。
+
+### 8.6.2 Netty的Future接口
+
+Netty也对Java的Future接口进行了扩展，并且名称没有变，还是叫作Future接口，实现在io.netty.util.concurrent包中。类的结构如下（源码太长请自行查看）：
+
+![image-20220503225931410](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220503225931410.png)
+
+Netty的Future接口一般不会直接使用，使用过程中会使用它的子接口。Netty有一系列子接口，代表不同类型的异步任务，如ChannelFuture接口。ChannelFuture子接口表示Channel通道I/O操作的异步任务，如果在Channel的异步I/O操作完成后需要执行回调操作，就需要使用到ChannelFuture接口。
+
+### 8.6.3 ChannelFuture
+
+我们以ChannelFuture为例了解一下netty的异步回调。
+
+在Netty网络编程中，网络连接通道的输入、输出处理都是异步进行的，都会返回一个ChannelFuture接口的实例。通过返回的异步任务实例可以为其增加异步回调的监听器。在异步任务真正完成后，回调执行。
 
 # 九、Java 8的CompletableFuture异步回调
 
