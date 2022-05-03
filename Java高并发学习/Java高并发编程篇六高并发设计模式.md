@@ -485,7 +485,7 @@ Future模式的核心思想是异步调用，有点类似于异步的Ajax请求�
 
 # 八、高并发核心模式之异步回调模式
 
-### 8.1  泡茶案例
+## 8.1  泡茶案例
 
 华罗庚的课文——《统筹方法》，里面举了一个合理安排工序以便提升效率的泡茶案例。我们就以这个为例使用阻塞模式和异步回调模式分别实现其中的异步泡茶流程。
 
@@ -499,11 +499,11 @@ Future模式的核心思想是异步调用，有点类似于异步的Ajax请求�
 
 ![image-20220502211149177](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220502211149177.png)
 
-### 8.2 join 异步阻塞实现
+## 8.2 join 异步阻塞实现
 
 在泡茶的例子中，主线程通过分别调用烧水线程和清洗线程的join()方法，等待烧水线程和清洗线程执行完成，然后执行主线程自己的泡茶操作。流程如下：
 
-![image-20220502211623587](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220502211623587.png)
+![image-20220503101031686](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220503101031686.png)
 
 > Java中线程的合并流程是：假设线程A调用线程B的join()方法去合并B线程，那么线程A进入阻塞状态，直到线程B执行完成。
 
@@ -575,8 +575,430 @@ public class JoinTest {
 
 运行结果略
 
-### 8.3 join方法详解
+### 8.2.1 join方法详解
+
+A线程调用B线程的join()方法，等待B线程执行完成，在B线程没有完成前，A线程阻塞。
+
+源码如下：
+
+```java
+public final synchronized void join(long millis)
+throws InterruptedException {
+    long base = System.currentTimeMillis();
+    long now = 0;
+
+    if (millis < 0) {
+        throw new IllegalArgumentException("timeout value is negative");
+    }
+
+    if (millis == 0) {
+        while (isAlive()) {
+            wait(0);
+        }
+    } else {
+        while (isAlive()) {
+            long delay = millis - now;
+            if (delay <= 0) {
+                break;
+            }
+            wait(delay);
+            now = System.currentTimeMillis() - base;
+        }
+    }
+}
+```
+
+join的实现原理是不停地检查join线程是否存活，如果join线程存活，wait(0)就永远等下去，直至join线程终止后，线程的this.notifyAll()方法会被调用（该方法是在JVM中实现的，JDK中并不会看到源码），join()方法将退出循环，恢复业务逻辑执行。很显然这种循环检查的方式比较低效。
+
+> 调用join()缺少很多灵活性，比如实际项目中很少自己单独创建线程，而是使用Executor，这进一步减少了join()的使用场景，所以join()的使用多数停留在Demo演示上。
+
+## 8.3 FutureTask：异步调用实现
+
+为了获取异步线程的返回结果，Java在1.5版本之后提供了一种新的多线程创建方式——FutureTask方式。通过FutureTask类和Callable接口的联合使用可以创建能获取异步执行结果的线程。
+
+通过join的方式实现的泡茶案例是没办法获取返回结果的，所以我们现在用FutureTask来实现。
+
+下面我们通过FutureTask来实现泡茶案例，总体流程跟join差不多，流程图如下：
+
+![image-20220503101257074](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220503101257074.png)
+
+下面我们来看一下代码：
+
+```java
+public class FutureTaskTest {
+    public static final int SLEEP_GAP = 500;
+
+    public static String getCurrentThreadName() {
+        return Thread.currentThread().getName();
+    }
+
+    static class HotWaterThread implements Callable<Boolean> {
+
+        @Override
+        public Boolean call() throws Exception {
+            try {
+                System.out.println("洗水壶");
+                System.out.println("灌凉水");
+                System.out.println("放在火上");
+                Thread.sleep(SLEEP_GAP);
+                System.out.println("水开了");
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                return false;
+            }
+            System.out.println("运行结束");
+            return true;
+        }
+    }
+
+    static class WashThread implements Callable<Boolean> {
+
+        @Override
+        public Boolean call() throws Exception {
+            try {
+                System.out.println("洗茶壶");
+                System.out.println("洗茶杯");
+                Thread.sleep(SLEEP_GAP);
+                System.out.println("洗完了");
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                return false;
+            }
+            System.out.println("运行结束");
+            return true;
+        }
+    }
+    public static void main(String[] args) {
+        Thread.currentThread().setName("主线程");
+        FutureTask<Boolean> hotWaterTask = new FutureTask<>(new HotWaterThread());
+        Thread threadHotWater = new Thread(hotWaterTask);
+        FutureTask<Boolean> washTask = new FutureTask<>(new WashThread());
+        Thread threadWash = new Thread(washTask);
+        threadHotWater.start();
+        threadWash.start();
+        //..等待的过程中干其他的事情
+        try {
+            Boolean hotWaterResult = hotWaterTask.get();
+            Boolean washResult = washTask.get();
+            if (hotWaterResult&&washResult){
+                System.out.println("泡茶喝");
+            }else if (!washResult){
+                System.out.println("被子没洗成，喝不了茶");
+            }else if (!hotWaterResult){
+                System.out.println("烧水失败，喝不了茶");
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            e.printStackTrace();
+        }
+        System.out.println(getCurrentThreadName()+"运行结束");
+
+    }
+}
+```
+
+运行结果略。
+
+FutureTask比join线程合并操作更加高明，能取得异步线程的结果。但是，也没有更好，因为通过FutureTask的get()方法获取异步结果时，主线程也会被阻塞。这一点FutureTask和join是一致的，它们都是异步阻塞模式。异步阻塞的效率往往比较低，被阻塞的主线程不能干任何事情，唯一能干的就是傻傻等待。原生Java API除了阻塞模式的获取结果外，并没有实现非阻塞的异步结果获取方法（当然jdk8中提供了Completable，但是出现的比较晚）。
+
+## 8.4 异步回调和主动调用
+
+前面使用join或者thread.get两种方式都属于主动调用。在泡茶喝的例子中，泡茶线程（主线程）是调用线程，烧水（或者清洗）线程是被调用线程，调用线程和被调用线程之间是一种主动关系，而不是被动关系。泡茶线程（主线程）需要主动获取烧水（或者清洗）线程的执行结果。
+
+主动调用是一种阻塞式调用，它是一种单向调用，“调用方”要等待“被调用方”执行完毕才返回。如果“被调用方”的执行时间很长，那么“调用方”线程需要阻塞很长一段时间。
+
+**如果将调用的方向进行反转就是异步回调**。回调是一种反向的调用模式，也就是说，被调用方在执行完成后，会反向执行“调用方”所设置的钩子方法。
+
+Java中回调模式的标准实现类为CompletableFuture，由于该类出现的时间比较晚，因此很多著名的中间件如Guava、Netty等都提供了自己的异步回调模式API供开发者使用。开发者还可以使用RxJava响应式编程组件进行异步回调的开发。
+
+## 8.5 Guava的异步回调
+
+Guava是Google提供的Java扩展包，它提供了一种异步回调的解决方案。Guava中与异步回调相关的源码处于com.google.common.util.concurrent包中。包中的很多类都用于对java.util.concurrent的能力扩展和能力增强。
+
+> 我们这里仅入门学习Guava的使用，如何进行异步回调实现泡茶案例。
+
+### 8.5.1 FutureCallBack
+
+Guava主要增强了Java而不是另起炉灶。为了实现异步回调方式获取异步线程的结果，Guava做了以下增强：
+
+- 引入了一个新的接口ListenableFuture，继承了Java的Future接口，使得Java的Future异步任务在Guava中能被监控和非阻塞获取异步结果。
+- 引入了一个新的接口FutureCallback，这是一个独立的新接口。该接口的目的是在异步任务执行完成后，根据异步结果完成不同的回调处理，并且可以处理异步结果。
+
+FutureCallback是一个新增的接口，用来填写异步任务执行完后的监听逻辑。FutureCallback拥有两个回调方法：
+
+1. onSuccess()方法，在异步任务执行成功后被回调。调用时，异步任务的执行结果作为onSuccess方法的参数被传入。
+2. onFailure()方法，在异步任务执行过程中抛出异常时被回调。调用时，异步任务所抛出的异常作为onFailure方法的参数被传入。
+
+FutureCallback的源码如下：
+
+```java
+public interface FutureCallback<V> {
+  /**
+   * Invoked with the result of the {@code Future} computation when it is successful.
+   */
+  void onSuccess(@Nullable V result);
+
+  /**
+   * Invoked when a {@code Future} computation fails or is canceled.
+   *
+   * <p>If the future's {@link Future#get() get} method throws an {@link ExecutionException}, then
+   * the cause is passed to this method. Any other thrown object is passed unaltered.
+   */
+  void onFailure(Throwable t);
+}
+```
+
+> Guava的FutureCallback与Java的Callable名字相近，实质不同，存在本质的区别：
+>
+> 1. Java的Callable接口代表的是异步执行的逻辑。
+> 2. Guava的FutureCallback接口代表的是Callable异步逻辑执行完成之后，根据成功或者异常两种情形执行不同的方法。
+>
+> Guava是对Java Future异步回调的增强，使用Guava异步回调也需要用到Java的Callable接口。简单地说，只有在Java的Callable任务执行结果出来后，才可能执行Guava中的FutureCallback结果回调。
+>
+> Guava为了实现Callable和FutureCallback之间的监视关系引入了一个新接口ListenableFuture，它继承了Java的Future接口，增强了被监控的能力。
+
+### 8.5.2 ListenableFuture
+
+Guava的ListenableFuture接口是对Java的Future接口的扩展，可以理解为异步任务实例，源码如下：
+
+```java
+public interface ListenableFuture<V> extends Future<V> {
+    //此addListener()方法只在Guava内部调用，在实际编程中，addListener()不会使用到。
+  void addListener(Runnable listener, Executor executor);
+}
+```
+
+ListenableFuture仅仅增加了一个addListener()方法。它的作用就是上面的FutureCallback成功或失败回调逻辑封装成一个内部的Runnable异步回调任务，在Callable异步任务完成后回调FutureCallback成功或失败回调逻辑。
+
+> 在实际编程中可以使用Guava的Futures工具类，它有一个addCallback()静态方法，可以将FutureCallback的回调实例绑定到ListenableFuture异步任务。官方文档上给出了示例：
+>
+> The main purpose of addListener is to support this chaining. You will rarely use it directly, in part because it does not provide direct access to the Future result. (If you want such access, you may prefer Futures.addCallback.) 
+>
+> 翻译过来的大意就是addListener很少会直接使用，部分原因是它不提供对Future结果的直接访问。(你可以选择Futures.addCallback。)
+>
+> 下面是addCallback的官方示例：
+>
+> ~~~java
+> ListenableFuture<QueryResult> future = ...;   
+> addCallback(future, new FutureCallback<QueryResult>() {         
+>     public void onSuccess(QueryResult result) {           
+>         storeInCache(result);         
+>     }         
+>     public void onFailure(Throwable t) {           
+>         reportError(t);         
+>     }       
+> });
+> ~~~
+
+### 8.5.3 ListenableFuture异步任务
+
+如果要获取Guava的ListenableFuture异步任务实例，主要通过向线程池（ThreadPool）提交Callable任务的方式获取。不过，这里所说的线程池不是Java的线程池，而是经过Guava自己定制过的Guava线程池。
+
+Guava线程池是对Java线程池的一种包装。创建Guava线程池的方法如下：
+
+~~~java
+public class Test {
+    public static void main(String[] args) {
+        ExecutorService javaPool = Executors.newFixedThreadPool(10);
+        ListeningExecutorService guavaPool = MoreExecutors.listeningDecorator(javaPool);
+        ListenableFuture<Integer> futureGuava = guavaPool.submit(() -> {
+            Thread.sleep(500);
+            System.out.println("task is running");
+            return 1;
+        });
+        Futures.addCallback(futureGuava, new FutureCallback<Integer>() {
+            @Override
+            public void onSuccess(@Nullable Integer result) {
+                System.out.println("success");
+            }
+
+            @Override
+            public void onFailure(Throwable t) {
+                System.out.println("failed");
+            }
+        });
+    }
+}
+~~~
+
+首先创建Java线程池，然后以其作为Guava线程池的参数再构造一个Guava线程池。有了Guava的线程池之后，就可以通过submit()方法来提交任务了，任务提交之后的返回结果就是我们所要的ListenableFuture异步任务实例。
+
+Guava异步回调的流程如下：
+
+1. 实现Java的Callable接口，创建异步执行逻辑。还有一种情况，如果不需要返回值，异步执行逻辑也可以实现Runnable接口。
+2. 创建Guava线程池。
+3. 将第一步创建的Callable/Runnable异步执行逻辑的实例提交到Guava线程池，从而获取ListenableFuture异步任务实例。
+4. 创建FutureCallback回调实例，通过Futures.addCallback将回调实例绑定到ListenableFuture异步任务上。
+
+### 8.5.4 Guava实现泡茶案例
+
+我们先看一下流程图：
+
+![image-20220503131022335](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220503131022335.png)
+
+然后我们用代码来实现：
+
+```java
+public class GuavaTest {
+    public static final int SLEEP_GAP = 4000;
+
+    public static String getCurName(){
+        return Thread.currentThread().getName();
+    }
+    static class HotWaterTask implements Callable<Boolean>{
+
+        @Override
+        public Boolean call() throws Exception {
+            try {
+                System.out.println(getCurName()+"洗水壶");
+                System.out.println(getCurName()+"灌凉水");
+                System.out.println(getCurName()+"放在火上");
+                Thread.sleep(SLEEP_GAP);
+                System.out.println(getCurName()+"水开了");
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                System.out.println(getCurName()+"烧水失败");
+                return false;
+            }
+            System.out.println(getCurName()+"烧水结束");
+            return true;
+        }
+    }
+    static class WashTask implements Callable<Boolean>{
+
+        @Override
+        public Boolean call() throws Exception {
+            try {
+                System.out.println(getCurName()+"洗茶壶");
+                System.out.println(getCurName()+"洗茶杯");
+                Thread.sleep(SLEEP_GAP);
+                System.out.println(getCurName()+"洗完了");
+            } catch (InterruptedException e) {
+                System.out.println(getCurName()+"清洗失败");
+                return false;
+            }
+            System.out.println(getCurName()+"清洗结束");
+            return true;
+        }
+    }
+
+    static class DrinkTask{
+        boolean hotWaterResult = false;
+        boolean washResult = false;
+        public void drinkTea(){
+            if (hotWaterResult&&washResult){
+                System.out.println(getCurName()+"泡茶喝");
+                //喝完茶，没有热水了
+                this.hotWaterResult = false;
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        Thread.currentThread().setName("主线程-泡茶线程");
+        DrinkTask drinkTask = new DrinkTask();
+        //创建Java线程池
+        ExecutorService javaPool = Executors.newFixedThreadPool(10);
+        //包装Java线程池，构造guava线程池
+        ListeningExecutorService guavaPool = MoreExecutors.listeningDecorator(javaPool);
+        //启动烧水线程，获取ListenableFuture
+        ListenableFuture<Boolean> submitWater = guavaPool.submit(new HotWaterTask());
+        //设置回调钩子方法
+        Futures.addCallback(submitWater, new FutureCallback<Boolean>() {
+            @Override
+            public void onSuccess(@Nullable Boolean result) {
+                if (result){
+                    drinkTask.hotWaterResult =true;
+                    drinkTask.drinkTea();
+                }
+            }
+
+            @Override
+            public void onFailure(Throwable t) {
+                System.out.println(getCurName()+"烧水失败，无法喝茶");
+            }
+        });
+        //启动清洗线程，获取ListenableFuture
+        ListenableFuture<Boolean> submitWash = guavaPool.submit(new WashTask());
+        Futures.addCallback(submitWash, new FutureCallback<Boolean>() {
+            @Override
+            public void onSuccess(@Nullable Boolean result) {
+                if (result){
+                    drinkTask.washResult =true;
+                    drinkTask.drinkTea();
+                }
+            }
+
+            @Override
+            public void onFailure(Throwable t) {
+                System.out.println(getCurName()+"没洗杯子，无法喝茶");
+            }
+        });
+        System.out.println(getCurName()+"干点其他事情");
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println(getCurName()+"主线程结束");
+    }
+}
+```
+
+执行结果：
+
+~~~
+pool-1-thread-1洗水壶
+pool-1-thread-1灌凉水
+pool-1-thread-1放在火上
+pool-1-thread-2洗茶壶
+pool-1-thread-2洗茶杯
+主线程-泡茶线程干点其他事情
+主线程-泡茶线程主线程结束
+pool-1-thread-1水开了
+pool-1-thread-1烧水结束
+pool-1-thread-2洗完了
+pool-1-thread-2清洗结束
+pool-1-thread-2泡茶喝
+~~~
+
+可以看到主线程-泡茶线程早就执行结束了，泡茶喝的工作在异步回调方法drinkTea()中执行，执行的线程并不是“泡茶喝”线程，而是烧水线程或清洗线程这种被调用线程。
+
+### 8.5.5 Guava和FutureTask的区别
+
+总结一下Guava异步回调和Java的FutureTask异步调用的区别，具体如下：
+
+1. FutureTask是主动调用的模式，“调用线程”主动获得异步结果，在获取异步结果时处于阻塞状态，并且会一直阻塞，直到拿到异步线程的结果。
+2. Guava是异步回调模式，“调用线程”不会主动获得异步结果，而是准备好回调函数，并设置好回调钩子，执行回调函数的并不是“调用线程”自身，回调函数的执行者是“被调用线程”，“调用线程”在执行完自己的业务逻辑后就已经结束了，当回调函数被执行时，“调用线程”可能已经结束很久了。
+
+> 和异步回调模式相比，使用FutureTask获取结果时，调用线程（如泡茶线程）多少存在阻塞；
+>
+> 使用FutureTask涉及三四个类或接口的使用，与join相比，使用起来比较繁琐
+
+## 8.6 Netty的异步回调
+
+Netty官方文档说明Netty的网络操作都是异步的。Netty源码中大量使用了异步回调处理模式。在Netty的业务开发层面，处于Netty应用的Handler处理程序中的业务处理代码也都是异步执行的。Netty和Guava一样，实现了自己的异步回调体系：Netty继承和扩展了JDKFuture系列异步回调的API，定义了自身的Future系列接口和类，实现了异步任务的监控、异步执行结果的获取。
+
+Netty对Java Future异步任务的扩展如下：
+
+1. 继承Java的Future接口得到了一个新的属于Netty自己的Future异步任务接口，该接口对原有的接口进行了增强，使得Netty异步任务能够非阻塞地处理回调结果。注意，Netty没有修改Future的名称，只是调整了所在的包名，Netty的Future类的包名和Java的Future接口的包不同。
+2. 引入了一个新接口——GenericFutureListener，用于表示异步执行完成的监听器。这个接口和Guava的FutureCallback回调接口不同。Netty使用了监听器的模式，异步任务执行完成后的回调逻辑抽象成了Listener监听器接口。可以将Netty的GenericFutureListener监听器接口加入Netty异步任务Future中，实现对异步任务执行状态的事件监听。
+
+> 总体来说，在异步非阻塞回调的设计思路上，Netty和Guava是一致的。对应关系为：
+>
+> - Netty的Future接口可以对应到Guava的ListenableFuture接口。
+> - Netty的GenericFutureListener接口可以对应到Guava的FutureCallback接口。
+
+
 
 
 
 # 九、Java 8的CompletableFuture异步回调
+
+很多语言（如JavaScript）提供了异步回调，一些Java中间件（如Netty、Guava）也提供了异步回调API，为开发者带来了更好的异步编程工具。Java 8提供了一个新的、具备异步回调能力的工具类——CompletableFuture，该类实现了Future接口，还具备函数式编程的能力。CompletableFuture实现了Future和CompletionStage两个接口。该类的实例作为一个异步任务，可以在自己异步执行完成之后触发一些其他的异步任务，从而达到异步回调的效果。
+
+
+
+
+
+
+
