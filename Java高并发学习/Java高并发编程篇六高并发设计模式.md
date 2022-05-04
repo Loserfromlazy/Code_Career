@@ -1061,7 +1061,7 @@ public class Test {
 
 # 九、Java 8的CompletableFuture异步回调
 
-### 9.1 CompletableFuture详解
+## 9.1 CompletableFuture详解
 
 很多语言（如JavaScript）提供了异步回调，一些Java中间件（如Netty、Guava）也提供了异步回调API，为开发者带来了更好的异步编程工具。Java 8提供了一个新的、具备异步回调能力的工具类——CompletableFuture，该类实现了Future接口，还具备函数式编程的能力。CompletableFuture实现了Future和CompletionStage两个接口。该类的实例作为一个异步任务，可以在自己异步执行完成之后触发一些其他的异步任务，从而达到异步回调的效果。
 
@@ -1222,7 +1222,158 @@ public CompletableFuture<T> exceptionally(
 
 我们下面给个例子：
 
+```java
+@Test
+public void testComplete() throws ExecutionException, InterruptedException {
+    CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("throw Exception");
+        throw new RuntimeException("模拟发生异常");
+    });
+    //任务完成的回调钩子方法
+    future.whenComplete(new BiConsumer<Void, Throwable>() {
+        @Override
+        public void accept(Void unused, Throwable throwable) {
+            System.out.println("执行完成");
+        }
+    });
+    //发生异常的回调钩子
+    future.exceptionally(new Function<Throwable, Void>() {
+        @Override
+        public Void apply(Throwable throwable) {
+            System.out.println("执行失败，异常信息："+throwable.getMessage());
+            return null;
+        }
+    });
+    //获取异步任务结果
+    future.get();
+}
+```
+
+运行结果：
+
+~~~
+throw Exception
+执行失败，异常信息：java.lang.RuntimeException: 模拟发生异常
+执行完成
+
+java.util.concurrent.ExecutionException: java.lang.RuntimeException: 模拟发生异常
+......
+~~~
+
 ### 9.1.4 使用handle方法统一处理异常和结果
 
+除了通过whenComplete、exceptionally设置完成钩子、异常钩子之外，还可以调用handle()方法统一处理结果和异常。
+
+```java
+//在执行任务的同一个线程中处理异常和结果
+public <U> CompletableFuture<U> handle(
+    BiFunction<? super T, Throwable, ? extends U> fn) {
+    return uniHandleStage(null, fn);
+}
+//可能不在执行任务的同一个线程中处理异常和结果
+public <U> CompletableFuture<U> handleAsync(
+    BiFunction<? super T, Throwable, ? extends U> fn) {
+    return uniHandleStage(asyncPool, fn);
+}
+//在指定的线程池中处理异常和结果
+public <U> CompletableFuture<U> handleAsync(
+    BiFunction<? super T, Throwable, ? extends U> fn, Executor executor) {
+    return uniHandleStage(screenExecutor(executor), fn);
+}
+```
+
+给个例子：
+
+```java
+@Test
+public void testHandle() throws ExecutionException, InterruptedException {
+    CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("throw Exception");
+        throw new RuntimeException("模拟发生异常");
+    });
+    future.handle(new BiFunction<Void, Throwable, Object>() {
+        @Override
+        public Object apply(Void unused, Throwable throwable) {
+            if (throwable == null){
+                System.out.println("没有发生异常");
+            }else {
+                System.out.println("发生了异常，异常信息："+throwable.getMessage());
+            }
+            return null;
+        }
+    });
+    future.get();
+}
+```
+
+运行结果略
+
 ### 9.1.5 线程池的使用
+
+默认情况下，通过静态方法runAsync()、supplyAsync()创建的CompletableFuture任务会使用公共的ForkJoinPool线程池，默认的线程数是CPU的核数。可以通过命令指定：
+
+~~~
+option: -Djava.util.concurrent.ForkJoinPool.common.parallelism
+~~~
+
+> 如果所有CompletableFuture共享一个线程池，那么一旦有任务执行一些很慢的IO操作，就会导致线程池中的所有线程都阻塞在IO操作上，造成线程饥饿，进而影响整个系统的性能。建议不同的业务创建不同的线程池。
+
+例子：
+
+```java
+@Test
+public void testPool() throws ExecutionException, InterruptedException, TimeoutException {
+    //这里仅为测试快捷使用，可以使用之前的自定义混合型线程池代替
+    ExecutorService executorService = Executors.newFixedThreadPool(10);
+    CompletableFuture<Long> future = CompletableFuture.supplyAsync(() -> {
+        //模拟执行1s
+        long l = System.currentTimeMillis();
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("finished");
+        return System.currentTimeMillis() - l;
+    },executorService);
+    Long aLong = future.get(2, TimeUnit.SECONDS);
+    System.out.println("执行时长"+aLong+"ms");
+}
+```
+
+### 9.2 异步任务的串行执行
+
+
+
+### 9.3 异步任务的合并执行
+
+
+
+### 9.4 异步任务的选择执行
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
