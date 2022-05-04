@@ -1022,13 +1022,207 @@ Netty的Future接口一般不会直接使用，使用过程中会使用它的子
 
 在Netty网络编程中，网络连接通道的输入、输出处理都是异步进行的，都会返回一个ChannelFuture接口的实例。通过返回的异步任务实例可以为其增加异步回调的监听器。在异步任务真正完成后，回调执行。
 
+我们看一个netty客户端的例子，代码如下：
+
+```java
+public class Test {
+    public static void main(String[] args) throws InterruptedException {
+        ChannelFuture future = new Bootstrap()
+                .group(new NioEventLoopGroup())
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel channel) throws Exception {
+                        channel.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                .connect(new InetSocketAddress("localhost", 8080));
+        //可以进行阻塞时调用
+        /*future.sync()
+                .channel()
+                .writeAndFlush("hello world");*/
+        //下面就是异步回调，尾future增加监听器（即回调钩子方法）
+        future.addListener(new ChannelFutureListener() {
+            @Override
+            public void operationComplete(ChannelFuture future) throws Exception {
+                if (future.isSuccess()){
+                    System.out.println("建立连接成功");
+                }else {
+                    System.out.println("建立连接失败");
+                    future.cause().printStackTrace();
+                }
+            }
+        });
+    }
+}
+```
+
+> GenericFutureListener接口在Netty中是一个基础类型接口。在网络编程的异步回调中，一般使用Netty中提供的某个子接口，如ChannelFutureListener接口。在上面的代码中，使用到的是这个子接口。
+
 # 九、Java 8的CompletableFuture异步回调
+
+### 9.1 CompletableFuture详解
 
 很多语言（如JavaScript）提供了异步回调，一些Java中间件（如Netty、Guava）也提供了异步回调API，为开发者带来了更好的异步编程工具。Java 8提供了一个新的、具备异步回调能力的工具类——CompletableFuture，该类实现了Future接口，还具备函数式编程的能力。CompletableFuture实现了Future和CompletionStage两个接口。该类的实例作为一个异步任务，可以在自己异步执行完成之后触发一些其他的异步任务，从而达到异步回调的效果。
 
+CompletableFuture的结构如下：
 
+![image-20220504124826888](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220504124826888.png)
 
+CompletableFuture继承了两个结构，Future接口不再赘述，他除了Future接口还继承了CompletionStage接口。
 
+### 9.1.1 CompletionStage接口
 
+Stage是阶段的意思。CompletionStage代表某个同步或者异步计算的一个阶段，或者一系列异步任务中的一个子任务（或者阶段性任务）。每个CompletionStage子任务所包装的可以是一个Function、Consumer或者Runnable函数式接口实例。这三个常用的函数式接口的特点如下：
 
+1. Function接口的特点是：有输入、有输出。包装了Function实例的CompletionStage子任务需要一个输入参数，并会产生一个输出结果到下一步。
+2. Runnable接口的特点是：无输入、无输出。包装了Runnable实例的CompletionStage子任务既不需要任何输入参数，又不会产生任何输出。
+3. Consumer接口的特点是：有输入、无输出。包装了Consumer实例的CompletionStage子任务需要一个输入参数，但不会产生任何输出。
+
+多个CompletionStage构成了一条任务流水线，一个环节执行完成了可以将结果移交给下一个环节（子任务）。多个CompletionStage子任务之间可以使用链式调用，比如下面代码（来自于官方文档）：
+
+~~~java
+//stage是一个CompletionStage子任务
+//x -> square(x)是一个Function类型的lambda表达式，被thenApply方法包装成一个CompletionStage子任务
+stage.thenApply(x -> square(x))
+    //x -> System.out.print(x)是一个Consumer的lambda表达式，被thenAccept方法包装成一个CompletionStage子任务
+    .thenAccept(x -> System.out.print(x))
+    //() -> System.out.println()是一个Runnable的lambda表达式，被tthenRun方法包装成一个CompletionStage子任务
+    .thenRun(() -> System.out.println())
+~~~
+
+### 9.1.2 创建异步任务
+
+CompletionStage子任务的创建是通过CompletableFuture完成的。CompletableFuture类提供了非常强大的Future的扩展功能来帮助我们简化异步编程的复杂性，提供了函数式编程的能力来帮助我们通过回调的方式处理计算结果，也提供了转换和组合CompletionStage()的方法。
+
+CompletableFuture定义了一组方法用于创建CompletionStage子任务（或者阶段性任务），源码如下：
+
+```java
+/**
+ * Returns a new CompletableFuture that is asynchronously completed
+ * by a task running in the {@link ForkJoinPool#commonPool()} with
+ * the value obtained by calling the given Supplier.
+ * 子任务包装一个Supplier实例，并使用默认的线程池来执行
+ */
+public static <U> CompletableFuture<U> supplyAsync(Supplier<U> supplier) {
+    return asyncSupplyStage(asyncPool, supplier);
+}
+
+/**
+ * Returns a new CompletableFuture that is asynchronously completed
+ * by a task running in the given executor with the value obtained
+ * by calling the given Supplier.
+ * 子任务包装一个Supplier实例，并使用指定的线程池来执行
+ */
+public static <U> CompletableFuture<U> supplyAsync(Supplier<U> supplier,
+                                                   Executor executor) {
+    return asyncSupplyStage(screenExecutor(executor), supplier);
+}
+
+/**
+ * Returns a new CompletableFuture that is asynchronously completed
+ * by a task running in the {@link ForkJoinPool#commonPool()} after
+ * it runs the given action.
+ * 子任务包装一个Runnable实例，并调用默认线程池来执行
+ */
+public static CompletableFuture<Void> runAsync(Runnable runnable) {
+    return asyncRunStage(asyncPool, runnable);
+}
+
+/**
+ * Returns a new CompletableFuture that is asynchronously completed
+ * by a task running in the given executor after it runs the given
+ * action.
+ * 子任务包装一个Runnable实例，并调用指定的线程池来执行
+ */
+public static CompletableFuture<Void> runAsync(Runnable runnable,
+                                               Executor executor) {
+    return asyncRunStage(screenExecutor(executor), runnable);
+}
+```
+
+> 在使用CompletableFuture创建CompletionStage子任务时，如果没有指定Executor线程池，在默认情况下CompletionStage会使用公共的ForkJoinPool线程池（源码如下）。
+>
+> ```java
+> /**
+>  * Default executor -- ForkJoinPool.commonPool() unless it cannot
+>  * support parallelism.
+>  */
+> private static final Executor asyncPool = useCommonPool ?
+>     ForkJoinPool.commonPool() : new ThreadPerTaskExecutor();
+> ```
+
+下面举个例子：
+
+```java
+//创建一个Runnable无输入无输出异步子任务
+@Test
+public void testRunAsync() throws ExecutionException, InterruptedException {
+    CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+        //模拟执行1s
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("finished");
+    });
+    //等待异步任务执行完成，主动调用
+    future.get();
+}
+
+//创建一个Supplier无输入有输出异步子任务
+@Test
+public void testSupplyAsync() throws ExecutionException, InterruptedException {
+    CompletableFuture<Long> future = CompletableFuture.supplyAsync(() -> {
+        //模拟执行1s
+        long l = System.currentTimeMillis();
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        System.out.println("finished");
+        return System.currentTimeMillis() - l;
+    });
+    //等待异步任务执行完成，主动调用
+    Long aLong = future.get();
+    System.out.println(aLong);
+}
+```
+
+> 这里只需要调用get等待执行完成即可，因为supplyAsync或runAsync两个方法都会调用传入的线程池或内部公用线程池去执行。（具体可以自行查看源码）
+
+### 9.1.3 设置异步任务回调钩子方法
+
+可以为CompletionStage子任务设置特定的回调钩子，当计算结果完成或者抛出异常的时候，执行这些特定的回调钩子。设置子任务回调钩子的主要函数源码如下：
+
+```java
+//设置子任务完成时的回调狗钩子方法
+public CompletableFuture<T> whenComplete(
+    BiConsumer<? super T, ? super Throwable> action) {
+    return uniWhenCompleteStage(null, action);
+}
+//设置子任务完成时的回调钩子方法，可能不在同一线程执行
+public CompletableFuture<T> whenCompleteAsync(
+    BiConsumer<? super T, ? super Throwable> action) {
+    return uniWhenCompleteStage(asyncPool, action);
+}
+//设置子任务完成时的回调钩子方法，提交给线程池执行
+public CompletableFuture<T> whenCompleteAsync(
+    BiConsumer<? super T, ? super Throwable> action, Executor executor) {
+    return uniWhenCompleteStage(screenExecutor(executor), action);
+}
+//设置异常处理的回调钩子
+public CompletableFuture<T> exceptionally(
+    Function<Throwable, ? extends T> fn) {
+    return uniExceptionallyStage(fn);
+}
+```
+
+我们下面给个例子：
+
+### 9.1.4 使用handle方法统一处理异常和结果
+
+### 9.1.5 线程池的使用
 
