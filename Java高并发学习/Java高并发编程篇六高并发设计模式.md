@@ -1351,19 +1351,481 @@ public void testPool() throws ExecutionException, InterruptedException, TimeoutE
 }
 ```
 
-### 9.2 异步任务的串行执行
+## 9.2 异步任务的串行执行
 
+如果两个异步任务需要串行（一个任务依赖另一个任务）执行，可以通过CompletionStage接口的thenApply()、thenAccept()、thenRun()和thenCompose()四个方法来实现。
 
+### 9.2.1 thenApply
 
-### 9.3 异步任务的合并执行
+thenApply有三种重载方法，源码如下：
 
+```java
+//后一个任务与前一个任务在同一个线程中执行
+public <U> CompletableFuture<U> thenApply(
+    Function<? super T,? extends U> fn) {
+    return uniApplyStage(null, fn);
+}
+//后一个任务与前一个任务不在同一个线程中执行
+public <U> CompletableFuture<U> thenApplyAsync(
+    Function<? super T,? extends U> fn) {
+    return uniApplyStage(asyncPool, fn);
+}
+//后一个任务在执行的线程池中执行
+public <U> CompletableFuture<U> thenApplyAsync(
+    Function<? super T,? extends U> fn, Executor executor) {
+    return uniApplyStage(screenExecutor(executor), fn);
+}
+```
 
+thenApply的三个重载版本有一个共同的参数fn，该参数表示要串行执行的第二个异步任务，它的类型为Function。fn的类型声明涉及两个泛型参数，具体如下：
 
-### 9.4 异步任务的选择执行
+- 泛型参数 T：上一个任务所返回结果的类型。
+- 泛型参数 U：当前任务的返回值类型。
 
+我们举个例子，现在要调用thenApply分两步计算（10+10）*5：
 
+```java
+//（10+10）*5
+@Test
+public void testThenApply() throws ExecutionException, InterruptedException {
+    CompletableFuture<Long> future = CompletableFuture.supplyAsync(new Supplier<Long>() {
+        @Override
+        public Long get() {
+            long result = 10L + 10L;
+            System.out.println("第一步结果"+result);
+            return result;
+        }
+    }).thenApplyAsync(new Function<Long, Long>() {
+        @Override
+        public Long apply(Long aLong) {
+            System.out.println("显示第一步结果"+aLong);
+            return aLong*5;
+        }
+    });
+    final Long aLong = future.get();
+    System.out.println("result:"+aLong);
+}
+```
 
+### 9.2.3 thenRun
 
+thenRun()方法与thenApply()方法不同的是，不关心任务的处理结果。只要前一个任务执行完成，就开始执行后一个串行任务。
+
+thenRun的源码如下：
+
+```java
+//后一个任务与前一个任务在同一个线程中执行
+public CompletableFuture<Void> thenRun(Runnable action) {
+    return uniRunStage(null, action);
+}
+//后一个任务与前一个任务不在同一个线程中执行
+public CompletableFuture<Void> thenRunAsync(Runnable action) {
+    return uniRunStage(asyncPool, action);
+}
+//后一个任务在执行的线程池中执行
+public CompletableFuture<Void> thenRunAsync(Runnable action,
+                                            Executor executor) {
+    return uniRunStage(screenExecutor(executor), action);
+}
+```
+
+thenRun()方法同thenApply()方法类似，不同的是前一个任务处理完成后，thenRun()并不会把计算的结果传给后一个任务，而且后一个任务也没有结果输出。
+
+> thenRun系列方法中的action参数是Runnable类型的，所以thenRun()既不能接收参数又不支持返回值。
+
+### 9.2.2 thenAccept
+
+thenAccept()方法对thenRun()、thenApply()的特点进行了折中，调用此方法时后一个任务可以接收（或消费）前一个任务的处理结果，但是后一个任务没有结果输出。
+
+thenAccept源码如下：
+
+```java
+//后一个任务与前一个任务在同一个线程中执行
+public CompletableFuture<Void> thenAccept(Consumer<? super T> action) {
+    return uniAcceptStage(null, action);
+}
+//后一个任务与前一个任务不在同一个线程中执行
+public CompletableFuture<Void> thenAcceptAsync(Consumer<? super T> action) {
+    return uniAcceptStage(asyncPool, action);
+}
+//后一个任务在执行的线程池中执行
+public CompletableFuture<Void> thenAcceptAsync(Consumer<? super T> action,
+                                               Executor executor) {
+    return uniAcceptStage(screenExecutor(executor), action);
+}
+```
+
+thenAccept系列方法的回调参数为action，它的类型为Consumer<? super T>接口。
+
+> Consumer<T>接口的accept()方法可以接收一个参数，但是不支持返回值
+
+### 9.2.4 thenCompose
+
+thenCompose()方法在功能上与thenApply()、thenAccept()、thenRun()一样，可以对两个任务进行串行的调度操作，第一个任务操作完成时，将它的结果作为参数传递给第二个任务。
+
+```java
+public <U> CompletableFuture<U> thenCompose(
+    Function<? super T, ? extends CompletionStage<U>> fn) {
+    return uniComposeStage(null, fn);
+}
+
+public <U> CompletableFuture<U> thenComposeAsync(
+    Function<? super T, ? extends CompletionStage<U>> fn) {
+    return uniComposeStage(asyncPool, fn);
+}
+
+public <U> CompletableFuture<U> thenComposeAsync(
+    Function<? super T, ? extends CompletionStage<U>> fn,
+    Executor executor) {
+    return uniComposeStage(screenExecutor(executor), fn);
+}
+```
+
+thenCompose()方法要求第二个任务的返回值是一个CompletionStage异步实例。因此，可以调用CompletableFuture.supplyAsync()方法将第二个任务所要调用的普通异步方法包装成一个CompletionStage异步实例。
+
+我们还用刚才的例子分两步计算（10+10）*5：
+
+```java
+@Test
+public void testThenCompose() throws ExecutionException, InterruptedException {
+    final CompletableFuture<Long> future = CompletableFuture.supplyAsync(new Supplier<Long>() {
+        @Override
+        public Long get() {
+            long result = 10L + 10L;
+            System.out.println("第一步结果"+result);
+            return result;
+        }
+    }).thenCompose(new Function<Long, CompletionStage<Long>>() {
+        @Override
+        public CompletionStage<Long> apply(Long aLong) {
+            return CompletableFuture.supplyAsync(new Supplier<Long>() {
+                @Override
+                public Long get() {
+                    final long result = aLong * 2;
+                    System.out.println("result:"+result);
+                    return result;
+                }
+            });
+        }
+    });
+    final Long aLong = future.get();
+    System.out.println("最后的结果："+aLong);
+}
+```
+
+这段程序的执行结果与调用thenApply()分两步计算（10+10）*2的结果是一样的。但是，thenCompose()所返回的不是第二个任务所要执行的普通异步方法`Supplier<Long>.get()`的直接计算结果，而是调用CompletableFuture.supplyAsync()方法将普通异步方法`Supplier<Long>.get()`包装成一个CompletionStage异步实例并返回。
+
+### 9.2.5 区别
+
+thenApply()、thenRun()、thenAccept()这三个方法的不同之处主要在于其核心参数fn、action、consumer的类型不同，分别为`Function<T,R>`、`Runnable`、`Consumer<? super T>`类型。但是，thenCompose()方法与thenApply()方法有本质的不同：
+
+1. thenCompose()的返回值是一个新的CompletionStage实例，可以持续用来进行下一轮CompletionStage任务的调度。具体来说，thenCompose()返回的是包装了普通异步方法的CompletionStage任务实例，通过该实例还可以进行下一轮CompletionStage任务的调度和执行，比如可以持续进行CompletionStage链式（或者流式）调用。
+2. thenApply()的返回值则简单多了，直接就是第二个任务的普通异步方法的执行结果，它的返回类型与第二步执行的普通异步方法的返回类型相同，通过thenApply()所返回的值不能进行下一轮CompletionStage链式（或者流式）调用。
+
+## 9.3 异步任务的合并执行
+
+如果某个任务同时依赖另外两个异步任务的执行结果，就需要对另外两个异步任务进行合并。
+
+以泡茶喝为例，“泡茶喝”任务需要对“烧水”任务与“清洗”任务进行合并。
+
+对两个异步任务的合并可以通过CompletionStage接口的thenCombine()、runAfterBoth()、thenAcceptBoth()三个方法来实现。这三个方法的不同之处主要在于其核心参数fn、action、consumer的类型不同，分别为`Function<T,R>`、`Runnable`、`Consumer<? super T>`类型。
+
+### 9.3.1 thenCombine
+
+thenCombine()会在两个CompletionStage任务都执行完成后，把两个任务的结果一起交给thenCombine()来处理。
+
+```java
+//合并代表第二步任务的CompletionStage实例，返回第三步任务的CompletionStage
+public <U,V> CompletableFuture<V> thenCombine(
+    CompletionStage<? extends U> other,
+    BiFunction<? super T,? super U,? extends V> fn) {
+    return biApplyStage(null, other, fn);
+}
+//不一定在同一个线程中执行第三步任务的CompletionSatge实例
+public <U,V> CompletableFuture<V> thenCombineAsync(
+    CompletionStage<? extends U> other,
+    BiFunction<? super T,? super U,? extends V> fn) {
+    return biApplyStage(asyncPool, other, fn);
+}
+//第三步任务的CompletionSatge实例在指定的线程池中运行
+public <U,V> CompletableFuture<V> thenCombineAsync(
+    CompletionStage<? extends U> other,
+    BiFunction<? super T,? super U,? extends V> fn, Executor executor) {
+    return biApplyStage(screenExecutor(executor), other, fn);
+}
+```
+
+thenCombine()方法的调用者为第一步的CompletionStage实例，该方法的第一个参数为第二步的CompletionStage实例，该方法的返回值为第三步的CompletionStage实例。在逻辑上，**thenCombine()方法的功能是将第一步、第二步的结果合并到第三步上**。
+
+thenCombine系列方法有两个核心参数：
+
+1. other参数：表示待合并的第二步任务的CompletionStage实例。
+2. fn参数：表示第一个任务和第二个任务执行完成后，第三步需要执行的逻辑。
+
+fn参数的类型为`BiFunction<? super T,? super U,? extends V>`，该类型的声明涉及三个泛型参数，具体如下：
+
+- 泛型参数 T：表示第一个任务所返回结果的类型。
+- 泛型参数 U：表示第二个任务所返回结果的类型。
+- 泛型参数 V：表示第三个任务所返回结果的类型。
+
+接下来调用thenCombine分三步计算（50+50）*（50+50）:
+
+```java
+@Test
+public void testThenCombine() throws ExecutionException, InterruptedException {
+    final CompletableFuture<Long> future1 = CompletableFuture.supplyAsync(new Supplier<Long>() {
+        @Override
+        public Long get() {
+            long result = 50L + 50L;
+            System.out.println("first step" + result);
+            return result;
+        }
+    });
+    final CompletableFuture<Long> future2 = CompletableFuture.supplyAsync(new Supplier<Long>() {
+        @Override
+        public Long get() {
+            long result = 50L + 50L;
+            System.out.println("second step" + result);
+            return result;
+        }
+    });
+    final CompletableFuture<Long> future = future1.thenCombine(future2, new BiFunction<Long, Long, Long>() {
+        @Override
+        public Long apply(Long aLong, Long aLong2) {
+            final long result = aLong * aLong2;
+            System.out.println("second step:"+result);
+            return result;
+        }
+    });
+    final Long aLong = future.get();
+    System.out.println("最终结果"+aLong);
+}
+```
+
+### 9.3.2 runAfterBoth
+
+runAfterBoth()方法跟thenCombine()方法不一样的是，runAfterBoth()方法不关心每一步任务的输入参数和处理结果。
+
+源码如下：
+
+```java
+//合并代表第二步任务的CompletionStage实例，返回第三步任务的CompletionStage
+public CompletableFuture<Void> runAfterBoth(CompletionStage<?> other,
+                                            Runnable action) {
+    return biRunStage(null, other, action);
+}
+//不一定在同一个线程中执行第三步任务的CompletionSatge实例
+public CompletableFuture<Void> runAfterBothAsync(CompletionStage<?> other,
+                                                 Runnable action) {
+    return biRunStage(asyncPool, other, action);
+}
+//第三步任务的CompletionSatge实例在指定的线程池中运行
+public CompletableFuture<Void> runAfterBothAsync(CompletionStage<?> other,
+                                                 Runnable action,
+                                                 Executor executor) {
+    return biRunStage(screenExecutor(executor), other, action);
+}
+```
+
+runAfterBoth()方法的调用者为第一步任务的CompletionStage实例，runAfterBoth()方法的第一个参数为第二步任务的CompletionStage实例，runAfterBoth()方法的返回值为第三步的CompletionStage实例。**在逻辑上，第一步任务和第二步任务是并行执行的，thenCombine()方法的功能是将第一步、第二步的结果合并到第三步任务上。**
+
+### 9.3.3 thenAcceptBoth
+
+thenAcceptBoth()方法对runAfterBoth()方法和thenCombine()方法的特点进行了折中，调用该方法，第三个任务可以接收其合并过来的第一个任务、第二个任务的处理结果，但是第三个任务（合并任务）却不能返回结果。
+
+源码如下：
+
+```java
+//合并代表第二步任务的CompletionStage实例，返回第三步任务的CompletionStage
+public <U> CompletableFuture<Void> thenAcceptBoth(
+    CompletionStage<? extends U> other,
+    BiConsumer<? super T, ? super U> action) {
+    return biAcceptStage(null, other, action);
+}
+//不一定在同一个线程中执行第三步任务的CompletionSatge实例
+public <U> CompletableFuture<Void> thenAcceptBothAsync(
+    CompletionStage<? extends U> other,
+    BiConsumer<? super T, ? super U> action) {
+    return biAcceptStage(asyncPool, other, action);
+}
+//第三步任务的CompletionSatge实例在指定的线程池中运行
+public <U> CompletableFuture<Void> thenAcceptBothAsync(
+    CompletionStage<? extends U> other,
+    BiConsumer<? super T, ? super U> action, Executor executor) {
+    return biAcceptStage(screenExecutor(executor), other, action);
+}
+```
+
+### 9.3.4 allOf等待所有任务结束
+
+CompletionStage接口的allOf()会等待所有的任务结束，以合并所有的任务。thenCombine()只能合并两个任务，如果需要合并多个异步任务，那么可以调用allOf()。源码如下：
+
+```java
+public static CompletableFuture<Void> allOf(CompletableFuture<?>... cfs) {
+    return andTree(cfs, 0, cfs.length - 1);
+}
+```
+
+举个例子：
+
+```java
+@Test
+public void testAllOf() throws ExecutionException, InterruptedException {
+    final CompletableFuture<Void> future1 = CompletableFuture.runAsync(() -> System.out.println("task1"));
+    final CompletableFuture<Void> future2 = CompletableFuture.runAsync(() -> System.out.println("task2"));
+    final CompletableFuture<Void> future3 = CompletableFuture.runAsync(() -> System.out.println("task3"));
+    final CompletableFuture<Void> future4 = CompletableFuture.runAsync(() -> System.out.println("task4"));
+    final CompletableFuture<Void> future = CompletableFuture.allOf(future1, future2, future3, future4);
+    future.get();
+}
+```
+
+## 9.4 异步任务的选择执行
+
+CompletableFuture对异步任务的选择执行不是按照某种条件进行选择的，而是按照执行速度进行选择的：前面两个并行任务，谁的结果返回速度快，谁的结果将作为第三步任务的输入。
+
+对两个异步任务的选择可以通过CompletionStage接口的applyToEither()、runAfterEither()和acceptEither()三个方法来实现。这三个方法的不同之处在于它的核心参数fn、action、consumer的类型不同，分别为`Function<T,R>`、`Runnable`、`Consumer<? super T>`类型。
+
+### 9.4.1 applyToEither
+
+两个CompletionStage谁返回结果的速度快，applyToEither()方法就用这个最快的CompletionStage的结果进行下一步（第三步）的回调操作。
+
+```java
+//和other任务进行速度pk，最快的返回结果，将结果用于执行fn回调函数
+public <U> CompletableFuture<U> applyToEither(
+    CompletionStage<? extends T> other, Function<? super T, U> fn) {
+    return orApplyStage(null, other, fn);
+}
+//功能相同，不一定在同一个线程中执行fn回调函数
+public <U> CompletableFuture<U> applyToEitherAsync(
+    CompletionStage<? extends T> other, Function<? super T, U> fn) {
+    return orApplyStage(asyncPool, other, fn);
+}
+//功能相同，在指定线程池中执行fn函数
+public <U> CompletableFuture<U> applyToEitherAsync(
+    CompletionStage<? extends T> other, Function<? super T, U> fn,
+    Executor executor) {
+    return orApplyStage(screenExecutor(executor), other, fn);
+}
+```
+
+举个例子，调用applyToEither随机选择（10+10）和（50+50）：
+
+```java
+@Test
+public void testApplyToEither() throws ExecutionException, InterruptedException {
+    final CompletableFuture<Long> future1 = CompletableFuture.supplyAsync(() -> {
+        long result = 10L + 10L;
+        System.out.println("first" + result);
+        return result;
+    });
+    final CompletableFuture<Long> future2 = CompletableFuture.supplyAsync(() -> {
+        long result = 50L + 50L;
+        System.out.println("second" + result);
+        return result;
+    });
+    final CompletableFuture<Long> future = future1.applyToEither(future2, new Function<Long, Long>() {
+        @Override
+        public Long apply(Long aLong) {
+            return aLong;
+        }
+    });
+    final Long aLong = future.get();
+    System.out.println(aLong);
+}
+```
+
+### 9.4.2 runAfterEither
+
+runAfterEither()方法的功能为：前面两个CompletionStage实例，任何一个完成了都会执行第三步回调操作。三个任务的回调函数都是Runnable类型的。源码如下：
+
+```java
+//和other任务进行速度pk，最快的返回结果，将结果用于执行fn回调函数
+public CompletableFuture<Void> runAfterEither(CompletionStage<?> other,
+                                              Runnable action) {
+    return orRunStage(null, other, action);
+}
+//功能相同，不一定在同一个线程中执行fn回调函数
+public CompletableFuture<Void> runAfterEitherAsync(CompletionStage<?> other,
+                                                   Runnable action) {
+    return orRunStage(asyncPool, other, action);
+}
+//功能相同，在指定线程池中执行fn函数
+public CompletableFuture<Void> runAfterEitherAsync(CompletionStage<?> other,
+                                                   Runnable action,
+                                                   Executor executor) {
+    return orRunStage(screenExecutor(executor), other, action);
+}
+```
+
+调用runAfterEither()方法，只要前面两个CompletionStage实例其中一个执行完成，就开始执行第三步的CompletionStage实例。
+
+### 9.4.3 acceptEither
+
+acceptEither()方法对applyToEither()方法和runAfterEither()方法的特点进行了折中，两个CompletionStage谁返回结果的速度快，acceptEither()就用那个最快的CompletionStage的结果作为下一步（第三步）的输入，但是第三步没有输出。源码如下：
+
+```java
+public CompletableFuture<Void> acceptEither(
+    CompletionStage<? extends T> other, Consumer<? super T> action) {
+    return orAcceptStage(null, other, action);
+}
+
+public CompletableFuture<Void> acceptEitherAsync(
+    CompletionStage<? extends T> other, Consumer<? super T> action) {
+    return orAcceptStage(asyncPool, other, action);
+}
+
+public CompletableFuture<Void> acceptEitherAsync(
+    CompletionStage<? extends T> other, Consumer<? super T> action,
+    Executor executor) {
+    return orAcceptStage(screenExecutor(executor), other, action);
+}
+```
+
+## 9.5 CompletableFuture的综合案例
+
+### 9.5.1 使用CompletableFuture完成泡茶案例
+
+```java
+public class TeaTest {
+    public static void main(String[] args) {
+        final CompletableFuture<Boolean> hotWaterJob = CompletableFuture.supplyAsync(() -> {
+            System.out.println("洗水壶");
+            System.out.println("灌凉水");
+            System.out.println("烧开水");
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            System.out.println("水开了");
+            return true;
+        });
+
+        final CompletableFuture<Boolean> washJob = CompletableFuture.supplyAsync(() -> {
+            System.out.println("洗茶杯");
+            System.out.println("洗茶壶");
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            System.out.println("洗完了");
+            return true;
+        });
+        final CompletableFuture<String> future = hotWaterJob.thenCombine(washJob, (finishHot, finishWash) -> {
+            if (finishHot && finishWash) {
+                System.out.println("泡茶喝");
+                return "完成喝茶";
+            }
+            return "没喝成";
+        });
+        final String join = future.join();
+        System.out.println(join);
+
+    }
+}
+```
 
 
 
