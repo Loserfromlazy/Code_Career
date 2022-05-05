@@ -1072,7 +1072,7 @@ Cxq、EntryList、WaitSet这三个队列的说明如下：
 
 ObjectMonitor的内部抢锁过程如图：
 
-![heightLock20220421](C:\Users\yhr\Pictures\Saved Pictures\heightLock20220421.png)
+![heightLock20220421](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/heightLock20220421.png)
 
 由于JVM轻量级锁使用CAS进行自旋抢锁，这些CAS操作都处于用户态下，进程不存在用户态和内核态之间的运行切换，因此JVM轻量级锁开销较小。而JVM重量级锁使用了Linux内核态下的互斥锁，这是重量级锁开销很大的原因。
 
