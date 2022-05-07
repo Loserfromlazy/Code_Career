@@ -617,6 +617,34 @@ while (true){
 
 ### 12.1.2 单线程Reactor模型
 
+Doug Lea（JUC作者）在《Scalable IO in Java》的文章中实现了一个Reactor反应器模式的参考代码，我们可以一起来看一下：
+
+首先他给出了单线程Reactor的设计图：
+
+![image-20220507125756667](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220507125756667.png)
+
+可以看到单线程Reactor模式，Reactor反应器和所有的Handler处理器实例的执行，都执行在同一条线程中。
+
+我们下面来看参考代码，深刻体会上图：
+
+首先Lea给出了Reactor的代码：
+
+![image-20220507153520085](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220507153520085.png)
+
+![image-20220507153540222](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220507153540222.png)
+
+![image-20220507153555958](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220507153555958.png)
+
+![image-20220507153607476](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220507153607476.png)
+
+> 这个wakeup作用如下：If another thread is currently blocked in an invocation of the select() or select(long) methods then that invocation will return immediately. 翻译过来就是此方法会唤醒调用select阻塞。但是在单线程下是没有什么用的。
+
+![image-20220507153617490](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220507153617490.png)
+
+关于doug lea大师的代码，我已经加上了注释。这里对整体流程进行解释：
+
+首先在
+
 
 
 
