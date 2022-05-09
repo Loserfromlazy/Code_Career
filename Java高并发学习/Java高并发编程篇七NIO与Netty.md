@@ -641,9 +641,202 @@ Doug Lea（JUC作者）在《Scalable IO in Java》的文章中实现了一个Re
 
 ![image-20220507153617490](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220507153617490.png)
 
-关于doug lea大师的代码，我已经加上了注释。这里对整体流程进行解释：
+关于doug lea大师的代码，我已经加上了注释。这里介绍上述代码重点：
 
-首先在
+1. 首先Reactor类启动后，会在在线程方法run中轮询获取事件。
+2. Reactor获取事件后然后调用分发方法，将轮询获取的事件进行分发
+3. 分发方法主要是取出selectKey中的处理器类，然后执行处理器的run方法。（这里不是调用start而是直接调用Thread对象的 **run()方法**不会启动**单独的线程**，而是可以在当前线程中执行。）
+4. 取出selectKey中的处理器类主要调用attachment()方法，这个方法主要用于获取attach中放进去的处理器类。
+5. 处理器类有Acceptor和Handler两种，Acceptor是Reactor的内部类，主要用于处理接受请求。Handler主要进行读写事件的注册和处理。
+
+下面我们根据Lea大师的单线程Reactor模式简单实现一个显示消息的服务器端，代码如下：
+
+```java
+public class SingleThreadServer implements Runnable {
+
+    private ServerSocketChannel serverSocketChannel;
+    private Selector selector;
+    private SelectionKey selectionKey;
+
+    public SingleThreadServer(int port) {
+        try {
+            this.serverSocketChannel = ServerSocketChannel.open();
+            this.selector = Selector.open();
+            serverSocketChannel.socket().bind(new InetSocketAddress(port));
+            System.out.println("开始监听");
+            serverSocketChannel.configureBlocking(false);
+            //selector中注册OP_ACCEPT事件
+            selectionKey = serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+            //selector中OP_ACCEPT事件绑定Acceptor对象附件
+            selectionKey.attach(new Acceptor());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void run() {
+        try {
+            while (!Thread.interrupted()) {
+                selector.select();
+                final Set<SelectionKey> keySet = selector.selectedKeys();
+                final Iterator<SelectionKey> iterator = keySet.iterator();
+                while (iterator.hasNext()) {
+                    final SelectionKey next = iterator.next();
+                    dispatch(next);
+                }
+                keySet.clear();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void dispatch(SelectionKey key) {
+        final Runnable attachment = (Runnable) key.attachment();
+        if (attachment != null) {
+            attachment.run();
+        }
+    }
+
+    class Acceptor implements Runnable {
+        @Override
+        public void run() {
+            try {
+                final SocketChannel accept = serverSocketChannel.accept();
+                new Handler(accept, selector);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+	//测试方法
+    public static void main(String[] args) {
+        new Thread(new SingleThreadServer(8999)).start();
+    }
+}
+```
+
+```java
+public class Handler implements Runnable{
+
+    private SocketChannel socketChannel;
+    private SelectionKey selectionKey;
+    final ByteBuffer byteBuffer = ByteBuffer.allocate(1024);
+    static final int RECIEVING = 0, SENDING = 1;
+    int state = RECIEVING;
+
+    public Handler(SocketChannel socketChannel, Selector selector) {
+        try {
+            this.socketChannel = socketChannel;
+            socketChannel.configureBlocking(false);
+            // 之后设置感兴趣的IO事件
+            this.selectionKey = socketChannel.register(selector, 0);
+            selectionKey.attach(this);
+            //注册Read就绪事件
+            selectionKey.interestOps(SelectionKey.OP_READ);
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void run() {
+        try {
+            if (state == SENDING){
+                socketChannel.write(byteBuffer);
+                byteBuffer.clear();
+                selectionKey.interestOps(SelectionKey.OP_READ);
+                state = RECIEVING;
+            }
+            //最开始在RECIEVING状态
+            if (state == RECIEVING){
+                int length = 0;
+                //length>0,还未读取完
+                while ((length = socketChannel.read(byteBuffer))>0) {
+                    System.out.println(new String(byteBuffer.array(),0,length));
+                }
+                byteBuffer.flip();
+                selectionKey.interestOps(SelectionKey.OP_WRITE);
+                state = SENDING;
+            }
+
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            selectionKey.cancel();
+            try {
+                socketChannel.finishConnect();
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }
+        }
+
+    }
+}
+```
+
+关于连接上面服务器端的客户端类，这里仅仅简单的进行了实现：
+
+```java
+public class NioClient {
+    public static void main(String[] args) throws IOException {
+        SocketChannel channel =SocketChannel.open();
+        channel.configureBlocking(false);
+        InetSocketAddress address = new InetSocketAddress("127.0.0.1",8999);
+        if (!channel.connect(address)){
+            while (!channel.finishConnect()){//nio非阻塞的优势
+                System.out.println("Client: 链接服务器的同时，干别的事");
+            }
+        }
+        while (true){
+            Scanner scanner = new Scanner(System.in);
+            final String msg = scanner.nextLine();
+            ByteBuffer writebuffer = ByteBuffer.wrap(msg.getBytes());
+            //发送数据
+            channel.write(writebuffer);
+        }
+
+    }
+}
+```
+
+### 12.1.3 单线程Reactor模式优缺点
+
+此模式基于NIO实现，相较于传统的BIO模式，不需要一直启动线程，避免了上下文的同时切换，服务器效率大大提升。
+
+但是正是由于都在一条线程上，所以当某一个Handler阻塞后会导致其他的Handler都不能执行，并且负责监听的Acceptor其实也不能执行，这就会导致服务器无响应。
+
+因此，在高性能服务器的应用场景中，单线程反应器模式使用很少。
+
+### 12.1.4 多线程Reactor模式
+
+我们还是来看一看Doug Lea关于对多线程Reactor模型的阐述：
+
+![image-20220509171207917](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220509171207917.png)
+
+其实主要是说，首先要适当的增加线程提升效率，然后要升级Reactor的线程，提高查询和分发IO事件的能力，还有升级工作线程（即Handler），使其能快速处理IO事件。
+
+因此最后Lea给出了这样的架构图：
+
+![image-20220509171248833](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220509171248833.png)
+
+总体来说，可以将IOHandler放入独立线程池，分离监听和业务处理，同时拆分Reactor，引入多个选择器，一个线程负责一个选择器的轮询，充分释放系统资源的能力。
+
+下面，我们将根据上面的单线程的显示消息的服务器端进行改造，使其成为多线程的Reactor模式，代码如下：
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
