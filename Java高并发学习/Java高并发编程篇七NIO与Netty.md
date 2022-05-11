@@ -20,14 +20,6 @@
 
 **本文会慢慢进行整理，因为之前整理过自己的笔记，所以二次整理会慢慢来，也有可能会跳章节进行整理，但是最终会完成整理的。在整理完之前可以看我的个人博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)**
 
-> 未完结后续目录如下：
->
-> 十三、Netty
->
-> 十四、Decoder和Encoder
->
-> 十五、序列化和反序列化
-
 # 十、IO底层原理
 
 ## 10.1 IO读写的基本原理
@@ -698,7 +690,7 @@ public class SingleThreadServer implements Runnable {
             attachment.run();
         }
     }
-
+	//连接处理器类
     class Acceptor implements Runnable {
         @Override
         public void run() {
@@ -824,7 +816,55 @@ public class NioClient {
 
 总体来说，可以将IOHandler放入独立线程池，分离监听和业务处理，同时拆分Reactor，引入多个选择器，一个线程负责一个选择器的轮询，充分释放系统资源的能力。
 
-下面，我们将根据上面的单线程的显示消息的服务器端进行改造，使其成为多线程的Reactor模式，代码如下：
+下面，我们将根据上面的单线程的显示消息的服务器端进行改造，使其成为多线程的Reactor模式，具体改造思路如下：
+
+1. 增加boss和worker两种选择器，boss负责查询和分发新连接事件，worker负责查询和分发IO事件
+2. 创建两种Reactor，bossReactor负责新连接事件的处理，与boss选择器绑定；workerReactor负责IO事件的查询和分发，绑定worker选择器。
+3. 服务器Channel注册到boss选择器，所有的channel轮询注册到worker选择器，实现新连接监听和IO读写事件的分离
+
+代码如下：
+
+
+
+# 十三、Netty
+
+## 13.1 Netty入门
+
+
+
+## 13.2 Netty的Reactor模式
+
+
+
+## 13.3 BootStrap和EventLoop
+
+
+
+## 13.4 Channel和Future
+
+
+
+## 13.5 Handler
+
+
+
+## 13.6 Pipeline
+
+
+
+## 13.7 ByteBuf
+
+
+
+## 13.8 编码解码
+
+
+
+## 13.9 序列化和反序列化
+
+
+
+
 
 
 
