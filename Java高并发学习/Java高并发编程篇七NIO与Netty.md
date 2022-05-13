@@ -583,7 +583,15 @@ public abstract int select(long timeout)
 public abstract int select() throws IOException;
 ```
 
-### 11.4.4 NIO实例
+### 11.4.4 Channel、Selector、SelectionKey关系
+
+Channel和Selector可以说是多对一的关系，他们俩和SelectionKey就像是数据库中的两张表和一张中间表的关系。用图表示如下：
+
+![image-20220513151036492](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220513151036492.png)
+
+
+
+### 11.4.5 NIO示例
 
 暂略
 
@@ -843,7 +851,7 @@ public class NioClient {
 2. 创建两种Reactor，bossReactor负责新连接事件的处理，与boss选择器绑定；workerReactor负责IO事件的查询和分发，绑定worker选择器。
 3. 服务器Channel注册到boss选择器，所有的channel轮询注册到worker选择器，实现新连接监听和IO读写事件的分离
 
-代码如下：
+代码如下（客户端代码跟单线程一样）：
 
 ```java
 public class MultiThreadServer {
