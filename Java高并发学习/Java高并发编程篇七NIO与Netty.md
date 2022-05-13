@@ -155,13 +155,19 @@ hard nofile 1000000
 
 > 操作系统的主要功能是为管理硬件资源和为应用程序开发人员提供良好的环境来使应用程序具有更好的兼容性，为了达到这个目的，内核提供一系列具备预定功能的多内核函数，通过一组称为系统调用（system call)的接口呈现给用户。系统调用把应用程序的请求传给内核，调用相应的内核函数完成所需的处理，将处理结果返回给应用程序。
 
-在IO多路复用的模型中，
+在IO多路复用的模型中，主要有三个系统调用需要了解，`select`,`epoll`,`poll`
+
+
+
+
+
+
 
 
 
 # 十一、Java NIO
 
-> NIO的实例暂时略，可以先看我的博客中的简单的示例，后续会进行补充
+> NIO的实例暂时略，可以先看我的博客中的简单的示例和Reactor模式中的示例，后续会进行补充。
 
 ## 11.1 简介
 
@@ -839,7 +845,159 @@ public class NioClient {
 
 代码如下：
 
+```java
+public class MultiThreadServer {
+    Selector bossSelector = Selector.open();
+    Selector[] workerSelectors = new Selector[2];
+    ServerSocketChannel serverSocketChannel;
+    AtomicInteger index = new AtomicInteger(0);
+    Reactor bossReactor;
+    Reactor [] workerReactors = new Reactor[2];
 
+    public MultiThreadServer() throws IOException {
+        serverSocketChannel = ServerSocketChannel.open();
+        serverSocketChannel.socket().bind(new InetSocketAddress("127.0.0.1",8999));
+        serverSocketChannel.configureBlocking(false);
+        workerSelectors[0] = Selector.open();
+        workerSelectors[1] = Selector.open();
+        bossReactor = new Reactor(bossSelector);
+        workerReactors[0] = new Reactor(workerSelectors[0]);
+        workerReactors[1] = new Reactor(workerSelectors[1]);
+        SelectionKey selectionKey = serverSocketChannel.register(bossSelector, SelectionKey.OP_ACCEPT);
+        selectionKey.attach(new Acceptor());
+    }
+
+    class Reactor implements Runnable {
+
+        Selector selector;
+
+        public Reactor(Selector selector) {
+            this.selector = selector;
+        }
+
+        @Override
+        public void run() {
+            try {
+                while (!Thread.interrupted()) {
+                    selector.select(1000);
+                    final Set<SelectionKey> selectionKeys = selector.selectedKeys();
+                    if (selectionKeys == null || selectionKeys.size() == 0) {
+                        continue;
+                    }
+                    Iterator<SelectionKey> iterator = selectionKeys.iterator();
+                    while (iterator.hasNext()) {
+                        SelectionKey next = iterator.next();
+                        dispatch(next);
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+
+    private void dispatch(SelectionKey next) {
+        Runnable attachment = (Runnable) next.attachment();
+        attachment.run();
+
+    }
+
+    //启动boss和worker的Reactor线程
+    public void start(){
+        new Thread(bossReactor).start();
+        new Thread(workerReactors[0]).start();
+        new Thread(workerReactors[1]).start();
+    }
+    //连接处理器
+    class Acceptor implements Runnable {
+        @Override
+        public void run() {
+            try {
+                //获取channel
+                SocketChannel socketChannel = serverSocketChannel.accept();
+                if (socketChannel!=null){
+                    //新建IO处理器处理读写
+                    new MutilHandler(socketChannel,workerSelectors[index.getAndIncrement()]);
+                }
+                //这里的index是为了做一个workerSelectors的负载均衡
+                if (index.get() == 2) {
+                    index.set(0);
+                }
+            }catch (Exception e){
+                e.printStackTrace();
+            }
+
+        }
+    }
+
+    public static void main(String[] args) throws IOException {
+        new MultiThreadServer().start();
+    }
+}
+```
+
+```java
+public class MutilHandler implements Runnable{
+    Selector selector;
+    SocketChannel socketChannel;
+    SelectionKey selectionKey;
+    final ByteBuffer byteBuffer = ByteBuffer.allocate(1024);
+    static final int RECIEVING = 0, SENDING = 1;
+    int state = RECIEVING;
+    ExecutorService threadPool = Executors.newFixedThreadPool(4);
+
+    public MutilHandler(SocketChannel channel,Selector workerSelector) throws IOException {
+        selector = workerSelector;
+        socketChannel =channel;
+        socketChannel.configureBlocking(false);
+        selectionKey = socketChannel.register(selector, 0);
+        selectionKey.interestOps(SelectionKey.OP_READ);
+        selectionKey.attach(this);
+        selector.wakeup();
+    }
+
+    @Override
+    public void run() {
+        threadPool.execute(()->{
+            doTask();
+        });
+    }
+
+    public synchronized void doTask(){
+        try {
+            if (state == SENDING){
+                socketChannel.write(byteBuffer);
+                byteBuffer.clear();
+                selectionKey.interestOps(SelectionKey.OP_READ);
+                state = RECIEVING;
+            }
+            //最开始在RECIEVING状态
+            if (state == RECIEVING){
+                int length = 0;
+                //length>0,还未读取完
+                while ((length = socketChannel.read(byteBuffer))>0) {
+                    System.out.println(new String(byteBuffer.array(),0,length));
+                }
+                byteBuffer.flip();
+                selectionKey.interestOps(SelectionKey.OP_WRITE);
+                state = SENDING;
+            }
+
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            selectionKey.cancel();
+            try {
+                socketChannel.finishConnect();
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }
+        }
+    }
+
+}
+```
 
 # 十三、Netty
 
