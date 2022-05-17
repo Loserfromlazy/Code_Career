@@ -70,6 +70,39 @@ Java客户端和服务端之间完成一次socket请求和响应（包括read和
 
   发送给客户端：服务端Linux系统将内核缓冲区中的数据写入网卡，网卡通过底层的通信协议将数据发送给目标客户端。
 
+### 10.1.4 Socket对象的结构
+
+一般来说socket有一个别名也叫做套接字。socket起源于Unix，都可以用“打开open –> 读写write/read –> 关闭close”模式来操作。Socket就是该模式的一个实现，socket即是一种特殊的文件，一些socket函数就是对其进行的操作（读/写IO、打开、关闭）。说白了Socket是[应用层](https://so.csdn.net/so/search?q=应用层&spm=1001.2101.3001.7020)与TCP/IP协议族通信的中间软件抽象层，它是一组接口。在设计模式中，Socket其实就是一个门面模式，它把复杂的TCP/IP协议族隐藏在Socket接口后面，对用户来说，一组简单的接口就是全部，让Socket去组织数据，以符合指定的协议，而不需要让用户自己去定义什么时候需要指定哪个协议哪个函数。
+
+当进程A执行到创建socket的语句时，操作系统会创建一个由文件系统管理的socket对象，这个对象包含了：
+
+- 发送缓冲区
+- 接收缓冲区
+- 等待队列,等待队列指向所有等待该socket事件的进程。
+- ......
+
+因为socket是一个文件，所以可以用下图来理解：
+
+> 文件句柄也叫文件描述符。在Linux系统中，文件可分为普通文件、目录文件、链接文件和设备文件。文件描述符（File Descriptor）是内核为了高效管理已被打开的文件所创建的索引，是一个非负整数（通常是小整数），用于指代被打开的文件。所有的IO系统调用（包括socket的读写调用）都是通过文件描述符完成的。
+
+![image-20220517145031418](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220517145031418.png)
+
+当执行到接收数据时，操作系统就会将进程A从工作队列移动到该socket的等待队列中：
+
+![image-20220517145717627](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220517145717627.png)
+
+下面我们更详细描述一下内核接收数据的大概过程：
+
+- 首先计算机接收到了对端的数据
+- 然后数据由网卡传输到内存中
+- 然后网卡通过中断信号，通知CPU有数据到达，CPU执行中断程序
+- 中断程序先将网络数据写入对应socket的接收缓冲区（socket缓冲区是在内核中的）中
+- 然后唤醒进程A，重新将进程A放入工作队列中
+
+内核接收数据时如何判断数据属于哪一个Socket？网卡接收数据时，会根据socket的数据包格式（源ip，源端口，协议，目标ip，目标端口）判断属于哪个socket。
+
+内核通过IO多路复用来实现监控多个socket的目的。IO多路复用是异步阻塞的IO模型，我们先了解四种IO模型，然后再了解IO多路复用的系统调用。
+
 ## 10.2 四种IO模型
 
 ### 10.2.1 阻塞非阻塞与同步异步
@@ -103,8 +136,6 @@ Java客户端和服务端之间完成一次socket请求和响应（包括read和
 ### 10.2.3 通过合理配置来支持并发连接
 
 在生产环境Linux系统中，基本上都需要解除文件句柄数的限制。原因是Linux系统的默认值为1024，也就是说，一个进程最多可以接受1024个socket连接，这是远远不够的。
-
-文件句柄也叫文件描述符。在Linux系统中，文件可分为普通文件、目录文件、链接文件和设备文件。文件描述符（File Descriptor）是内核为了高效管理已被打开的文件所创建的索引，是一个非负整数（通常是小整数），用于指代被打开的文件。所有的IO系统调用（包括socket的读写调用）都是通过文件描述符完成的。
 
 在Linux下，通过调用ulimit命令可以看到一个进程能够打开的最大文件句柄数量。这个命令的具体使用方法是：
 
@@ -151,11 +182,17 @@ hard nofile 1000000
 
 ## 10.3 IO多路复用的系统调用
 
-在四种IO模型中最常用的就是IO多路复用模型，或者说是异步非阻塞模型，因此我们现在来了解操作系统为IO多路复用提供的系统调用。
+在四种IO模型中最常用的就是IO多路复用模型，或者说是异步阻塞模型，因此我们现在来了解操作系统为IO多路复用提供的系统调用。
 
 > 操作系统的主要功能是为管理硬件资源和为应用程序开发人员提供良好的环境来使应用程序具有更好的兼容性，为了达到这个目的，内核提供一系列具备预定功能的多内核函数，通过一组称为系统调用（system call)的接口呈现给用户。系统调用把应用程序的请求传给内核，调用相应的内核函数完成所需的处理，将处理结果返回给应用程序。
 
-在IO多路复用的模型中，主要有三个系统调用需要了解，`select`,`epoll`,`poll`
+在IO多路复用的模型中，主要有三个系统调用需要了解，`select`,`epoll`,`poll`。其中windows和linux都支持select和poll系统调用，epoll只有linux支持。我们以linux为例学习这三个系统调用。
+
+### 10.3.1 select系统调用
+
+linux和windows内核都支持select系统调用。
+
+select操作将1024个文件描述符的IO事件轮询，简化为1次轮询，轮询发生在内核空间。
 
 
 
@@ -1011,9 +1048,85 @@ public class MutilHandler implements Runnable{
 
 ## 13.1 Netty入门
 
+我们先从一个入门案例来简单了解一下netty，案例代码来自于我的博客
 
+服务器端代码
+
+~~~java
+public class HelloServer {
+    public static void main(String[] args) {
+        // 1、启动器，负责装配netty组件，启动服务器
+        new ServerBootstrap()
+                // 2、创建 NioEventLoopGroup，可以简单理解为 线程池 + Selector
+                .group(new NioEventLoopGroup())
+                // 3、选择服务器的 ServerSocketChannel 实现
+                .channel(NioServerSocketChannel.class)
+                // 4、child 负责处理读写，该方法决定了 child 执行哪些操作
+            	// ChannelInitializer 处理器（仅执行一次）
+            	// 它的作用是待客户端SocketChannel建立连接后，执行initChannel以便添加更多的处理器
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
+                        // 5、SocketChannel的处理器，使用StringDecoder解码，ByteBuf=>String
+                        nioSocketChannel.pipeline().addLast(new StringDecoder());
+                        // 6、SocketChannel的业务处理，使用上一个处理器的处理结果
+                        nioSocketChannel.pipeline().addLast(new ChannelInboundHandlerAdapter() {
+                            @Override//读事件
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                System.out.println(msg);
+                            }
+                        });
+                    }
+                    // 7、ServerSocketChannel绑定8080端口
+                }).bind(8080);
+    }
+}
+
+~~~
+
+客户端代码
+
+~~~java
+public class HelloClient {
+    public static void main(String[] args) throws InterruptedException {
+        new Bootstrap()
+                .group(new NioEventLoopGroup())
+                // 选择客户端 Socket 实现类，NioSocketChannel 表示基于 NIO 的客户端实现
+                .channel(NioSocketChannel.class)
+                // ChannelInitializer 处理器（仅执行一次）
+                // 它的作用是待客户端SocketChannel建立连接后，执行initChannel以便添加更多的处理器
+                .handler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel channel) throws Exception {
+                        // 消息会经过通道 handler 处理，这里是将 String => ByteBuf 编码发出
+                        channel.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                // 连接服务器指定地址和端口
+                .connect(new InetSocketAddress("localhost", 8080))
+                // Netty 中很多方法都是异步的，如 connect
+                // 这时可以使用 sync 同步方法等待 connect 建立连接完毕
+                .sync()
+                // 获取 channel 通道对象，可以进行数据读写操作
+                .channel()
+                // 写入消息并清空缓冲区
+                .writeAndFlush("hello world");
+    }
+}
+
+~~~
+
+此案例的流程（图片来自于我的个人博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)）：
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211012093559832.png)
+
+
+
+上面的案例都是用netty写的，主要展示了常用组件和netty的简单写法，其实就是使用了netty的各个组件组成了服务器端和客户端代码。我们将在下面一一学习netty的各个组件的用法。
 
 ## 13.2 Netty的Reactor模式
+
+在学习组件前，我们先了解一下netty的Reactor模式。reactor模式我们在上面第十二章已经学习过了。
 
 
 
