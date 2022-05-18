@@ -182,6 +182,8 @@ hard nofile 1000000
 
 ## 10.3 IO多路复用的系统调用
 
+> 这里推荐[IO Multiplexing](https://github.com/Liu-YT/IO-Multiplexing)这个仓库，有每一步的源码分析。想更深入研究可以去这个仓库看一下。
+
 在四种IO模型中最常用的就是IO多路复用模型，或者说是异步阻塞模型，因此我们现在来了解操作系统为IO多路复用提供的系统调用。
 
 > 操作系统的主要功能是为管理硬件资源和为应用程序开发人员提供良好的环境来使应用程序具有更好的兼容性，为了达到这个目的，内核提供一系列具备预定功能的多内核函数，通过一组称为系统调用（system call)的接口呈现给用户。系统调用把应用程序的请求传给内核，调用相应的内核函数完成所需的处理，将处理结果返回给应用程序。
@@ -192,15 +194,190 @@ hard nofile 1000000
 
 linux和windows内核都支持select系统调用。
 
-select操作将1024个文件描述符的IO事件轮询，简化为1次轮询，轮询发生在内核空间。
+select操作1次轮询会遍历1024个文件描述符的IO事件（或者说是1024个socket的IO事件），轮询发生在内核空间。
 
+select核心步骤如下：
 
+- 准备fds数组（fdset是位图数据结构），数组存放着所有需要监视的socket。select函数监视的文件描述符分3类，分别是writefds、readfds、和exceptfds。（读写和异常）
+- 调用select，如果fdset数组中的所有socket没有数据，select会阻塞，直到有socket接收数据，或者超时（timeout指定等待时间，如果立即返回设为null即可），select返回，唤醒进程
+- select函数返回后遍历fdset，通过FD_ISSET判断具体是哪个socket接收到数据（或者说是哪个文件描述符就绪），然后做处理
 
+select原型如下：
 
+~~~
+ int select(
+          int nfds,
+          fd_set *readfds,
+          fd_set *writefds,
+          fd_set *exceptfds,
+          struct timeval *timeout);
+~~~
 
+select的简单使用：
 
+![image-20220518133003373](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518133003373.png)
 
+流程如下：
 
+> fd是指文件描述符
+
+进程A调用select后，从进程A的用户空间拷贝fd_set到内核空间，然后遍历所有fd将进程A存入需要监听的socket的等待队列中。
+
+![image-20220518113653491](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518113653491.png)
+
+进入等待队列后，执行for循环（无限轮询），遍历每一个fd（或者说是socket），调用对应文件描述符中的poll回调函数，检测是否就绪，（只有fd或者说socket处于就绪状态或信号中断或出错或超时才退出循环或者说退出轮询）。不就绪就会调用`poll_schedule_timeout`函数，让当前进程睡眠，一直到超时或者有描述符就绪被唤醒（当有socket进行数据接收时，会调用中断程序唤醒进程A）。接着又会再次遍历每个描述符，调用`poll`再次检测。如此循环，直到符合条件才会退出。
+
+![image-20220518113817822](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518113817822.png)
+
+进程A从所有的socket的等待队列中移除，加入到操作系统的工作队列
+
+![image-20220518113948781](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518113948781.png)
+
+对于进程A，当调用select时，会将A存入每个socket的等待队列，当某个socket接收数据时，A被唤醒从多个socket等待队列移除，然后A遍历所有socket（即fds数组），当A处理完数据后，移出工作队列这是需要在遍历所有socket再将A加入等待队列。
+
+**select系统调用缺点：**
+
+- 被监控的fds集合限制为1024太小了
+- fds集合需要从用户空间拷贝到内核空间
+- 当被监控的fds中某些有数据可读的时候，通知其实可以更加精细一点，就是能够从通知中得到有可读事件的fds列表，而不是需要遍历整个fds来收集。
+
+### 10.3.2 poll系统调用
+
+poll出现是为了代替select，poll不在限制socket数量。
+
+poll的内部与select基本一样，都是需要进行遍历的，但是区别在于底层fds数组的数据结构不一样了，从而实现最大文件句柄数量限制去除了。
+
+> 在select中使用的是fd_set结构（类似bitmap），而poll中使用的是pollfd
+
+pollfd结构：
+
+```
+  struct pollfd {
+        int     fd;
+        short   events;
+        short   revents;
+  };
+```
+
+poll系统调用原型：
+
+```
+  int poll(
+          struct pollfd filedes[];
+          unsigned int nfds;
+          int timeout   /* in milliseconds */);
+```
+
+poll流程如下：
+
+`poll`的实现与`select`基本差不多。调用`poll`函数，调用`copy_from_user`将`fds`拷贝到内核，`poll_initwait`对每个`fd`将此进程注册到其等待队列，当有事件发生时会唤醒此进程，循环对每个`fd`调用`do_pollfd`，判断是否有事件到来，没有的话进入终端睡眠，有事件到来后将所有`fds`再拷贝回用户层。
+
+poll虽然解决了fds集合大小1024的限制问题，但是，它并没改变大量描述符数组被整体复制于用户态和内核态的地址空间之间，以及个别描述符就绪触发整体描述符集合的遍历的低效问题。
+
+**socket读就绪条件**
+
+1. socket接收缓冲区数据字节数大于等于socket缓冲区低水位标记SO_RCVLOWAT。
+
+   对于TCP和UDP套接字而言，**缓冲区低水位的值默认为**1。那就意味着，默认情况下，只要缓冲区中有数据，那就是可读的。我们可以通过使用SO_RCVLOWAT套接字选项(参见setsockopt函数)来设置该套接字的低水位大小。此种描述符就绪(可读)的情况下，当我们使用read/recv等对该套接字执行读操作的时候，套接字不会阻塞，而是成功返回一个大于0的值（即可读数据的大小）。
+
+2. 该连接的读半部关闭（就是接受了FIN的TCP连接）。对这样的socket的读操作不会阻塞，而是会返回0
+
+3. 该socket是一个listen的监听套接字，且目前完成的连接数不为0，对于这样的套接字进行accept操作不会阻塞
+
+4. 有一个错误socket待处理。对这样的socket的读操作不阻塞并返回-1.
+
+**socket写就绪条件**
+
+1. socket内核中，发送缓冲区的可用字节数大于等于低水位标记SO_SNDLOWAT，此时可以无阻塞的写，并且返回值大于0
+
+   对于TCP和UDP而言，这个低水位SO_SNDLOWAT的值默认为2048，而套接字默认的发送缓冲区大小是8k，这就意味着一般一个套接字连接成功后，就是处于可写状态的。我们可以通过SO_SNDLOWAT套接字选项（参见setsockopt函数）来设置这个低水位。此种情况下，我们设置该套接字为非阻塞，对该套接字进行写操作(如write,send等)，将不阻塞，并返回一个正值（例如由传输层接受的字节数，即发送的数据大小）。
+
+2. 该连接的写半部关闭（主动发送FIN包的TCP连接），对这样的套接字的写操作将会产生SIGPIPE信号。所以我们的网络程序基本都要自定义处理SIGPIPE信号。因为SIGPIPE信号的默认处理方式是程序退出
+
+3. 使用非阻塞的connect已建立连接，或者connect已经失败。（即connect有结果了）
+
+4. 有一个错误的套接字待处理。对这样的套接字的写操作将不阻塞并返回-1
+
+### 10.3.3 epoll系统调用
+
+select和poll低效的原因是**需要拷贝fds集合和没有按需遍历fds集合**。而在poll中也没有解决这两个问题，poll只是解决了1024的限制因为改变了底层数据结构。这时就需要epoll。
+
+epoll是在Linux 2.6内核中提出的，是之前select和poll的增强版本。相对于select和poll来说，epoll更加灵活，没有描述符的限制。epoll使用一个文件描述符管理多个描述符，将用户关系的文件描述符的事件存放到内核的一个事件表中，这样在用户空间和内核空间之间的数据拷贝只需一次。
+
+epoll是怎么解决这两个性能问题的呢？
+
+1. 拷贝fds集合的问题
+
+   对于IO多路复用，有两件事是必须要做的(对于监控可读事件而言)：1. 准备好需要监控的fds集合；2. 探测并返回fds集合中哪些fd可读了。每次调用select或poll都在重复地准备整个需要监控的fds集合。然而对于频繁调用的select或poll而言，fds集合的变化频率要低得多，我们没必要每次都重新准备(集中处理)整个fds集合。
+
+   于是，epoll引入了epoll_ctl系统调用，将高频调用的epoll_wait和低频的epoll_ctl隔离开。同时，epoll_ctl通过(EPOLL_CTL_ADD、EPOLL_CTL_MOD、EPOLL_CTL_DEL)三个操作来分散对需要监控的fds集合的修改，做到了有变化才变更，将select或poll高频、大块内存拷贝(集中处理)变成epoll_ctl的低频、小块内存的拷贝(分散处理)，避免了大量的内存拷贝。同时，对于高频epoll_wait的可读就绪的fd集合返回的拷贝问题，epoll通过内核与用户空间mmap(内存映射)同一块内存来解决。mmap将用户空间的一块地址和内核空间的一块地址同时映射到相同的一块物理内存地址（不管是用户空间还是内核空间都是虚拟地址，最终要通过地址映射映射到物理地址），使得这块物理内存对内核和对用户均可见，减少用户态和内核态之间的数据交换。
+
+2. 遍历fds集合的问题
+
+   为了做到只遍历就绪的fd，我们需要有个地方来组织那些已经就绪的fd。为此，epoll引入了一个中间层，一个双向链表(ready_list)，一个单独的睡眠队列(single_epoll_wait_list)，并且，与select或poll不同的是，epoll的process不需要同时插入到多路复用的socket集合的所有睡眠队列中，相反process只是插入到中间层的epoll的单独睡眠队列中，process睡眠在epoll的单独队列上，等待事件的发生。
+
+epoll数据结构：
+
+eventpoll的rbr是一个红黑树，rdlist是一个双向链表，存放已经发生IO事件的socket，等待队列是poll_wait,进程放入这里。
+
+![image-20220518150434281](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518150434281.png)
+
+epoll的流程：
+
+首先会调用epoll_create,创建一个eventpoll对象，创建`eventpoll`对象的初始化操作，获取当前用户信息,是不是`root`，获取最大监听`fd`数目等并且保存到`eventpoll`对象中。初始化等待队列，初始化就绪链表，初始化红黑树的头结点。如下图：
+
+![image-20220518141648086](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518141648086.png)
+
+然后调用epoll_ctl，将需要监听的fd（socket）添加或删除。
+
+> epoll_ctl将epoll_event结构拷贝到内核空间中，并且判断加入的fd是否支持`poll`结构(`epoll，poll，select I/O多路复用必须支持poll操作`),并且从`epfd->file->privatedata`获取eventpoll对象，根据op区分是添加删除还是修改。首先在eventpoll结构中的红黑树查找是否已经存在了相对应的fd，没找到就支持插入操作。
+>
+> 插入操作时，会创建一个与`fd`对应的`epitem`结构，并且初始化相关成员，比如保存监听的`fd`跟`file`结构之类的。重要的是指定了调用`poll_wait`时的回调函数用于数据就绪时唤醒进程，(其内部，初始化设备的等待队列，将该进程注册到等待队列)完成这一步，我们的`epitem`就跟这个`socket`关联起来了， 当它有状态变化时，会通过`ep_poll_callback()`来通知。最后调用加入的`fd`的`file operation->poll`函数(最后会调用`poll_wait`操作)用于完成注册操作。 最后将`epitem`结构添加到红黑树中。
+
+![image-20220518144818157](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518144818157.png)
+
+如果有就绪事件，或者说是socket接收到数据，那么中断程序就会操作eventpoll的就绪队列rdlist，而不是直接操作进程。比如socket1和2收到数据，那就让这俩socket进入rdlist：
+
+![image-20220518152858806](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518152858806.png)
+
+然后执行epoll_wait,当程序执行到epoll_wait时，如果rdlist非空则返回，如果rdlist为空，阻塞进程。epoll_wait会计算睡眠时间(如果有)，判断eventpoll对象的链表是否为空，不为空那就返回。并且初始化一个等待队列，把自己挂上去，设置自己的进程状态为可睡眠状态。判断是否有信号到来(有的话直接被中断醒来)，如果啥事都没有那就调用`schedule_timeout`进行睡眠，如果超时或者被唤醒，首先从自己初始化的等待队列删除，然后开始拷贝资源给用户空间了。拷贝资源则是先把就绪事件链表转移到中间链表，然后挨个遍历拷贝到用户空间，并且挨个判断其是否为水平触发，是的话再次插入到就绪链表。
+
+### 10.3.4 三种系统调用的比较
+
+通过比较`select`、`poll`和`epoll`处理 I/O 的过程来剖析其中的原因：
+
+- 用户态将文件描述符传入内核的方式
+  - `select`：创建3个文件描述符集并拷贝到内核中,分别监听读、写、异常动作。这里受到单个进程可以打开的`fd`数量限制,默认是1024。
+  - `poll`：将传入的`struct pollfd`结构体数组拷贝到内核中进行监听。
+  - `epoll`：执行`epoll_create`会在内核的高速`cache`区中建立一颗红黑树以及就绪链表(该链表存储已经就绪的文件描述符)。接着用户执行的`epoll_ctl`函数添加文件描述符会在红黑树上增加相应的结点。
+- 内核态检测文件描述符是否可读可写的方式
+  - `select`：采用轮询方式，遍历所有`fd`，最后返回一个描述符读写操作是否就绪的`mask`掩码，根据这个掩码给`fd_set`赋值。
+  - `poll`：同样采用轮询方式，查询每个`fd`的状态，如果就绪则在等待队列中加入一项并继续遍历。
+  - `epoll`：采用回调机制。在执行`epoll_ctl`的`add`操作时，不仅将文件描述符放到红黑树上，而且也注册了回调函数，内核在检测到某文件描述符可读/可写时会调用回调函数，该回调函数将文件描述符放在就绪链表中。
+- 如何找到就绪的文件描述符并传递给用户态
+  - `select`：将之前传入的`fd_set`拷贝传出到用户态并返回就绪的文件描述符总数。用户态并不知道是哪些文件描述符处于就绪态，需要遍历来判断。
+  - `poll`：将之前传入的`fd`数组拷贝传出用户态并返回就绪的文件描述符总数。用户态并不知道是哪些文件描述符处于就绪态，需要遍历来判断。
+  - `epoll`：`epoll_wait`只用观察就绪链表中有无数据即可，最后将链表的数据返回给数组并返回就绪的数量。内核将就绪的文件描述符放在传入的数组中，所以只用遍历依次处理即可。这里返回的文件描述符是通过`mmap`让内核和用户空间共享同一块内存实现传递的，减少了不必要的拷贝。
+- 继续重新监听时如何重复以上步骤
+  - `select`：将新的监听文件描述符集合拷贝传入内核中，继续以上步骤。
+  - `poll`：将新的`struct pollfd`结构体数组拷贝传入内核中，继续以上步骤。
+  - `epoll`：无需重新构建红黑树，直接沿用已存在的即可。
+
+select/poll的时间复杂度是O(n)，epoll的时间复杂度是O(1)
+
+### 10.3.5 ET和LT
+
+epoll执行epoll_wait有两种触发模式LT水平触发和ET边沿触发。
+
+**LT水平触发**
+
+socket接收缓冲区不为空，有数据可读，则读事件一直触发。socket发送缓冲区不满可以继续写入数据，则写事件一直触发。
+
+**ET边沿触发**
+
+socket的接收缓冲区状态变化时触发读事件，即空的接收缓冲区刚接收到数据时触发读事件。socket的发送缓冲区状态变化时触发写事件，即满的缓冲区刚空出空间时触发读事件。
+
+使用Netty自己的epoll实现[Native transports](https://netty.io/wiki/native-transports.html)
 
 # 十一、Java NIO
 
