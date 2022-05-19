@@ -762,6 +762,13 @@ Java NIO中所有网络连接socket通道都继承了SelectableChannel类，都�
 
 ### 11.4.2 SelectionKey
 
+SelectionKey的继承关系如下：
+
+```
+SelectionKeyImpl extends AbstractSelectionKey
+AbstractSelectionKey extends SelectionKey
+```
+
 通道和选择器的监控关系注册成功后就可以选择就绪事件，具体的选择工作可调用Selector的select()方法来完成。通过select()方法，选择器可以不断地选择通道中所发生操作的就绪状态，返回注册过的那些感兴趣的IO事件。结构如下：
 
 ![image-20220506085709386](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220506085709386.png)
@@ -853,6 +860,145 @@ Channel和Selector可以说是多对一的关系，他们俩和SelectionKey就�
 ### 11.4.5 NIO示例
 
 暂略
+
+## 11.5 NIO原理
+
+我们下面来详细的学习一下NIO
+
+### 11.5.1 SelectionKey原理
+
+根据上面的学习，我们可以了解SelectionKey就像一个纽扣维系着Channel和Selector，SelectionKey代表着一个channel和它注册的Selector之间的关联关系。
+
+我们调用channel()方法会返回相关联的SelectableChannel对象，而selector()方法会返回相关的Selector对象
+
+```java
+/**
+ * Returns the channel for which this key was created.  This method will
+ * continue to return the channel even after the key is cancelled.
+ *
+ * @return  This key's channel
+ */
+public abstract SelectableChannel channel();
+
+/**
+ * Returns the selector for which this key was created.  This method will
+ * continue to return the selector even after the key is cancelled.
+ *
+ * @return  This key's selector
+ */
+public abstract Selector selector();
+```
+
+除此之外，在SelectionKey（实现类SelectionKeyImpl）中还有着三个重要属性，这里我们主要关注两个interestOps和readyOps。（index属性在选择器中在详细学习）
+
+```java
+//代表注册Channel所感兴趣的事件集合。即Socket监听哪些事件
+private volatile int interestOps;
+//代表着interest集合中从上次调用select()方法以来已经就绪的事件集合。即已经发生了的事件
+private int readyOps;
+//SelectionKey集合的下标索引，该SelectionKey在注册选择器中存储的SelectionKey集合的下标，当此SelectionKey被撤销时，index为-1
+private int index;
+```
+
+有这两个属性，也要有存入这俩属性的事件，在SelectionKey使用了四个常量来代表事件：
+
+```java
+//通道读事件就绪
+public static final int OP_READ = 1 << 0;
+//通道写事件就绪
+public static final int OP_WRITE = 1 << 2;
+//通道对应的socket已经准备好连接
+public static final int OP_CONNECT = 1 << 3;
+//通道对应的server socket已经准备好接收一个新连接
+public static final int OP_ACCEPT = 1 << 4;
+```
+
+了解了SelectionKey属性和事件，那么SelectionKey怎么将通道和选择器关联呢？
+
+其实向通道注册事件就可以完成关联，这时就可以得到他连关联的这个选择键，代码如下，如果想注册多个事件可以用位或运算符连接：
+
+~~~java
+SelectionKey selectionKey = socketChannel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+~~~
+
+当然SelectionKey除了在通道注册时注册事件，还可以单独进行注册事件，我们只需要调用interestOps()方法即可：
+
+```java
+selectionKey.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+```
+
+> 当然，其实register底层也是调用了interestOps方法，源码如下：
+>
+> ![image-20220519202330956](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220519202330956.png)
+
+当然除了进行设置事件，SelectionKey还可以获取事件，调用interestOps()方法就可以获取当前SelectionKey感兴趣的事件，然后使用位与操作就可以判断对某种事件是否感兴趣：
+
+```java
+int interestOps = selectionKey.interestOps();
+boolean isAccept = (interestOps & SelectionKey.OP_ACCEPT) == SelectionKey.OP_ACCEPT;
+//其余同理
+```
+
+调用readyOps()方法就可以获取已经就绪事件的集合，当然还定义了以下几个方法用于判断事件是否就绪（也就是说不用向上面自己写位与操作）
+
+```java
+public final boolean isReadable() {
+    return (readyOps() & OP_READ) != 0;
+}
+public final boolean isWritable() {
+    return (readyOps() & OP_WRITE) != 0;
+}
+
+public final boolean isConnectable() {
+    return (readyOps() & OP_CONNECT) != 0;
+}
+public final boolean isAcceptable() {
+    return (readyOps() & OP_ACCEPT) != 0;
+}
+```
+
+SelectionKey除了对事件进行操作，它还可以添加和获取附件：
+
+~~~java
+key.attach(obj);//添加附件
+Object obj = key.attachment();//获取附件
+//当然附件也可以在注册时加上去，register()方法有这个重载：
+ public abstract SelectionKey register(Selector sel, int ops, Object att) throws ClosedChannelException;
+~~~
+
+这个方法可以让SelectionKey更加灵活方便，比如Reactor模式中就使用了附件，具体可以在第十二章学习。
+
+之前我们学习SelectionKey的继承关系时，他还有一个中间的继承的类AbstractSelectionKey，这个类中只有一个属性，三个方法：
+
+```java
+//标记此SelectionKey是否有效，默认有效
+private volatile boolean valid = true;
+//返回SelectionKey是否有效
+public final boolean isValid() {
+    return valid;
+}
+//将SelectionKey设置为无效
+void invalidate() { 
+    valid = false;
+}
+//将SelectionKey从选择器中删除
+public final void cancel() {
+    synchronized (this) {
+        if (valid) {
+            valid = false;
+            ((AbstractSelector)selector()).cancel(this);
+        }
+    }
+}
+```
+
+这些方法属性主要用于维护SelectionKey的有效性，当调用cancel()方法或关闭其通道或关闭其选择器时会导致SelectionKey失效。
+
+当我们调用selectionKey的cancel()方法后，它将被放在相关的选择器的cancelledKeys集合中。注册关系不会立即被取消，但是selectionKey会立即失效。当再次调用select( )方法时（或者一个正在进行的select()调用结束时），cancelledKeys中的被取消的键将被清理掉。
+
+### 11.5.2 Selector原理
+
+
 
 # 十二、Reactor模式
 
