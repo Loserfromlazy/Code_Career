@@ -340,7 +340,16 @@ epoll的流程：
 
 ![image-20220518152858806](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220518152858806.png)
 
-然后执行epoll_wait,当程序执行到epoll_wait时，如果rdlist非空则返回，如果rdlist为空，阻塞进程。epoll_wait会计算睡眠时间(如果有)，判断eventpoll对象的链表是否为空，不为空那就返回。并且初始化一个等待队列，把自己挂上去，设置自己的进程状态为可睡眠状态。判断是否有信号到来(有的话直接被中断醒来)，如果啥事都没有那就调用`schedule_timeout`进行睡眠，如果超时或者被唤醒，首先从自己初始化的等待队列删除，然后开始拷贝资源给用户空间了。拷贝资源则是先把就绪事件链表转移到中间链表，然后挨个遍历拷贝到用户空间，并且挨个判断其是否为水平触发，是的话再次插入到就绪链表。
+然后执行epoll_wait,当程序执行到epoll_wait时，如果rdlist非空则返回，如果rdlist为空，阻塞进程。epoll_wait会计算睡眠时间(如果有)，判断eventpoll对象的链表是否为空，不为空那就返回。并且初始化一个等待队列，把自己挂上去，设置自己的进程状态为可睡眠状态。判断是否有信号到来(有的话直接被中断醒来)，如果啥事都没有那就调用`schedule_timeout`进行睡眠，如果超时或者被唤醒，首先从自己初始化的等待队列删除，然后开始拷贝资源给用户空间了。拷贝资源则是先把就绪事件链表转移到中间链表，然后挨个遍历拷贝到用户空间，并且挨个判断其是否为水平触发（水平触发后面会学习），是的话再次插入到就绪链表。
+
+**epoll的唤醒逻辑如下：**
+
+> 1. 协议数据包到达网卡并被排入socket sk的接收队列
+> 2. 睡眠在sk的睡眠队列wait_entry被唤醒，wait_entry_sk的回调函数epoll_callback_sk被执行
+> 3. epoll_callback_sk将当前sk插入epoll的ready_list中
+> 4. 唤醒睡眠在epoll的单独睡眠队列single_epoll_wait_list的wait_entry，wait_entry_proc被唤醒执行回调函数epoll_callback_proc
+> 5. 遍历epoll的ready_list，挨个调用每个sk的poll逻辑收集发生的事件 
+> 6. 将每个sk收集到的事件，通过epoll_wait传入的events数组回传并唤醒相应的process。
 
 ### 10.3.4 三种系统调用的比较
 
@@ -377,7 +386,41 @@ socket接收缓冲区不为空，有数据可读，则读事件一直触发。so
 
 socket的接收缓冲区状态变化时触发读事件，即空的接收缓冲区刚接收到数据时触发读事件。socket的发送缓冲区状态变化时触发写事件，即满的缓冲区刚空出空间时触发读事件。
 
-使用Netty自己的epoll实现[Native transports](https://netty.io/wiki/native-transports.html)
+在10.3.3中我们了解了epoll的唤醒逻辑，在epoll_wait唤醒中第五步会遍历epoll的ready_list，挨个调用每个sk的poll逻辑收集发生的事件。在这一步会移除socket而socket从ready_list移除的时机正是区分两种事件模式的本质：
+
+1. LT的逻辑：首先遍历epoll的ready_list，将socket从ready_list中移除，然后调用该socket的poll逻辑收集发生的事件 然后如果该sk的poll函数返回了关心的事件(对于可读事件来说，就是POLL_IN事件)，那么该sk被重新加入到epoll的ready_list中。
+2. ET的逻辑：遍历epoll的ready_list，将socket从ready_list中移除，然后调用该socket的poll逻辑（这里的poll不是系统调用而是一个操作或函数，I/O多路复用必须支持poll操作）收集发生的事件
+
+在Java中的selector会根据操作系统的不同采用不同的实现：
+
+- 在linux2.6以后的NIO的selector版本是EPollSelectorProvider，底层使用的是epoll，采用水平触发模式
+- 在macos
+- 在netty中额外提供了EpollEventLoop，它使用了边缘触发
+
+也就是说除了jdk的epoll实现外，netty实现了自己的epoll版本，此版本采用了边沿触发模式
+
+使用Netty自己的epoll实现：[官方文档：Native transports](https://netty.io/wiki/native-transports.html)
+
+首先导入依赖：
+
+```xml
+  <dependencies>
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-transport-native-epoll</artifactId>
+      <version>${project.version}</version>
+      <classifier>linux-x86_64</classifier>
+    </dependency>
+    ...
+  </dependencies>
+```
+
+然后将所有的NIO换成Epoll实现类，如下：
+
+- `NioEventLoopGroup` → `EpollEventLoopGroup`
+- `NioEventLoop` → `EpollEventLoop`
+- `NioServerSocketChannel` → `EpollServerSocketChannel`
+- `NioSocketChannel` → `EpollSocketChannel`
 
 # 十一、Java NIO
 
