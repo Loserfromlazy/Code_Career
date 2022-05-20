@@ -198,9 +198,9 @@ select操作1次轮询会遍历1024个文件描述符的IO事件（或者说是1
 
 select核心步骤如下：
 
-- 准备fds数组（fdset是位图数据结构），数组存放着所有需要监视的socket。select函数监视的文件描述符分3类，分别是writefds、readfds、和exceptfds。（读写和异常）
-- 调用select，如果fdset数组中的所有socket没有数据，select会阻塞，直到有socket接收数据，或者超时（timeout指定等待时间，如果立即返回设为null即可），select返回，唤醒进程
-- select函数返回后遍历fdset，通过FD_ISSET判断具体是哪个socket接收到数据（或者说是哪个文件描述符就绪），然后做处理
+- 准备fds数组（fdset是位图数据结构），数组存放着所有需要监视的socket。select函数监视的事件分3类，分别是writefds、readfds、和exceptfds。（读写和异常）
+- 调用select，如果fds数组中的所有socket没有数据，select会阻塞，直到有socket接收数据，或者超时（timeout指定等待时间，如果立即返回设为null即可），select返回，唤醒进程
+- select函数返回后遍历fds，通过FD_ISSET判断具体是哪个socket接收到数据（或者说是哪个文件描述符就绪），然后做处理
 
 select原型如下：
 
@@ -865,7 +865,98 @@ Channel和Selector可以说是多对一的关系，他们俩和SelectionKey就�
 
 我们下面来详细的学习一下NIO
 
-### 11.5.1 SelectionKey原理
+### 11.5.1 IO事件在Java和native
+
+Java的IO事件存在SelectionKey中，一共有四个：
+
+~~~java
+//通道读事件就绪
+public static final int OP_READ = 1 << 0;
+//通道写事件就绪
+public static final int OP_WRITE = 1 << 2;
+//通道对应的socket已经准备好连接
+public static final int OP_CONNECT = 1 << 3;
+//通道对应的server socket已经准备好接收一个新连接
+public static final int OP_ACCEPT = 1 << 4;
+~~~
+
+poll系统调用的事件如下（图片来源于网络）：
+
+![image-20220520160628604](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220520160628604.png)
+
+java在Net.java中通过JNI加载不同平台的poll事件的定义值（代码来自于openjdk源码）：
+
+![image-20220520161132661](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220520161132661.png)
+
+这些native方法，也可在Net.c中找到，比如windows平台的Net.c（代码来自于openjdk源码）:
+
+![image-20220520161315187](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220520161315187.png)
+
+那么在NIO中是如何进行事件的翻译的呢？
+
+在channel注册时（流程可以自己去跟），会在SocketChannelImpl#translateInterestOps方法将NIO事件转换成JNI事件（代码来自于OpenJdk），如下：
+
+~~~java
+/**
+     * Translates an interest operation set into a native poll event set
+     */
+    public int translateInterestOps(int ops) {
+        int newOps = 0;
+        if ((ops & SelectionKey.OP_READ) != 0)
+            newOps |= Net.POLLIN;
+        if ((ops & SelectionKey.OP_WRITE) != 0)
+            newOps |= Net.POLLOUT;
+        if ((ops & SelectionKey.OP_CONNECT) != 0)
+            newOps |= Net.POLLCONN;
+        return newOps;
+    }
+~~~
+
+在查询的时候（流程可以自己跟以便），会在SocketChannelImpl#translateReadyOps方法，将JNI事件转换成NIO事件：
+
+~~~java
+/**
+     * Translates native poll revent ops into a ready operation ops
+     */
+    public boolean translateReadyOps(int ops, int initialOps, SelectionKeyImpl ski) {
+        int intOps = ski.nioInterestOps();
+        int oldOps = ski.nioReadyOps();
+        int newOps = initialOps;
+
+        if ((ops & Net.POLLNVAL) != 0) {
+            // This should only happen if this channel is pre-closed while a
+            // selection operation is in progress
+            // ## Throw an error if this channel has not been pre-closed
+            return false;
+        }
+
+        if ((ops & (Net.POLLERR | Net.POLLHUP)) != 0) {
+            newOps = intOps;
+            ski.nioReadyOps(newOps);
+            return (newOps & ~oldOps) != 0;
+        }
+
+        boolean connected = isConnected();
+        if (((ops & Net.POLLIN) != 0) &&
+            ((intOps & SelectionKey.OP_READ) != 0) && connected)
+            newOps |= SelectionKey.OP_READ;
+
+        if (((ops & Net.POLLCONN) != 0) &&
+            ((intOps & SelectionKey.OP_CONNECT) != 0) && isConnectionPending())
+            newOps |= SelectionKey.OP_CONNECT;
+
+        if (((ops & Net.POLLOUT) != 0) &&
+            ((intOps & SelectionKey.OP_WRITE) != 0) && connected)
+            newOps |= SelectionKey.OP_WRITE;
+
+        ski.nioReadyOps(newOps);
+        return (newOps & ~oldOps) != 0;
+    }
+~~~
+
+可以看到，在上面这两个方法中就用到了Net类。
+
+### 11.5.2 SelectionKey原理
 
 根据上面的学习，我们可以了解SelectionKey就像一个纽扣维系着Channel和Selector，SelectionKey代表着一个channel和它注册的Selector之间的关联关系。
 
@@ -996,9 +1087,15 @@ public final void cancel() {
 
 当我们调用selectionKey的cancel()方法后，它将被放在相关的选择器的cancelledKeys集合中。注册关系不会立即被取消，但是selectionKey会立即失效。当再次调用select( )方法时（或者一个正在进行的select()调用结束时），cancelledKeys中的被取消的键将被清理掉。
 
-### 11.5.2 Selector原理
+### 11.5.3 Selector原理
 
+#### Selector的创建
 
+#### 注册Channel到Selector
+
+#### Selector.select()
+
+#### Selector.wakeup()
 
 # 十二、Reactor模式
 
