@@ -430,6 +430,8 @@ socket的接收缓冲区状态变化时触发读事件，即空的接收缓冲�
 
 Java NIO类库包含以下三个核心组件：Channel（通道）Buffer（缓冲区）Selector（选择器）。JavaNIO属于异步阻塞模型（IO多路复用模型）。
 
+PS：如果要看NIO的源码比如Selector等类是可以直接看到的，但是像SelectorImpl实现类或者SelectorImpl的各平台的实现类就需要去jdk的源码中看，
+
 ### 11.1.1 通道
 
 在OIO中，同一个网络连接会关联到两个流：一个是输入流（Input Stream），另一个是输出流（Output Stream）。Java应用程序通过这两个流不断地进行输入和输出的操作。
@@ -1089,7 +1091,111 @@ public final void cancel() {
 
 ### 11.5.3 Selector原理
 
+Selector是通道的多路复用器，创建时通过open()方法新建一个选择器：
+
+```java
+Selector selector = Selector.open();
+```
+
+在创建完后可以通过注册方法将通道注册到选择器上，注册的channel必须时非阻塞的。所以FileChannel不适用Selector，因为FileChannel不能切换为非阻塞模式，更准确的来说是因为FileChannel没有继承SelectableChannel。Socket channel可以正常使用。
+
+SelectableChannel中有一个configureBlocking，用于设置通道是否是非阻塞的
+
+```java
+public abstract SelectableChannel configureBlocking(boolean block) throws IOException;
+```
+
+Selector中select方法可以返回已经准备就绪的通道，比如你对读事件感兴趣，那么select方法就会返回读事件已就绪的通道。
+
+Selector中包含或者说维护了三个Set集合：
+
+- keys：存放注册到Selector的所有的Key。
+- selectedKeys：存放已选择的键集，它是检测到registeredKeys中key感兴趣的事件发生后存放key的地方。
+- cancelledKeys：其cancel方法调用过的，待反注册的key
+
+除了上面的三个Set集合，Selector还维护了两个Set集合，如下：
+
+![image-20220521220345524](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220521220345524.png)
+
+这两个也可以理解为视图，这两个Set是通过unmodifiableSet和ungrowableSet方法包装而来的，源码如下。
+
+```java
+protected SelectorImpl(SelectorProvider var1) {
+    super(var1);
+    if (Util.atBugLevel("1.4")) {
+        this.publicKeys = this.keys;
+        this.publicSelectedKeys = this.selectedKeys;
+    } else {
+        this.publicKeys = Collections.unmodifiableSet(this.keys);
+        this.publicSelectedKeys = Util.ungrowableSet(this.selectedKeys);
+    }
+
+}
+```
+
+在不同的平台有不同的实现类：
+
+针对linux平台：
+
+- PollSelectorImpl
+- EPollSelectorImpl
+
+针对windows平台：
+
+- WindowsSelectorImpl
+
+Netty的实现类：
+
+- Netty的NioEventLoop是使用的上面的linux的PollSelectorImpl，但是Netty自己提供了而外的epoll实现，具体的上面已经学习过了。
+
 #### Selector的创建
+
+我们现在来跟一下Selector.open()方法的源码，看一下Selector的创建的原理，这里所有的实现类全部是平台的实现类源码。
+
+首先我们调用open方法，源码如下:
+
+```java
+public static Selector open() throws IOException {
+    return SelectorProvider.provider().openSelector();
+}
+```
+
+这里调用了SelectorProvider.provider()创建了一个provider，然后调用了provider的openSelector方法。
+
+我们先看SelectorProvider.provider()方法，源码如下：
+
+```java
+public static SelectorProvider provider() {
+    synchronized (lock) {
+        if (provider != null)
+            return provider;
+        return AccessController.doPrivileged(
+            new PrivilegedAction<SelectorProvider>() {
+                public SelectorProvider run() {
+                        if (loadProviderFromProperty())
+                            return provider;
+                        if (loadProviderAsService())
+                            return provider;
+                    //这里
+                        provider = sun.nio.ch.DefaultSelectorProvider.create();
+                        return provider;
+                    }
+                });
+    }
+}
+```
+
+在上面的源码中，我们抓主干，我们会发现provider是DefaultSelectorProvider#create方法创建的，这个方法jdk会在不同的操作系统中调用不同的方法，比如我们开发用IDEA跟进就会跟进windows平台的方法，如下图：
+
+![image-20220521224054961](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220521224054961.png)
+
+
+
+在不同操作系统中DefaultSelectorProvider的实现类不同：
+
+- macosx：KQueueSelectorProvider
+- linux:
+- windows:WindowsSelectorProvider
 
 #### 注册Channel到Selector
 
