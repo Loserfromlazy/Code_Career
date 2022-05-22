@@ -298,6 +298,10 @@ poll虽然解决了fds集合大小1024的限制问题，但是，它并没改变
 
 4. 有一个错误的套接字待处理。对这样的套接字的写操作将不阻塞并返回-1
 
+PS：poll系统调用的事件列表如下，图片来自于网络：
+
+![image-20220522155558599](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220522155558599.png)
+
 ### 10.3.3 epoll系统调用
 
 select和poll低效的原因是**需要拷贝fds集合和没有按需遍历fds集合**。而在poll中也没有解决这两个问题，poll只是解决了1024的限制因为改变了底层数据结构。这时就需要epoll。
@@ -1150,7 +1154,7 @@ Netty的实现类：
 
 #### Selector的创建
 
-我们现在来跟一下Selector.open()方法的源码，看一下Selector的创建的原理，这里所有的实现类全部是平台的实现类源码。
+我们现在来跟一下Selector.open()方法的源码，看一下Selector的创建的原理。
 
 首先我们调用open方法，源码如下:
 
@@ -1185,23 +1189,202 @@ public static SelectorProvider provider() {
 }
 ```
 
-在上面的源码中，我们抓主干，我们会发现provider是DefaultSelectorProvider#create方法创建的，这个方法jdk会在不同的操作系统中调用不同的方法，比如我们开发用IDEA跟进就会跟进windows平台的方法，如下图：
+在上面的源码中，我们抓主干，我们会发现provider是DefaultSelectorProvider#create方法创建的，这个方法jdk会在不同的操作系统中调用不同的方法，比如我们在windows平台开发就会跟进windows平台的方法（我们这里就用windows平台举例，因为很方便IDEA可以直接进入反编译的class文件），如下图：
 
 ![image-20220521224054961](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220521224054961.png)
 
+我们再回到open方法，提供了provider之后会调用openSelector方法
 
+~~~java
+public static Selector open() throws IOException {
+    return SelectorProvider.provider().openSelector();
+}
+~~~
 
-在不同操作系统中DefaultSelectorProvider的实现类不同：
+openSelector方法源码如下：
 
-- macosx：KQueueSelectorProvider
-- linux:
-- windows:WindowsSelectorProvider
+~~~java
+public class WindowsSelectorProvider extends SelectorProviderImpl {
+    public WindowsSelectorProvider() {
+    }
+
+    public AbstractSelector openSelector() throws IOException {
+        return new WindowsSelectorImpl(this);
+    }
+}
+~~~
+
+这里是直接返回了一个windows平台的Selector实现类[WindowsSelectorImpl](https://github.com/openjdk/jdk8/blob/master/jdk/src/windows/classes/sun/nio/ch/WindowsSelectorImpl.java)。
+
+这几个类的关系如下（其实就是jdk在不同的平台下有不同的实现类）：
+
+![image-20220522144148150](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220522144148150.png)
+
+那么既然最后open方法会返回一个WindowsSelectorImpl（Windows平台）那么我们就看一下这个类的构造：
+
+当然我们先来看它的父类构造函数，在AbstractSelector中会初始化provider和cancelledKeys：
+
+```java
+public abstract class AbstractSelector extends Selector
+{
+    // The provider that created this selector
+    private final SelectorProvider provider;
+
+    /**
+     * Initializes a new instance of this class.
+     * 初始化provider
+     */
+    protected AbstractSelector(SelectorProvider provider) {
+        this.provider = provider;//这里是WindowsSelectorProvider
+    }
+
+    private final Set<SelectionKey> cancelledKeys = new HashSet<SelectionKey>();
+    //......略
+}
+```
+
+在SelectorImpl中会初始化selectedKeys和keys，同时会将publicKeys和publicSelectedKeys包装出来
+
+```java
+public abstract class SelectorImpl extends AbstractSelector {
+    protected Set<SelectionKey> selectedKeys = new HashSet();
+    protected HashSet<SelectionKey> keys = new HashSet();
+    private Set<SelectionKey> publicKeys;
+    private Set<SelectionKey> publicSelectedKeys;
+
+    protected SelectorImpl(SelectorProvider var1) {
+        super(var1);
+        if (Util.atBugLevel("1.4")) {
+            this.publicKeys = this.keys;
+            this.publicSelectedKeys = this.selectedKeys;
+        } else {
+            this.publicKeys = Collections.unmodifiableSet(this.keys);
+            this.publicSelectedKeys = Util.ungrowableSet(this.selectedKeys);
+        }
+
+    }
+}
+```
+
+然后我们看WindowsSelectorImpl，见下图：
+
+![image-20220522152734456](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220522152734456.png)
+
+这里展示了WindowsSelectorImpl的结构和构造函数，其中辅助线程仅在Windows平台使用，因为一个线程轮询1024个文件描述符，所以需要辅助线程。也正是因为如此，windows平台性能不高，因为要开很多线程。
+
+我们下面来看WindowsSelectorImpl的几个重要成员：
+
+1. FdMap：保存的是文件描述符和SelectionKey的映射，是一个map结构，源码如下：
+
+   ```java
+   //在pollArray中将文件描述符映射到它们的索引
+   private static final class FdMap extends HashMap<Integer, WindowsSelectorImpl.MapEntry> {
+       static final long serialVersionUID = 0L;
+   
+       private FdMap() {
+       }
+   
+       private WindowsSelectorImpl.MapEntry get(int var1) {
+           return (WindowsSelectorImpl.MapEntry)this.get(new Integer(var1));
+       }
+   
+       private WindowsSelectorImpl.MapEntry put(SelectionKeyImpl var1) {
+           return (WindowsSelectorImpl.MapEntry)this.put(new Integer(var1.channel.getFDVal()), new WindowsSelectorImpl.MapEntry(var1));
+       }
+   
+       private WindowsSelectorImpl.MapEntry remove(SelectionKeyImpl var1) {
+           Integer var2 = new Integer(var1.channel.getFDVal());
+           WindowsSelectorImpl.MapEntry var3 = (WindowsSelectorImpl.MapEntry)this.get(var2);
+           return var3 != null && var3.ski.channel == var1.channel ? (WindowsSelectorImpl.MapEntry)this.remove(var2) : null;
+       }
+   }
+   ```
+
+2. SubSelector：内部封装了JNI poll系统调用，以及获取SelectionKey的方法。每一个Selector中都有一个SubSelector，SubSelector内部保存了select/poll/epoll获取到的可读文件描述符，可写文件描述符和异常的文件描述符，这样Selector就会有自己单独的就绪文件描述符数组。源码如下：
+
+   ![image-20220522155054224](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220522155054224.png)
+
+3. PollArrayWrapper：内部有一个pollArray用Unsafe类申请一块物理内存，存放注册时的socket句柄fdVal和event的数据结构，其中pollfd共8字节，0~3字节保存socket句柄，4~7字节保存event。这两个信息在8字节数据单元中的偏移量分别由FD_OFFSET和EVENT_OFFSET标识，也就是0和4，源码如下：
+
+   ~~~java
+   class PollArrayWrapper {
+   
+       private AllocatedNativeObject pollArray; // The fd array 底层内存空间
+   
+       long pollArrayAddress; // pollArrayAddress 内存空间起始位置
+   
+       @Native private static final short FD_OFFSET     = 0; // fd offset in pollfd 文件描述起始位置
+       @Native private static final short EVENT_OFFSET  = 4; // events offset in pollfd 感兴趣事件开始位置
+   
+       static short SIZE_POLLFD = 8; // sizeof pollfd struct 文件描述符长度+事件长度=4+4
+   
+       // events masks
+       @Native static final short POLLIN     = AbstractPollArrayWrapper.POLLIN;
+       @Native static final short POLLOUT    = AbstractPollArrayWrapper.POLLOUT;
+       @Native static final short POLLERR    = AbstractPollArrayWrapper.POLLERR;
+       @Native static final short POLLHUP    = AbstractPollArrayWrapper.POLLHUP;
+       @Native static final short POLLNVAL   = AbstractPollArrayWrapper.POLLNVAL;
+       @Native static final short POLLREMOVE = AbstractPollArrayWrapper.POLLREMOVE;
+       @Native static final short POLLCONN   = 0x0002;
+   
+       private int size; // Size of the pollArray 
+       PollArrayWrapper(int var1) {
+           int var2 = var1 * SIZE_POLLFD;
+           this.pollArray = new AllocatedNativeObject(var2, true);
+           this.pollArrayAddress = this.pollArray.address();
+           this.size = var1;
+       }
+   }
+   ~~~
+
+   AllocatedNativeObject继承NativeObject，下面是NativeObject的构造函数，可以看到是unsafe直接申请的堆外内存（或者说是直接内存，这是因为java和系统调用两方面都要能调用所以使用了堆外内存）。
+
+   ```java
+   protected NativeObject(int var1, boolean var2) {
+       if (!var2) {
+           this.allocationAddress = unsafe.allocateMemory((long)var1);
+           this.address = this.allocationAddress;
+       } else {
+           int var3 = pageSize();
+           long var4 = unsafe.allocateMemory((long)(var1 + var3));
+           this.allocationAddress = var4;
+           this.address = var4 + (long)var3 - (var4 & (long)(var3 - 1));
+       }
+   
+   }
+   ```
+
+   pollArray的结构如下图，fd是int类型4字节；eventOps和readyOps是short类型是两字节
+
+   ![image-20220522160448558](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220522160448558.png)
+
+   以上就是关于Selector创建的相关知识，这里只介绍了创建涉及到的类和某些类的关键属性，而它们的作用就是我们接下来要学习的内容。
+
+> 在不同操作系统中DefaultSelectorProvider的实现类不同：
+>
+> - macosx：KQueueSelectorProvider，源码链接：[DefaultSelectorProvider](https://github.com/openjdk/jdk8/blob/master/jdk/src/macosx/classes/sun/nio/ch/DefaultSelectorProvider.java)
+> - linux：PollSelectorProvider或EPollSelectorProvider，源码链接：[DefaultSelectorProvider ](https://github.com/openjdk/jdk8/blob/master/jdk/src/solaris/classes/sun/nio/ch/DefaultSelectorProvider.java)
+> - SunOS：DevPollSelectorProvider，源码链接：[DefaultSelectorProvider ](https://github.com/openjdk/jdk8/blob/master/jdk/src/solaris/classes/sun/nio/ch/DefaultSelectorProvider.java)
+> - windows:WindowsSelectorProvider，源码链接：[DefaultSelectorProvider](https://github.com/openjdk/jdk8/blob/master/jdk/src/windows/classes/sun/nio/ch/DefaultSelectorProvider.java)
+>
 
 #### 注册Channel到Selector
 
+我们在使用NIO的Channel时候，需要将channel注册到选择器上（代码如下），下面我们来详细的了解这一过程
+
+```java
+SelectionKey selectionKey = socketChannel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+```
+
+
+
 #### Selector.select()
 
+
+
 #### Selector.wakeup()
+
+
 
 # 十二、Reactor模式
 
@@ -1697,7 +1880,7 @@ public class HelloClient {
 
 ## 13.2 Netty的Reactor模式
 
-在学习组件前，我们先了解一下netty的Reactor模式。reactor模式我们在上面第十二章已经学习过了。
+在学习Nettu的各个组件前，我们先了解一下netty的Reactor模式。reactor模式我们在上面第十二章已经学习过了。
 
 
 
