@@ -1354,7 +1354,7 @@ public abstract class SelectorImpl extends AbstractSelector {
    }
    ```
 
-   pollArray的结构如下图，fd是int类型4字节；eventOps和readyOps是short类型是两字节
+   pollArray的结构如下图右边，fd是int类型4字节；eventOps和readyOps是short类型是两字节
 
    ![image-20220522160448558](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220522160448558.png)
 
@@ -1370,17 +1370,126 @@ public abstract class SelectorImpl extends AbstractSelector {
 
 #### 注册Channel到Selector
 
-我们在使用NIO的Channel时候，需要将channel注册到选择器上（代码如下），下面我们来详细的了解这一过程
+在创建完选择器之后，需要将channel注册到选择器上（代码如下），下面我们来详细的了解这一过程
 
 ```java
 SelectionKey selectionKey = socketChannel.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE);
 ```
 
+首先我们看一下注册的整体结构图：
+
+![image-20220523090003990](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220523090003990.png)
+
+通俗的来讲，就是将此socket交由Selector统一轮询管理。
+
+下面我们来看一下注册方法的整体流程：
+
+![image-20220523090732982](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220523090732982.png)
+
+我们下面就跟着流程一步一步查看注册的原理，首先我们从`socketChannel.register`跟进,源码如下：
+
+```java
+//这里的第二个参数是事件集合
+public final SelectionKey register(Selector sel, int ops)
+    throws ClosedChannelException
+{
+    return register(sel, ops, null);
+}
+public abstract SelectionKey register(Selector sel, int ops, Object att)
+        throws ClosedChannelException;
+```
+
+这里register会调用同类中的抽象方法，然后调用抽象方法的实现，源码如下：
+
+```java
+public final SelectionKey register(Selector sel, int ops, Object att) throws ClosedChannelException{
+    synchronized (regLock) {
+        if (!isOpen())
+            throw new ClosedChannelException();
+        if ((ops & ~validOps()) != 0)
+            throw new IllegalArgumentException();
+        if (blocking)
+            throw new IllegalBlockingModeException();
+        //如果已经注册过，就直接添加事件和附件
+        SelectionKey k = findKey(sel);
+        if (k != null) {
+            k.interestOps(ops);
+            k.attach(att);
+        }
+        if (k == null) {
+            // New registration
+            synchronized (keyLock) {
+                if (!isOpen())
+                    throw new ClosedChannelException();
+                k = ((AbstractSelector)sel).register(this, ops, att);
+                addKey(k);
+            }
+        }
+        return k;
+    }
+}
+```
+
+在这个方法中如果没注册过，会调用这句代码`k = ((AbstractSelector)sel).register(this, ops, att);`，这句代码会调用`AbstractSelector#register`方法，这同样是一个抽象方法，源码如下：
+
+```java
+protected abstract SelectionKey register(AbstractSelectableChannel ch, int ops, Object att);
+//抽象实现
+protected final SelectionKey register(AbstractSelectableChannel var1, int var2, Object var3) {
+    if (!(var1 instanceof SelChImpl)) {
+        throw new IllegalSelectorException();
+    } else {
+        SelectionKeyImpl var4 = new SelectionKeyImpl((SelChImpl)var1, this);
+        var4.attach(var3);//添加附件
+        synchronized(this.publicKeys) {
+            this.implRegister(var4);//进行注册
+        }
+
+        var4.interestOps(var2);
+        return var4;
+    }
+}
+```
+
+然后我们继续跟进，进入到`this.implRegister(var4);`方法，此方法是抽象方法，根据不同平台有不同的实现，这里看windows平台实现：
+
+```java
+protected abstract void implRegister(SelectionKeyImpl var1);
+//抽象方法实现
+protected void implRegister(SelectionKeyImpl ski) {
+    synchronized (closeLock) {
+        if (pollWrapper == null)
+            throw new ClosedSelectorException();
+        //如果当前channel的数量等于SelectionKey数组的大小，对SelectionKeyImpl数组和pollWrapper数组进行扩容
+        growIfNeeded();
+        //将选择键加入数组
+        channelArray[totalChannels] = ski;
+        ski.setIndex(totalChannels);
+        fdMap.put(ski);
+        keys.add(ski);//注册选择键
+        pollWrapper.addEntry(totalChannels, ski);//socket句柄添加到对应的pollfd
+        totalChannels++;
+    }
+}
+```
+
+这个方法里，会将socket存入PollArrayWrapper，PollArrayWrapper在Selector的创建中已经学习过了这内部是一个pollArray，存的是文件描述符和事件。
+
+~~~java
+void addEntry(int index, SelectionKeyImpl ski) {
+	putDescriptor(index, ski.channel.getFDVal());//getFDVal获取文件描述符
+}
+// Access methods for fd structures
+void putDescriptor(int i, int fd) {
+	pollArray.putInt(SIZE_POLLFD * i + FD_OFFSET, fd);
+}
+~~~
+
 
 
 #### Selector.select()
 
-
+我们在注册通道，完成一些初始化的工作后，会调用Selector的select方法进行轮询
 
 #### Selector.wakeup()
 
@@ -1880,7 +1989,45 @@ public class HelloClient {
 
 ## 13.2 Netty的Reactor模式
 
-在学习Nettu的各个组件前，我们先了解一下netty的Reactor模式。reactor模式我们在上面第十二章已经学习过了。
+在学习Nettu的各个组件前，我们先了解一下netty的Reactor模式。reactor模式我们在上面第十二章已经学习过了。Reactor模式的流程如下：
+
+![image-20220523164206406](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220523164206406.png)
+
+上面的流程其实总结下来就是四步：
+
+1. 注册通道
+2. 查询事件
+3. 分发事件
+4. 处理事件
+
+下面我们来了解一下Netty为Reactor模式提供的
+
+### 13.2.1 Netty中的Channel组件
+
+Netty中不直接使用NIO的Channel组件，而是进行了自己的封装。Netty中实现了一系列的Channel组件，这么做是为了支持多种通信协议，除了NIO，Netty还提供了Java阻塞式（BIO）的处理通道。
+
+Netty对于每一种协议基本上都有NIO和OIO(即阻塞式的)两个版本，常见的通道如下：
+
+- NioSocketChannel：异步非阻塞TCP socketc传输通道
+- NioServerSocketChannel：异步非阻塞TCP socket服务端监听通道
+- NioDatagramChannel：异步非阻塞的UDP传输通道
+- NioSctpChannel：异步非阻塞Sctp传输通道
+- NioSctpServerChannel：异步非阻塞Sctp服务器端监听通道
+- OioSocketChannel：同步阻塞式TCP Socket传输通道
+- OioServerSocketChannel：同步阻塞式TCP Socket服务器端监听通道
+- OioDatagramChannel：同步阻塞式UDP传输通道
+- OioSctpChannel：同步阻塞式Sctp传输通道
+- OioSctpServerChannel：同步阻塞式Sctp服务器端监听通道
+
+一般来说，服务器端编程用到最多的通信协议还是TCP协议，其对应的Netty传输通道类型为NioSocketChannel类，其对应的Netty服务器监听通道类型为NioServerSocketChannel。但是服务端监听通道和传输通道的API都类似。
+
+在Netty的NioSocketChannel内部封装了一个Java NIO的SelectableChannel成员，
+
+### 13.2.2 Netty中的Reactor反应器
+
+### 13.2.3 Netty中的Handler处理器
+
+### 13.2.4 Netty的Pipeline通道处理流水线
 
 
 
