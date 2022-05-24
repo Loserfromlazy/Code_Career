@@ -1562,9 +1562,7 @@ void putEventOps(int i, int event) {
 }
 ~~~
 
-到这里，注册的流程我们就跟完了，我们现在来看一下在WindowsSelectorImpl#implRegister方法中的growIfNeed扩容逻辑：
-
-
+到这里，注册的流程我们就跟完了，我们现在来看一下注册流程中的细节。首先是跟一下在WindowsSelectorImpl#implRegister方法中的growIfNeed扩容逻辑：
 
 #### Selector.select()
 
