@@ -1354,9 +1354,9 @@ public abstract class SelectorImpl extends AbstractSelector {
    }
    ```
 
-   pollArray的结构如下图右边，fd是int类型4字节；eventOps和readyOps是short类型是两字节
+   pollArray的结构如下图右边，fd是int类型4字节；eventOps和readyOps是short类型是两字节。所以每一个pollArray数组成员是8个字节（左边其实是channelArray是一个选择键数组，在下面的注册中还会再次讲到这个图）
 
-   ![image-20220522160448558](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220522160448558.png)
+   ![image-20220524110023256](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220524110023256.png)
 
    以上就是关于Selector创建的相关知识，这里只介绍了创建涉及到的类和某些类的关键属性，而它们的作用就是我们接下来要学习的内容。
 
@@ -1451,7 +1451,9 @@ protected final SelectionKey register(AbstractSelectableChannel var1, int var2, 
 }
 ```
 
-然后我们继续跟进，进入到`this.implRegister(var4);`方法，此方法是抽象方法，根据不同平台有不同的实现，这里看windows平台实现：
+然后我们分两部分继续跟进：
+
+首先进入到`this.implRegister(var4);`方法，此方法是抽象方法，根据不同平台有不同的实现，这里看windows平台实现：
 
 ```java
 protected abstract void implRegister(SelectionKeyImpl var1);
@@ -1462,10 +1464,11 @@ protected void implRegister(SelectionKeyImpl ski) {
             throw new ClosedSelectorException();
         //如果当前channel的数量等于SelectionKey数组的大小，对SelectionKeyImpl数组和pollWrapper数组进行扩容
         growIfNeeded();
-        //将选择键加入数组
+        //将选择键加入数组（选择键数组）
         channelArray[totalChannels] = ski;
+        //设置此选择键在数组中的位置
         ski.setIndex(totalChannels);
-        fdMap.put(ski);
+        fdMap.put(ski);//将选择键放入映射map中
         keys.add(ski);//注册选择键
         pollWrapper.addEntry(totalChannels, ski);//socket句柄添加到对应的pollfd
         totalChannels++;
@@ -1473,17 +1476,93 @@ protected void implRegister(SelectionKeyImpl ski) {
 }
 ```
 
-这个方法里，会将socket存入PollArrayWrapper，PollArrayWrapper在Selector的创建中已经学习过了这内部是一个pollArray，存的是文件描述符和事件。
+我们注意一下上面代码的`pollWrapper.addEntry`方法。这个方法里，会将socket存入PollArrayWrapper，PollArrayWrapper在Selector的创建中已经学习过了这内部是一个pollArray，存的是文件描述符和事件，源码如下：
 
 ~~~java
 void addEntry(int index, SelectionKeyImpl ski) {
-	putDescriptor(index, ski.channel.getFDVal());//getFDVal获取文件描述符
+	putDescriptor(index, ski.channel.getFDVal());//getFDVal获取文件描述符（操作系统编号）
 }
-// Access methods for fd structures
+// Access methods for fd structures，计算位置，将fd放入pollArray正确的位置上
 void putDescriptor(int i, int fd) {
 	pollArray.putInt(SIZE_POLLFD * i + FD_OFFSET, fd);
 }
 ~~~
+
+> 上面代码我们可以看到channelArray和pollWrapper使用的索引是一样的，因此它俩的的位置也是一样的，如下图，也就是说SelectionKey和pollArray的每个成员都能对应上。
+>
+> ![image-20220524110023256](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220524110023256.png)
+
+我们了解完这条分支然后回到`AbstractSelector#register`，如下图
+
+![image-20220524110608956](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220524110608956.png)
+
+下面我们继续跟进` var4.interestOps(var2);`方法。
+
+此方法最终会调用`SelectionKeyImpl#nioInterestOps(int)`,调用过程源码如下：
+
+```java
+public SelectionKey interestOps(int var1) {
+    this.ensureValid();
+    return this.nioInterestOps(var1);
+}
+//参数是事件集合即int ops
+public SelectionKey nioInterestOps(int var1) {
+    if ((var1 & ~this.channel().validOps()) != 0) {
+        throw new IllegalArgumentException();
+    } else {
+        this.channel.translateAndSetInterestOps(var1, this);
+        this.interestOps = var1;
+        return this;
+    }
+}
+```
+
+然后我们跟进translateAndSetInterestOps方法，此方法是个抽象方法，我们进入到他的实现类方法：
+
+```java
+//SocketChannelImpl
+/**
+* Translates an interest operation set into a native poll event set
+* 将关注的事件翻译成对应的POLL类型本地事件写入到pollWrapper属性中
+*/
+public void translateAndSetInterestOps(int ops, SelectionKeyImpl sk) {
+    int newOps = 0;
+    if ((ops & SelectionKey.OP_READ) != 0)
+        newOps |= PollArrayWrapper.POLLIN;
+    if ((ops & SelectionKey.OP_WRITE) != 0)
+        newOps |= PollArrayWrapper.POLLOUT;
+    if ((ops & SelectionKey.OP_CONNECT) != 0)
+        newOps |= PollArrayWrapper.POLLCONN;
+    sk.selector.putEventOps(sk, newOps);
+}
+```
+
+然后我们跟进putEventOps方法：
+
+~~~java
+//WindowsSelectorImpl
+public void putEventOps(SelectionKeyImpl sk, int ops) {
+    synchronized (closeLock) {
+        if (pollWrapper == null)
+            throw new ClosedSelectorException();
+        // make sure this sk has not been removed yet
+        //取出sk在pollArray轮询数组的位置
+        int index = sk.getIndex();
+        if (index == -1)
+            throw new CancelledKeyException();
+        pollWrapper.putEventOps(index, ops);//此方法重点是这句代码
+    }
+}
+
+//继续跟进pollWrapper.putEventOps(index, ops);
+//PollArrayWrapper
+void putEventOps(int i, int event) {
+    //将事件信息存放到pollArray中指定的位置。位置*长度+事件偏移量
+    pollArray.putShort(SIZE_POLLFD * i + EVENT_OFFSET, (short)event);
+}
+~~~
+
+到这里，注册的流程我们就跟完了，我们现在来看一下在WindowsSelectorImpl#implRegister方法中的growIfNeed扩容逻辑：
 
 
 
