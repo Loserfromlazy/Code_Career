@@ -1564,13 +1564,60 @@ void putEventOps(int i, int event) {
 
 到这里，注册的流程我们就跟完了，我们现在来看一下注册流程中的细节。首先是跟一下在WindowsSelectorImpl#implRegister方法中的growIfNeed扩容逻辑：
 
+~~~java
+//WindowsSelectorImpl
+private void growIfNeeded() {
+    //如果channel数组满了，扩容2倍
+    if (channelArray.length == totalChannels) {
+        int newSize = totalChannels * 2; // Make a larger array
+        SelectionKeyImpl temp[] = new SelectionKeyImpl[newSize];
+        System.arraycopy(channelArray, 1, temp, 1, totalChannels - 1);
+        channelArray = temp;
+        pollWrapper.grow(newSize);
+    }
+    //达到最大文件描述符（1024）则增加辅助线程，这种方式是仅在windows平台实现的方式，是Windows平台提升poll性能的方式，但是也存在性能问题，比如过多线程造成CPU飙高。
+    if (totalChannels % MAX_SELECTABLE_FDS == 0) { // more threads needed
+        //将唤醒的文件描述符加入到扩容后的第一个位置
+        pollWrapper.addWakeupSocket(wakeupSourceFd, totalChannels);
+        totalChannels++;
+        threadsCount++;
+    }
+}
+//PollArrayWrapper
+void grow(int newSize) {
+    //创建新的数组
+    PollArrayWrapper temp = new PollArrayWrapper(newSize);
+    //将原来数组内容存放到新数组
+    for (int i = 0; i < size; i++)
+        replaceEntry(this, i, temp, i);
+    //释放原来的数组
+    pollArray.free();
+    //更新引用、大小和地址
+    pollArray = temp.pollArray;
+    this.size = temp.size;
+    pollArrayAddress = pollArray.address();
+}
+~~~
+
 #### Selector.select()
 
-我们在注册通道，完成一些初始化的工作后，会调用Selector的select方法进行轮询
+我们在注册通道，完成一些初始化的工作后，会调用Selector的select方法进行轮询，如果
 
 #### Selector.wakeup()
 
+我们在调用select方法时，会在底层系统调用进行阻塞，那么NIO就提供了一个wakeup方法，用于唤醒这个阻塞的线程。方法定义如下，是一个抽象方法：
 
+```java
+public abstract Selector wakeup();
+```
+
+此方法不同的平台有不同的实现，原理如下：
+
+PollSelectorImpl在select过程中的阻塞时间受控于Channel的事件，一旦有事件才返回，所以为了手动控制就额外增加了一个对pipe的读监控，将pipe的文件描述符加到PollArrayWrapper中的第一个位置，如果我们对这个pipe进行写入数据操作，那么pipe的读文件描述符必然会收集到读事件，这样就可以不在阻塞，立即返回。
+
+在Windows上会建立一对自己和自己的loopback的TCP连接，在Linux上回开一对pipe管道（pipe在linux上一般都是成对打开的），如果想唤醒select，只需要朝自己连接或pipe发点数据，就可以唤醒阻塞的select线程了。
+
+下面我们看一下WindowsSelectorImpl的loopback连接：
 
 # 十二、Reactor模式
 
