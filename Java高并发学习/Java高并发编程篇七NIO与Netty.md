@@ -2019,15 +2019,60 @@ Netty对于每一种协议基本上都有NIO和OIO(即阻塞式的)两个版本�
 - OioSctpChannel：同步阻塞式Sctp传输通道
 - OioSctpServerChannel：同步阻塞式Sctp服务器端监听通道
 
-一般来说，服务器端编程用到最多的通信协议还是TCP协议，其对应的Netty传输通道类型为NioSocketChannel类，其对应的Netty服务器监听通道类型为NioServerSocketChannel。但是服务端监听通道和传输通道的API都类似。
+一般来说，服务器端编程用到最多的通信协议还是TCP协议，其对应的Netty传输通道类型为NioSocketChannel类，其对应的Netty服务器监听通道类型为NioServerSocketChannel。但是服务端监听通道和传输通道的API都类似。NioSocketChannel的继承关系如下（IDEA可使用Ctrl+H）：
 
-在Netty的NioSocketChannel内部封装了一个Java NIO的SelectableChannel成员，
+![image-20220524095244162](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220524095244162.png)
+
+在Netty的NioSocketChannel内部封装了一个Java NIO的SelectableChannel成员，所有IO操作最终都会落地到Java NIO的SelectableChannel底层通道。
 
 ### 13.2.2 Netty中的Reactor反应器
 
+在反应器模式中，一个反应器会有一个事件处理线程负责事件的查询和分发。该线程不断轮询，通过Selector选择器不断查询注册过的IO事件，如果有则分发给Handler业务处理器。
+
+在Netty中Reactor反应器组件有多个实现类，每个实现类都与其Channel通道类型相匹配。比如对于NioSocketChannel通道，Netty的反应器类为NioEventLoop。
+
+NioEventLoop类有两个重要的属性：一个是Thread线程类成员，一个是JavaNIO的选择器的成员属性。NioEventLoop的继承关系如下：
+
+![image-20220524100206205](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220524100206205.png)
+
+我们可以看到NioEventLoop与Reactor模式的思路是一致的，一个NioEventLoop拥有一个Thread线程，负责一个Java Nio Selector选择器的IO事件轮询。
+
+在Netty中一个EventLoop可以对应多个channel，他们之间是一对多的关系。
+
 ### 13.2.3 Netty中的Handler处理器
 
+在Netty中，EventLoop反应器内部有一个线程负责NIO选择器的轮询，然后进行对应的事件分发。事件分发的目标就是Netty的handler处理器。Netty的Handler处理器有两大类：一是ChannelInboundHandler入站处理器，第二类是ChannelOutboundHandler出站处理器，两者都继承了ChannelHandler处理器接口，继承关系如下图：
+
+![image-20220524101723456](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220524101723456.png)
+
+Netty的入站流程以JavaNIO的OP_READ事件为例：在通道中发生了都时间后，会被EventLoop查到，然后分发给ChannelInboundHandler入站处理器，调用对应的入站处理的read方法。而后在read方法的具体实现中，可以从通道中读取数据。
+
+Netty中的入站处理触发的方向为：由通道触发，ChannelInboundHandler入站处理器负责接收（或者执行）。Netty中的入站处理，不仅仅是OP_READ输入事件的处理，还包括从通道底层触发，由Netty通过层层传递，调用ChannelInboundHandler入站处理器进行的其他某个处理。
+
+Netty中的出站处理指的是从ChannelOutboundHandler处理器到通道的某次IO操作，例如，在应用程序完成业务处理后，可以通过ChannelOutboundHandler出站处理器将处理的结果写入底层通道。它的最常用的一个方法就是write()方法，把数据写入到通道。Netty中的出站处理，不仅仅包括Java NIO的OP_WRITE可写事件，还包括Netty自身从处理器到通道的方向的其他操作。OP_WRITE可写事件是Java NIO的概念，它和Netty的出站处理的在概念不是一个维度，**Netty的出站处理是应用层维度的**。
+
+无论是入站还是出站，Netty都提供了各自的默认适配器实现：ChannelInboundHandler的默认实现为ChannelInboundHandlerAdapter（入站处理适配器）。ChannelOutboundHandler的默认实现为ChanneloutBoundHandlerAdapter（出站处理适配器）。这两个默认的通道处理适配器，分别实现了基本的入站操作和出站操作功能。如果要实现自己的业务处理器，不需要从零开始去实现处理器的接口，只需要继承通道处理适配器即可。
+
 ### 13.2.4 Netty的Pipeline通道处理流水线
+
+在Netty中反应器模式的各个组件的关系是这样的：
+
+- 反应器和通道之间是一对多的关系，一个反应器可以查询很多个通道的IO事件。
+- 通道和Handler处理器之间是多对多的关系，一个通道的IO事件可以被多个Handler处理，一个Handler也可以绑定多个通道，处理多个通道的IO事件。
+
+那么通道和Handler之间的绑定关系Netty是如何实现的呢？在Netty中，设计了一个特殊的组件，就是ChannelPipeline，它像一条管道，将绑定到一个通道的多个Handler处理器实例串在一起，形成一条流水线。ChannelPipeline（通道流水线）的默认实现，实际上被设计成一个双向链表。所有的Handler处理器实例被包装成了双向链表的节点，被加入到了ChannelPipeline。
+
+以入站处理为例。每一个来自通道的IO事件，都会进入一次ChannelPipeline通道流水线。在进入第一个Handler处理器后，这个IO事件将按照既定的从前往后次序，在流水线上不断地向后流动，流向下一个Handler处理器。
+
+在向后流动的过程中，会出现3种情况：
+
+- 如果后面还有其他Handler入站处理器，那么IO事件可以交给下一个Handler处理器，向后流动。
+- 如果后面没有其他的入站处理器，这就意味着这个IO事件在此次流水线中的处理结束了。
+- 如果在中间需要终止流动，可以选择不将IO事件交给下一个Handler处理器，流水线的执行也被终止了。
+
+Netty的流水线不是单向的，而是双向的，而普通的流水线基本都是单向的。Netty是这样规定的：入站处理器Handler的执行次序，是从前到后；出站处理器Handler的执行次序，是从后到前。总之，IO事件在流水线上的执行次序，与IO事件的类型是有关系的。除了流动的方向与IO操作类型有关之外，流动过程中所经过的处理器类型，也是与IO操作的类型有关。入站的IO操作只能从Inbound入站处理器类型的Handler流过；出站的IO操作只能从Outbound出站处理器类型的Handler流过。如下图，图片来自于我自己的博客：
+
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211013111316423.png)
 
 
 
