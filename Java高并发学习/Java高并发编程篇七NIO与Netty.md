@@ -198,7 +198,7 @@ select操作1次轮询会遍历1024个文件描述符的IO事件（或者说是1
 
 select核心步骤如下：
 
-- 准备fds数组（fdset是位图数据结构），数组存放着所有需要监视的socket。select函数监视的事件分3类，分别是writefds、readfds、和exceptfds。（读写和异常）
+- 准备fds数组（fdset是位图数据结构），数组存放着所有需要监视的socket。select函数监视的文件描述符分3类，分别是writefds、readfds、和exceptfds。（读写和异常）
 - 调用select，如果fds数组中的所有socket没有数据，select会阻塞，直到有socket接收数据，或者超时（timeout指定等待时间，如果立即返回设为null即可），select返回，唤醒进程
 - select函数返回后遍历fds，通过FD_ISSET判断具体是哪个socket接收到数据（或者说是哪个文件描述符就绪），然后做处理
 
@@ -918,7 +918,7 @@ java在Net.java中通过JNI加载不同平台的poll事件的定义值（代码�
     }
 ~~~
 
-在查询的时候（流程可以自己跟以便），会在SocketChannelImpl#translateReadyOps方法，将JNI事件转换成NIO事件：
+在查询的时候（流程可以自己跟一遍），会在SocketChannelImpl#translateReadyOps方法，将JNI事件转换成NIO事件：
 
 ~~~java
 /**
@@ -1601,7 +1601,190 @@ void grow(int newSize) {
 
 #### Selector.select()
 
-我们在注册通道，完成一些初始化的工作后，会调用Selector的select方法进行轮询，如果
+我们在注册通道，完成一些初始化的工作后，会调用Selector的select方法进行轮询，当轮询调用select()方法时：
+
+- 首先根据cancelledKeys去删除registeredKeys和selectedKeys中的需要取消的key
+- 然后调用操作系统去做操作系统级别的select，一旦有registeredKeys感兴趣的事件，则将对应事件的key添加到selectedKey中
+- 如果selectedKey已经存在了的key，则将事件添加到key中的readyOps（已经准备好的事件集中）。
+
+我们下面来一步一步跟进分析源码：
+
+首先进入到SelectorImpl#select(long)方法：
+
+~~~java
+public int select(long timeout) throws IOException{
+    if (timeout < 0)
+        throw new IllegalArgumentException("Negative timeout");
+    return lockAndDoSelect((timeout == 0) ? -1 : timeout);//此方法为下一步主要流程
+}
+
+public int select() throws IOException {
+    return select(0);
+}
+~~~
+
+此方法主要调用了lockAndDoSelect方法，所以我们继续跟进：
+
+~~~java
+ private int lockAndDoSelect(long timeout) throws IOException {
+     synchronized (this) {
+         if (!isOpen())
+             throw new ClosedSelectorException();
+         synchronized (publicKeys) {
+             synchronized (publicSelectedKeys) {
+                 return doSelect(timeout);
+             }
+         }
+     }
+ }
+~~~
+
+这里的核心是doSelect方法，这个方法是抽象方法，我们跟进windows的实现类：
+
+~~~java
+protected int doSelect(long timeout) throws IOException {
+    if (channelArray == null)
+        throw new ClosedSelectorException();
+    this.timeout = timeout; // set selector timeout
+    processDeregisterQueue();
+    if (interruptTriggered) {
+        resetWakeupSocket();
+        return 0;
+    }
+    // Calculate number of helper threads needed for poll. If necessary
+    // threads are created here and start waiting on startLock
+    adjustThreadsCount();
+    finishLock.reset(); // reset finishLock
+    // Wakeup helper threads, waiting on startLock, so they start polling.
+    // Redundant threads will exit here after wakeup.
+    startLock.startThreads();
+    // do polling in the main thread. Main thread is responsible for
+    // first MAX_SELECTABLE_FDS entries in pollArray.
+    try {
+        begin();
+        try {
+            //调用本地选择器的poll方法
+            subSelector.poll();
+        } catch (IOException e) {
+            finishLock.setException(e); // Save this exception
+        }
+        // Main thread is out of poll(). Wakeup others and wait for them
+        if (threads.size() > 0)
+            finishLock.waitForHelperThreads();
+    } finally {
+        end();
+    }
+    // Done with poll(). Set wakeupSocket to nonsignaled  for the next run.
+    finishLock.checkForException();
+    processDeregisterQueue();
+    int updated = updateSelectedKeys();//将就绪的文件描述符更新成SelectionKey
+    // Done with poll(). Set wakeupSocket to nonsignaled  for the next run.
+    resetWakeupSocket();
+    return updated;
+}
+~~~
+
+这个doSelect方法中比较最重要的地方有两点一是`subSelector.poll()`调用本地选择器的poll方法，然后poll会调用本地方法poll0()，源码如下：
+
+~~~java
+private int poll() throws IOException{ // poll for the main thread
+            return poll0(pollWrapper.pollArrayAddress,
+                         Math.min(totalChannels, MAX_SELECTABLE_FDS),
+                         readFds, writeFds, exceptFds, timeout);
+        }
+
+private int poll(int index) throws IOException {
+    // poll for helper threads
+    return  poll0(pollWrapper.pollArrayAddress +
+                  (pollArrayIndex * PollArrayWrapper.SIZE_POLLFD),
+                  Math.min(MAX_SELECTABLE_FDS,
+                           totalChannels - (index + 1) * MAX_SELECTABLE_FDS),
+                  readFds, writeFds, exceptFds, timeout);
+}
+//参数：pollArray数组地址，文件描述符数量，读、写异常文件描述符数组（也可以理解为事件数组），阻塞时间
+private native int poll0(long pollAddress, int numfds,
+                         int[] readFds, int[] writeFds, int[] exceptFds, long timeout);
+~~~
+
+poll0的源码在[WindowsSelectorImpl.c](https://github.com/openjdk/jdk8/blob/master/jdk/src/windows/native/sun/nio/ch/WindowsSelectorImpl.c)中：大概操作就是将fds指定的fd，解析到readfds，writefds和exceptfds中。等select返回后，结果信息再存放在readfds，writefds和exceptfds中。源码可以自行去查看。
+
+doSelect方法中第二个比较重要的一点是`updateSelectedKeys()`方法,此方法将就绪的文件描述符更新成SelectionKey，源码如下：
+
+~~~java
+private int updateSelectedKeys() {
+    updateCount++;
+    int numKeysUpdated = 0;
+    numKeysUpdated += subSelector.processSelectedKeys(updateCount);
+    for (SelectThread t: threads) {
+        numKeysUpdated += t.subSelector.processSelectedKeys(updateCount);
+    }
+    return numKeysUpdated;
+}
+//分别对可读，可写和异常调用processFDSet方法
+private int processSelectedKeys(long updateCount) {
+    int numKeysUpdated = 0;
+    numKeysUpdated += processFDSet(updateCount, readFds,
+                                   PollArrayWrapper.POLLIN,
+                                   false);
+    numKeysUpdated += processFDSet(updateCount, writeFds,
+                                   PollArrayWrapper.POLLCONN |
+                                   PollArrayWrapper.POLLOUT,
+                                   false);
+    numKeysUpdated += processFDSet(updateCount, exceptFds,
+                                   PollArrayWrapper.POLLIN |
+                                   PollArrayWrapper.POLLCONN |
+                                   PollArrayWrapper.POLLOUT,
+                                   true);
+    return numKeysUpdated;
+}
+//将文件描述符和事件转换成选择键
+private int processFDSet(long updateCount, int[] fds, int rOps,
+                         boolean isExceptFds)
+{
+    int numKeysUpdated = 0;
+    for (int i = 1; i <= fds[0]; i++) {
+        int desc = fds[i];
+        if (desc == wakeupSourceFd) {
+            synchronized (interruptLock) {
+                interruptTriggered = true;
+            }
+            continue;
+        }
+        //根据fd导航从fdMap中找到选择键
+        MapEntry me = fdMap.get(desc);
+        if (me == null)
+            continue;
+        SelectionKeyImpl sk = me.ski;
+        if (isExceptFds &&
+            (sk.channel() instanceof SocketChannelImpl) &&
+            discardUrgentData(desc))
+        {
+            continue;
+        }
+
+        if (selectedKeys.contains(sk)) { // Key in selected set
+            if (me.clearedCount != updateCount) {
+                if (sk.channel.translateAndSetReadyOps(rOps, sk) &&
+                    (me.updateCount != updateCount)) {
+                    me.updateCount = updateCount;
+                    numKeysUpdated++;
+                }
+            } else { // The readyOps have been set; now add
+                if (sk.channel.translateAndUpdateReadyOps(rOps, sk) &&//调用translateAndUpdateReadyOps进行转换，并存入sk
+                    (me.updateCount != updateCount)) {
+                    me.updateCount = updateCount;
+                    numKeysUpdated++;
+                }
+            }
+            me.clearedCount = updateCount;
+        } else { //。。。略
+        }
+    }
+    return numKeysUpdated;
+}
+~~~
+
+因为对这几个集合的操作不是线程安全的,所以**一般使用Selector的select()只用单线程**而对于select得到的channel和对应的IO操作,可以新开线程或者使用线程池来处理。这也正是IO复用的意义所在。
 
 #### Selector.wakeup()
 
@@ -1615,9 +1798,33 @@ public abstract Selector wakeup();
 
 PollSelectorImpl在select过程中的阻塞时间受控于Channel的事件，一旦有事件才返回，所以为了手动控制就额外增加了一个对pipe的读监控，将pipe的文件描述符加到PollArrayWrapper中的第一个位置，如果我们对这个pipe进行写入数据操作，那么pipe的读文件描述符必然会收集到读事件，这样就可以不在阻塞，立即返回。
 
-在Windows上会建立一对自己和自己的loopback的TCP连接，在Linux上回开一对pipe管道（pipe在linux上一般都是成对打开的），如果想唤醒select，只需要朝自己连接或pipe发点数据，就可以唤醒阻塞的select线程了。
+在Windows上会建立一对自己和自己的loopback的TCP（socket）连接，在Linux上回开一对pipe管道（pipe在linux上一般都是成对打开的），如果想唤醒select，只需要朝自己连接或pipe发点数据，就可以唤醒阻塞的select线程了。
 
-下面我们看一下WindowsSelectorImpl的loopback连接：
+下面我们看一下WindowsSelectorImpl的loopback（回环）连接，在WindowsSelectorImpl的构造方法中对此进行了定义：
+
+~~~java
+WindowsSelectorImpl(SelectorProvider sp) throws IOException {
+    super(sp);
+    pollWrapper = new PollArrayWrapper(INIT_CAP);
+	//打开管道
+    wakeupPipe = Pipe.open();
+    //获取接收端source的fd
+    wakeupSourceFd = ((SelChImpl)wakeupPipe.source()).getFDVal();
+
+    // Disable the Nagle algorithm so that the wakeup is more immediate
+    //获取发送端sink
+    SinkChannelImpl sink = (SinkChannelImpl)wakeupPipe.sink();
+    (sink.sc).socket().setTcpNoDelay(true);
+    //发送端的fd，用于后续发消息
+    wakeupSinkFd = ((SelChImpl)sink).getFDVal();
+	//接收端的fd加入poll队列的第一个
+    pollWrapper.addWakeupSocket(wakeupSourceFd, 0);
+}
+~~~
+
+
+
+
 
 # 十二、Reactor模式
 
