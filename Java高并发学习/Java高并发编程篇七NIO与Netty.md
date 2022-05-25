@@ -1814,6 +1814,7 @@ WindowsSelectorImpl(SelectorProvider sp) throws IOException {
     // Disable the Nagle algorithm so that the wakeup is more immediate
     //获取发送端sink
     SinkChannelImpl sink = (SinkChannelImpl)wakeupPipe.sink();
+    //禁用Nagle算法，即发送消息不能有延迟
     (sink.sc).socket().setTcpNoDelay(true);
     //发送端的fd，用于后续发消息
     wakeupSinkFd = ((SelChImpl)sink).getFDVal();
@@ -1822,7 +1823,137 @@ WindowsSelectorImpl(SelectorProvider sp) throws IOException {
 }
 ~~~
 
+> 注意这里我们禁用了Nagle算法`(sink.sc).socket().setTcpNoDelay(true);`这是为什么呢？因为我们的消息不能有延迟，像唤醒必须要立马进行唤醒。而Nagle算法就是为了尽可能发送大块数据，避免网络中充斥着许多小数据块。Nagle算法的基本定义是任意时刻，最多只能有一个未被确认的小段。 所谓“小段”，指的是小于MSS尺寸的数据块，所谓“未被确认”，是指一个数据块发送出去后，没有收到对方发送的ACK确认该数据已收到，也就是说当我们发送很小的一段数据用于唤醒时，会被Nagle算法因为过小而不被发送，所以我们要禁用Nagle延迟。
 
+那么接下来我们就看一下这个Pipe的在windows上的实现类PipeImpl：
+
+~~~java
+class PipeImpl extends Pipe {
+    private static final int NUM_SECRET_BYTES = 16;
+    private static final Random RANDOM_NUMBER_GENERATOR = new SecureRandom();
+    private SourceChannel source;//接收端
+    private SinkChannel sink;//发送端
+    public SourceChannel source() {
+        return this.source;
+    }
+
+    public SinkChannel sink() {
+        return this.sink;
+    }
+	//略///
+}
+~~~
+
+在上面的代码中存在两个重要的属性source接收端和sink发送端。除了这两个属性PipeImpl中还有一个内部类，源码如下，这个类中进行了sink和source的新建：
+
+~~~java
+private class LoopbackConnector implements Runnable {
+
+    @Override
+    public void run() {
+        ServerSocketChannel ssc = null;
+        SocketChannel sc1 = null;
+        SocketChannel sc2 = null;
+
+        try {
+            // Loopback address
+            InetAddress lb = InetAddress.getByName("127.0.0.1");
+            assert(lb.isLoopbackAddress());
+            InetSocketAddress sa = null;
+            for(;;) {
+                // Bind ServerSocketChannel to a port on the loopback
+                // address
+                if (ssc == null || !ssc.isOpen()) {
+                    //开一个监听套接字
+                    ssc = ServerSocketChannel.open();
+                    //绑定一个随机端口
+                    ssc.socket().bind(new InetSocketAddress(lb, 0));
+                    sa = new InetSocketAddress(lb, ssc.socket().getLocalPort());
+                }
+
+                // Establish connection (assume connections are eagerly
+                // accepted)
+                //建立一个套接字连接
+                sc1 = SocketChannel.open(sa);
+                ByteBuffer bb = ByteBuffer.allocate(8);
+                long secret = rnd.nextLong();
+                bb.putLong(secret).flip();
+                sc1.write(bb);//写入校验密码
+
+                // Get a connection and verify it is legitimate
+                //接收连接进行校验
+                sc2 = ssc.accept();
+                bb.clear();
+                sc2.read(bb);
+                bb.rewind();
+                if (bb.getLong() == secret)//校验结果正确
+                    break;
+                //校验结果不正确
+                sc2.close();
+                sc1.close();
+            }
+
+            // Create source and sink channels，建立发送端和接收端通道
+            source = new SourceChannelImpl(sp, sc1);
+            sink = new SinkChannelImpl(sp, sc2);
+        } catch (IOException e) {
+            try {
+                if (sc1 != null)
+                    sc1.close();
+                if (sc2 != null)
+                    sc2.close();
+            } catch (IOException e2) {}
+            ioe = e;
+        } finally {
+            try {
+                if (ssc != null)
+                    ssc.close();
+            } catch (IOException e2) {}
+        }
+    }
+}
+~~~
+
+这个内部类实际上整体流程如下图：
+
+![image-20220525211237185](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220525211237185.png)
+
+既然我们搞明白了wakeup的原理，那么接下来我们就跟一下wakeup的源码流程，当调用wakeup()方法时，(windows平台)最终会调用`sun.nio.ch.WindowsSelectorImpl#wakeup`：
+
+```java
+public Selector wakeup() {
+    synchronized(this.interruptLock) {
+        if (!this.interruptTriggered) {
+            this.setWakeupSocket();
+            this.interruptTriggered = true;
+        }
+
+        return this;
+    }
+}
+private void setWakeupSocket() {
+    this.setWakeupSocket0(this.wakeupSinkFd);
+}
+
+private native void setWakeupSocket0(int var1);
+```
+
+这里会调用setWakeupSocket方法，而次方法最终会调用本地方法setWakeupSocket0：
+
+~~~c
+JNIEXPORT void JNICALL
+Java_sun_nio_ch_WindowsSelectorImpl_setWakeupSocket0(JNIEnv *env, jclass this,
+                                                jint scoutFd)
+{
+    /* Write one byte into the pipe */
+    const char byte = 1;
+    send(scoutFd, &byte, 1, 0);
+}
+~~~
+
+我们可以看到底层时调用send方法，发送一个字节，来唤醒poll，所以wakeup可以唤醒阻塞的select方法。
+
+以上就是NIO中Selector的原理。
 
 
 
@@ -2405,9 +2536,32 @@ Netty的流水线不是单向的，而是双向的，而普通的流水线基本
 
 ![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211013111316423.png)
 
+下面我们从Netty的BootStrap和EventLoopGroup组件入手逐步学习Netty的每一个组件。
 
+## 13.3 BootStrap和EventLoopGroup
 
-## 13.3 BootStrap和EventLoop
+### 13.3.1 概念
+
+Bootstrap类是Netty提供的一个便利的工厂类，可以通过它来完成Netty的客户端或服务器端的Netty组件的组装，以及Netty程序的初始化和启动执行。当然，Netty的官方解释是，完全可以不用这个Bootstrap引导类，可以一点点去手动创建通道、完成各种设置和启动、并且注册到EventLoop反应器然后开始事件的轮询和处理，但是这个过程会非常麻烦。通常情况下，还是使用这个便利的Bootstrap工具类会效率更高。
+
+Netty有一个抽象接口，然后下面有两个BootStrap的实现类，一个是服务器端使用的，另一个是客户端使用的：
+
+![image-20220525212836647](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220525212836647.png)
+
+两者的API都差不多，因此这里以ServerBootStrap为例进行学习。
+
+当然学习BootStrap组件之前，我们再了解一下父子通道和EventLoopGroup的概念：
+
+在netty中，每一个NioSocketChannel都是对JavaNIO通道的封装，再往下对应着socket文件描述符，理论上来说socket文件描述符分为两类：
+
+- 连接监听型：连接监听的socketFd，处于服务器端，负责接收客户端的连接。
+- 数据传输型：负责数据传输，同一条TCP的Socket传输链路，在客户端和服务器端都有一个对应的SocketFd。
+
+在Netty中，将有接收关系的监听通道和传输通道，叫做父子通道。其中，负责服务器连接监听和接收的监听通道，也叫父通道，异步非阻塞的服务器端监听通道NioServerSocketChannel，所封装的Linux底层的文件描述符就是“连接监听类型”的socket描述符。对应于每一个接收到的传输类通道，也叫子通道而异步非阻塞的传输通道NioSocketChannel，所封装的Linux的文件描述符，是“数据传输类型”的socket描述符。
+
+然后我们再来了解一下EventLoopGroup。上面我们了解了EventLoop，这其实是Netty对Selector的封装，那么Reactor的多线程模式Netty是如何实现的呢？
+
+其实是使用EventLoopGroup轮询组。多个EventLoop线程放在一起，可以组成一个EventLoopGroup轮询组。反过来说，EventLoopGroup轮询组就是一个多线程版本的反应器，其中的单个EventLoop线程对应于一个子反应器（SubReactor）
 
 
 
