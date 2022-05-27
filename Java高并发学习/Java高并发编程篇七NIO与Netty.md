@@ -2561,33 +2561,281 @@ Netty有一个抽象接口，然后下面有两个BootStrap的实现类，一个
 
 然后我们再来了解一下EventLoopGroup。上面我们了解了EventLoop，这其实是Netty对Selector的封装，那么Reactor的多线程模式Netty是如何实现的呢？
 
-其实是使用EventLoopGroup轮询组。多个EventLoop线程放在一起，可以组成一个EventLoopGroup轮询组。反过来说，EventLoopGroup轮询组就是一个多线程版本的反应器，其中的单个EventLoop线程对应于一个子反应器（SubReactor）
+其实是使用EventLoopGroup轮询组。多个EventLoop线程放在一起，可以组成一个EventLoopGroup轮询组。反过来说，EventLoopGroup轮询组就是一个多线程版本的反应器，其中的单个EventLoop线程对应于一个子反应器（SubReactor）。我们在开发的时候，一般都是创建EventLoopGroup，创建时可以指定参数，参数为内部线程的个数。如果使用无参构造函数，则默认是CPU核数的两倍。
+
+为了及时接收处理新连接，在Netty服务器端，一般用两个EventLoopGroup轮询组，一个负责新连接的监听和接收，另一个负责IO事件的轮询和分发。两个组的分工如下：
+
+- 新连接监听和接收的EventLoopGroup轮询组，负责完成查询通道的新连接IO事件，这组可以比喻为Boss轮询组
+- IO事件的轮询和分发的EventLoopGroup轮询组，负责查询所有子通道的IO事件，并且执行对应的Handler处理器完成IO处理——例如数据的输入和输出，这组可以比喻为Worker轮询组
+
+Netty中的Reactor模式的示例图如下：
 
 
+
+![image-20220527131823116](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220527131823116.png)
+
+### 13.3.2 启动流程详解
+
+Netty的BootStrap的启动流程，就是Netty组件的组装配置，以及服务端（或客户端）的启动流程。主要分8个步骤，我们这里用ServerBootStrap进行演示。
+
+开始流程之前首先创建一个ServerBootStrap
+
+~~~java
+ServerBootstrap bootstrap = new ServerBootstrap();
+~~~
+
+下面的启动主要流程：
+
+1. 创建Reactor反应器轮询组
+
+   ```java
+   EventLoopGroup bossGroup = new NioEventLoopGroup();
+   EventLoopGroup workerGroup = new NioEventLoopGroup();
+   bootstrap.group(bossGroup,workerGroup)//设置线程组
+   ```
+
+   如果不需要进行新连接事件和输出事件进行分开监听，就不一定非得配置两个轮询组，可以仅配置一个EventLoopGroup反应器轮询组。具体的配置方法是调用`bootstrap.group(workerGroup)`。在这种模式下，新连接监听IO事件和数据传输IO事件可能被挤在了同一个线程中处理。这样会带来一个风险：新连接的接受被更加耗时的数据传输或者业务处理所阻塞。所以，在服务器端，建议设置成两个轮询组的工作模式.
+
+2. 设置IO通道类型
+
+   ```java
+   bootstrap.group(bossGroup,workerGroup)//设置线程组
+   		 .channel(NioServerSocketChannel.class)//使用NioServerSocketChannel作为服务器端通道实现
+   ```
+
+   如果确实指定Bootstrap的IO模型为BIO类型，可以配置为OioServerSocketChannel.class类即可。由于NIO的优势巨大，通常不会在Netty中使用BIO。
+
+3. 设置监听端口
+
+   ```java
+   bootstrap.localAddress(new InetSocketAddress(port));
+   //或者是在绑定监听端口时设置端口号。绑定监听端口为下面第六步
+   bootstrap.bind(9999);
+   ```
+
+4. 设置传输通道的配置选项
+
+   ```java
+   bootstrap.option(ChannelOption.SO_BACKLOG,128)//设置线程队列中等待连接的个数
+   bootstrap.childOption(ChannelOption.SO_KEEPALIVE,true)//保持活动连接状态
+   ```
+
+   这里用到了Bootstrap的option(…) 选项设置方法。对于服务器的Bootstrap而言，这个方法的作用是：给父通道（Parent Channel）通道设置一些与传输协议相关的选项。如果要给子通道（Child Channel）设置一些通道选项，则需要用另外一个childOption(…)设置方法.
+
+5. 装配子通道的Pipeline流水线
+
+   每一个通道都用一条ChannelPipeline流水线。它的内部有一个双向的链表。装配流水线的方式是：将业务处理器ChannelHandler实例包装之后加入双向链表中。
+
+   装配子通道的Handler流水线调用引导类的childHandler()方法，该方法需要传入一个ChannelInitializer通道初始化类的实例作为参数。每当父通道成功接收一个连接，并创建成功一个子通道后，就会初始化子通道，此时这里配置的ChannelInitializer实例就会被调用.
+
+   ```java
+   //它代表需要初始化的通道类型，这个类型需要和前面的引导类中设置的传输通道类型，保持一一对应起来
+   bootstrap.childHandler(new ChannelInitializer<SocketChannel>() {//创建一个通道初始化对象
+       //往Pipeline链中添加自定义业务处理handler
+       @Override
+       protected void initChannel(SocketChannel ch) throws Exception {
+           ch.pipeline().addLast("decoder",new ProtobufDecoder(BookMessage.Book.getDefaultInstance()));
+           ch.pipeline().addLast(new NettyServerHandler());
+           System.out.println("========Server is Ready========");
+       }
+   });
+   ```
+
+   为什么仅装配子通道的流水线,因为父通道也就是NioServerSocketChannel的内部业务处理是固定的：接受新连接后，创建子通道，然后初始化子通道，所以不需要特别的配置，由Netty自行进行装配。当然，如果需要完成特殊的父通道业务处理，可以类似的使用ServerBootstrap的handler(ChannelHandler handler)方法，为父通道设置ChannelInitializer初始化器。
+
+6. 开始绑定服务器新连接的监听端口
+
+   ```java
+   ChannelFuture channelFuture = bootstrap.bind(9999).sync();
+   ```
+
+   b.bind()方法的功能：返回一个端口绑定Netty的异步任务channelFuture。上面的代码中并没有给channelFuture异步任务增加回调监听器，而是调用sync阻塞channelFuture异步任务，直到端口绑定任务执行完成。除了阻塞异步任务还可以设置监听器，以获得Netty中的IO操作的真正结果。
+
+7. 自我阻塞，直至服务器关闭
+
+   ```java
+   channelFuture.channel().closeFuture().sync();
+   ```
+
+   如果要阻塞当前线程直到通道关闭，可以使用通道的closeFuture()方法，以获取通道关闭的异步任务。当通道被关闭时，closeFuture实例的sync()方法会返回。
+
+8. 关闭EventLoopGroup
+
+   ```java
+   bossGroup.shutdownGracefully();
+   workerGroup.shutdownGracefully();
+   ```
+
+### 13.3.3 ChannelOPtion选项
+
+无论是对于NioServerSocketChannel父通道类型，还是对于NioSocketChannel子通道类型，都可以设置一系列的ChannelOption通道选项。ChannelOption类中定义了一系列的选项，下面介绍一些常见的选项：
+
+1. SO_RCVBUF和SO_SNDBUF
+
+   TCP传输选项，每个套接字(TCP socket)，在内核中都有一个发送缓冲区和一个接收缓冲区，这两个选项就是用来设置TCP连接的这两个连接的缓冲区大小。TCP的全双工工作模式以及TCP的滑动窗口对两个独立的缓冲区都有依赖。
+
+2. TCP_NODELAY
+
+   TCP传输选项，如果设置为true表示立即发送数据。此选项用于启用关闭Nagle算法，如果要求高实时性，有数据发送时就马上发送。TCP_NODELAY在Netty中默认为true，操作系统默认为False。
+
+3. SO_KEEPALIVE
+
+   TCP传输选项,表示是否开启TCP协议的心跳机制。true表示保持心跳，默认为false。启用该功能时，TCP会主动探测空闲连接的有效性。可以将此功能视为TCP的心跳机制，需要注意的是：默认的心跳间隔是7200秒即2小时。Netty默认关闭该功能。
+
+4. SO_REUSEADDR
+
+   TCP传输选项，如果为true时表示地址复用，默认值为false。有四种情况需要用到这个参数设置：
+
+   - 当有一个地址和端口相同的连接socket1处于TIME_WAIT状态时，而又希望启动一个新的连接socket2要占用该地址和端口；
+   - 有多块网卡或用IP Alias技术的机器在同一端口启动多个进程，但每个进程绑定的本地IP地址不能相同；
+   - 同一进程绑定相同的端口到多个socket（套接字）上，但每个socket绑定的IP地址不同；
+   - 完全相同的地址和端口的重复绑定，但这只用于UDP的多播，不用于TCP。 
+
+5. SO_LINGER
+
+   TCP传输选项，可以用来控制socket.close()方法被调用后的行为，包括延迟关闭时间。如果此选项设置为-1，表示socket.close()方法在调用后立即返回，但操作系统底层会将发送缓冲区的数据全部发送到对端；如果设置为0，表示socket.close()方法在调用后立即返回，但操作系统底层会将发送缓冲区的数据全部放弃，直接向对端发送RST包，对端将收到复位错误；如果设置为非0整数，表示socket.close()方法在调用后阻塞，直到延迟时间到来，发送缓冲区的数据发送完毕，若超时，则对端会收到复位错误。
+
+   SO_LINGER，表示禁用此功能。
+
+6. SO_BACKLOG
+
+   此为TCP传输选项，表示服务器端接收连接的队列长度，如果队列已满，客户端连接将被拒绝。服务端在处理客户端新连接请求时（三次握手），是顺序处理的，所以同一时间只能处理一个客户端连接，多个客户端来的时候，服务端将不能处理的客户端连接请求放在队列中等待处理，队列的大小通过SO_BACKLOG指定。
+
+   具体来说，服务端对完成第二次握手的连接放在一个队列（暂时称A队列），如果进一步完成第三次握手，再把的连接从A队列移动到新队列（暂时称B队列），接下来应用程序会通过accept方法取出握手成功的连接，而系统则会将该连接从B队列移除。 **A队列和B队列的长度之和是SO_BACKLOG指定的值**，当A和B队列的长度之和大于SO_BACKLOG值时，新连接将会被TCP内核拒绝，所以，如果SO_BACKLOG过小，可能会出现accept速度跟不上，A和.B两队列满了，导致新客户端无法连接。如果连接建立频繁，服务器处理新连接较慢，可以适当调大这个参数。
+
+7. SO_BROADCAST
+
+   此为TCP传输选项，表示设置为广播模式
 
 ## 13.4 Channel和Future
 
+### 13.4.1 Channel的重要属性和方法
 
+通道是Netty的核心概念之一，代表着网络连接，由它负责同对端进行网络通信，可以写入数据到对端，也可以从对端读取数据。
+
+Netty通道的抽象类AbstractChannel的构造函数：
+
+```java
+protected AbstractChannel(Channel parent) {
+    this.parent = parent;//父通道
+    id = newId();
+    unsafe = newUnsafe();//新建一个底层的NIO通道，完成实际IO操作
+    pipeline = newChannelPipeline();//新建一条通道流水线
+}
+protected DefaultChannelPipeline newChannelPipeline() {
+    return new DefaultChannelPipeline(this);
+}
+```
+
+AbstractChannel内部有一个pipeline属性，表示处理器的流水线，Netty在通道初始化时，将pipeline初始化成DefaultChannelPipeline的实例。因此，每个通道都会有一条ChannelPipeline处理器流水线。
+
+内部还有一个parent父通道属性，保持通道的父通道。对于监听类的通道其父通道是null，对于传输类通道，其父通道是接收到该连接的监听通道。几乎所有的Netty通道实现类都继承了AbstractChannel抽象类，都有上面的parent和pipeline属性。
+
+学习了通道的重要属性，我们接下来学习一下重要方法：
+
+- ChannelFuture connect(SocketAddress address)
+
+  连接远程服务器，方法的参数为远程服务器的地址，调用后会立即返回，其返回值为执行连接操作的异步任务ChannelFuture，此方法在客户端的传输通道使用
+
+- ChannelFuture bind(SocketAddress address)
+
+  绑定监听地址，开始监听新的客户端连接。此方法在服务器的新连接监听和接收通道使用。
+
+- ChannelFuture close()
+
+  关闭通道连接，返回连接关闭的ChannelFuture异步任务。如果需要在连接正式关闭后执行操作，则需要设置回调方法，或者调用sync方法阻塞当前线程
+
+- Channel read()
+
+  读取通道数据，并且启动入站处理。就是从内部的JavaNIO的Channel读取数据，然后启用通道内部的pipeline流水线，开启数据读取的入站处理。此方法返回通道本身，方便链式调用
+
+- ChannelFuture write(Object o)
+
+  启动出战的流水处理，把处理后的最终数据鞋到底层通道，此方法的返回值是出站处理的异步任务。
+
+- ChannelFuture flush()
+
+  此方法会将缓冲区的数据写出到对端。调用前面的write出站处理时，并不能将数据写出到对端，write操作大部分情况下是写入操作系统的缓冲区，操作系统根据缓冲区的情况决定什么时候把数据写到对端。而执行flush方法会立即将数据写到对端。
+
+### 13.4.2 EmbeddedChannel嵌入式通道
+
+在Netty的实际开发中，底层通信传输的基础工作Netty已经替大家完成。实际上，更多的工作是设计和开发ChannelHandler业务处理器。处理器开发完成后，需要投入单元测试。
+
+一般单元测试的大致流程是：
+
+- 需要将Handler业务处理器加入到通道的Pipeline流水线中；
+- 接下来先后启动Netty服务器、客户端程序；
+- 相互发送消息，测试业务处理器的效果
+
+这个过程是十分繁琐的，所以Netty提供了一个专用通道EmbeddedChannel。EmbeddedChannel仅仅是模拟入站与出站的操作，底层不进行实际的传输，不需要启动Netty服务器和客户端。除了不进行传输之外，EmbeddedChannel的其他的事件机制和处理流程和真正的传输通道是一模一样的。因此，使用EmbeddedChannel，开发人员可以在单元测试用例中方便、快速地进行ChannelHandler业务处理器的单元测试。
+
+
+
+为了模拟数据的发送和接收，EmbeddedChannel提供了一组专门的方法，如下表：
+
+| 名称            | 说明                                                         |
+| --------------- | ------------------------------------------------------------ |
+| writeInbound()  | 向通道写入入站数据，模拟真实通道收到数据的场景。也就是说，这些写入的数据会被流水线上的入站处理器所处理到。 |
+| readInbound()   | 从EmbeddedChannel中读取入站数据，返回经过流水线的最后一个入站处理器完成后的入站数据。没有数据返回null |
+| writeOutbound() | 向通道写入出站数据，模拟真实通道发送数据。也就是说，这些写入的数据会被流水线上的出站处理器处理。 |
+| readOutbound()  | 从EmbeddedChannel中读取出站数据，返回经过流水线的最后一个入站处理器完成后的出站数据。没有数据返回null |
+| finish()        | 结束EmbeddedChannel，会调用通道的close方法                   |
+
+上面表格中最重要的两个方法如下，writeInbound和writeOutBound：
+
+- writeInbound
+
+  用于测试入站处理器。在测试入站处理器时（例如测试一个解码器），需要读取入站（Inbound）数据。可以调用writeInbound方法，向EmbeddedChannel写入一个入站数据（如二进制ByteBuf数据包）模拟底层的入站包，从而被入站处理器处理到，达到测试的目的。
+
+- writeOutBound
+
+  用于测试出站处理器。在测试出站处理器时（例如测试一个编码器），需要有出站的（Outbound）数据进入到流水线。可以调用writeOutbound方法，向模拟通道写入一个出站数据（如二进制ByteBuf数据包），该包将进入处理器流水线，被待测试的出站处理器所处理
+
+总之，EmbeddedChannel类既拥有通道的通用接口和方法，又增加了一些单元测试的辅助方法。具体用法后续示例中进行体现。
 
 ## 13.5 Handler
 
-
+暂略，后续进行整理，此部分可以先看我的博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)中的第2.5节。
 
 ## 13.6 Pipeline
 
-
+暂略，后续进行整理，此部分可以先看我的博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)中的第2.5节。
 
 ## 13.7 ByteBuf
 
+暂略，后续进行整理，此部分可以先看我的博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)中的第2.6节。
+
+## 13.8 Netty编码解码
+
+Netty从底层Java通道读到ByteBuf二进制数据，传入Netty 通道的流水线，随后开始入站处理。
+
+在入站处理过程中，需要将ByteBuf二进制类型，解码成Java POJO对象。这个解码过程，可以通过Netty的Decoder（解码器）去完成。在出站处理过程中，业务处理后的结果（出站数据），需要从某个Java POJO对象，编码为最终的ByteBuf二进制数据，然后通过底层Java通道发送到对端。在编码过程中，需要用到Netty的Encoder（编码器）去完成数据的编码工作.
+
+### 13.8.1 Decoder原理
+
+Decoder是一个Inbound入站处理器，解码器负责处理入站数据。它主要将上一个入站处理器的输入数据，进行数据解码或格式转换，然后发送到下一个入站处理器。一个标准的解码器是将输入类型为ByteBuf缓冲区的数据进行节码，输出一个Java POJO对象。netty内置了这个解码器（ByteToMessageDecoder）。Netty中的解码器都是入站处理器类型，几乎都直接或间接地实现了入站处理的超级接口ChannelInboundHandler。
 
 
-## 13.8 编码解码
 
+### 13.8.2 常用的内置Decoder
 
+### 13.8.3 Encoder原理
+
+### 13.8.4 解码器与编码器的结合
 
 ## 13.9 序列化和反序列化
 
+### 13.9.1 粘包和拆包
 
+### 13.9.2 JSON协议通信
+
+### 13.9.3 Protobuf协议通信
+
+### 13.9.4 Protobuf编码解码实践
+
+### 13.9.5 Protobuf协议语法
+
+### 13.9.6 序列化反序列化、编码解码之间的关系
 
 
 
