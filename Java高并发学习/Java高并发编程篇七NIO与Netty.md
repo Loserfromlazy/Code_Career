@@ -2815,7 +2815,24 @@ Netty从底层Java通道读到ByteBuf二进制数据，传入Netty 通道的流�
 
 Decoder是一个Inbound入站处理器，解码器负责处理入站数据。它主要将上一个入站处理器的输入数据，进行数据解码或格式转换，然后发送到下一个入站处理器。一个标准的解码器是将输入类型为ByteBuf缓冲区的数据进行节码，输出一个Java POJO对象。netty内置了这个解码器（ByteToMessageDecoder）。Netty中的解码器都是入站处理器类型，几乎都直接或间接地实现了入站处理的超级接口ChannelInboundHandler。
 
+**ByteToMessageDecoder处理流程**
 
+ByteToMessageDecoder是一个非常重要的解码器基类，它是一个抽象类，实现了解码器的基础逻辑和流程。ByteToMessageDecoder继承自ChannelInboundHandlerAdapter适配器，用于完成从ByteBuf到JavaPojo的解码。它的流程大概如下：
+
+- 首先，将上一站传过来的输入到ByteBuf中的数据进行解码，解码出一个`List<Object>`对象列表
+- 然后，迭代`List<Object>`列表，逐个将Java POJO对象传入下一站InBound处理器
+
+流程如下：
+
+![image-20220527210541866](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220527210541866.png)
+
+ByteToMessageDecoder是个抽象类，不能实例化对象，所以解码需要具体的实现类。ByteToMessageDecoder的解码方法是decode，这是一个抽象方法，也就是说具体的解码过程（如ByteBuf中的字节数据变成什么样的Object）需要子类完成。所以ByteToMessageDecoder仅仅提供一个整体框架，他会调用子类方法，完成具体的二进制字节解码，然后获取子类解码的Object，放入自己内部的结果列表`List<Object>`中。最终父类会负责将`List<Object>`中的元素一个一个传递给下一站。所以也可以说ByteToMessageDecoder使用了模板模式。
+
+ByteToMessageDecoder子类要做的就是从入站ByteBuf解码出来的所有Object实例加入到父类的`List<Object>`中。如果要实现自己的解码器，首先要继承ByteToMessageDecoder然后实现其基类的decode方法，将ByteBuf到目标pojo的解码逻辑写入此方法，然后解码完成后，将解码后的Object加入到父类的`List<Object>`中。剩下的工作都由父类去完成。在流水线的处理过程中，父类知执行完子类decode后，会将`List<Object>`一个一个的传入下一个InBound入站处理器。
+
+**自定义Byte2IntegerDecoder整数解码器**
+
+这个示例是简单的整数解码器，其功能是将ByteBuf缓冲区中的字节，解码成Integer整数类型。根据上面的流程，我们现在进行实现：
 
 ### 13.8.2 常用的内置Decoder
 
