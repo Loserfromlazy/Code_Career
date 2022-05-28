@@ -2815,7 +2815,7 @@ Netty从底层Java通道读到ByteBuf二进制数据，传入Netty 通道的流�
 
 Decoder是一个Inbound入站处理器，解码器负责处理入站数据。它主要将上一个入站处理器的输入数据，进行数据解码或格式转换，然后发送到下一个入站处理器。一个标准的解码器是将输入类型为ByteBuf缓冲区的数据进行节码，输出一个Java POJO对象。netty内置了这个解码器（ByteToMessageDecoder）。Netty中的解码器都是入站处理器类型，几乎都直接或间接地实现了入站处理的超级接口ChannelInboundHandler。
 
-**ByteToMessageDecoder处理流程**
+#### **ByteToMessageDecoder处理流程**
 
 ByteToMessageDecoder是一个非常重要的解码器基类，它是一个抽象类，实现了解码器的基础逻辑和流程。ByteToMessageDecoder继承自ChannelInboundHandlerAdapter适配器，用于完成从ByteBuf到JavaPojo的解码。它的流程大概如下：
 
@@ -2830,19 +2830,205 @@ ByteToMessageDecoder是个抽象类，不能实例化对象，所以解码需要
 
 ByteToMessageDecoder子类要做的就是从入站ByteBuf解码出来的所有Object实例加入到父类的`List<Object>`中。如果要实现自己的解码器，首先要继承ByteToMessageDecoder然后实现其基类的decode方法，将ByteBuf到目标pojo的解码逻辑写入此方法，然后解码完成后，将解码后的Object加入到父类的`List<Object>`中。剩下的工作都由父类去完成。在流水线的处理过程中，父类知执行完子类decode后，会将`List<Object>`一个一个的传入下一个InBound入站处理器。
 
-**自定义Byte2IntegerDecoder整数解码器**
+#### **自定义Byte2IntegerDecoder整数解码器**
 
 这个示例是简单的整数解码器，其功能是将ByteBuf缓冲区中的字节，解码成Integer整数类型。根据上面的流程，我们现在进行实现：
+
+```java
+public class Byte2IntegerDecoder extends ByteToMessageDecoder {
+    @Override
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
+        while (in.readableBytes()>=4){//再读数据前，需要对数据进行验证是否可读，这里是4的原因是int为4字节
+            int i = in.readInt();
+            System.out.println("解码出一个整数"+i);
+            out.add(i);
+        }
+
+    }
+}
+```
+
+可以看到我们继承ByteToMessageDecoder后，实现了自己的解码逻辑：从buf中读取整形放入父类的集合中。有了自己的解码器之后，我们现在实现一个handler功能是读取上一站的入站数据，把它转换成整数，并且输出到Console控制台上，代码如下：
+
+```java
+public class IntegerProcessHandler extends ChannelInboundHandlerAdapter {
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        Integer integer = (Integer) msg;
+        System.out.println("整数"+integer);
+    }
+}
+```
+
+下面我们进行测试，这里使用我们之前介绍过的EmbeddedChannel，向里面放入我们自己的解码器和handler，然后向buffer中写入数据，在调用EmbeddedChannel将数据入站。这里调用writeInbound方法，模拟入站数据的写入，向嵌入式通道EmbeddedChannel写入100次ByteBuf入站缓冲；每一次写入仅仅包含一个整数。模拟入站数据，会被流水线上的两个入站处理器所接收和处理。接着，这些入站的二进制字节被解码成一个一个的整数，然后逐个地输出到控制台上。
+
+```java
+@Test
+public void Byte2IntegerDecoderTest(){
+    ChannelInitializer initializer = new ChannelInitializer() {
+        @Override
+        protected void initChannel(Channel ch) throws Exception {
+            ch.pipeline().addLast(new Byte2IntegerDecoder());
+            ch.pipeline().addLast(new IntegerProcessHandler());
+        }
+    };
+    EmbeddedChannel embeddedChannel = new EmbeddedChannel(initializer);
+    for (int i = 0; i < 100; i++) {
+        ByteBuf buffer = Unpooled.buffer();
+        buffer.writeInt(i);
+        embeddedChannel.writeInbound(buffer);
+    }
+}
+```
+
+运行结果：
+
+~~~
+解码出一个整数0
+整数0
+解码出一个整数1
+整数1
+解码出一个整数2
+...略
+~~~
+
+#### **ReplayingDecoder解码器**
+
+上面的自定义解码器有一个问题，那就是在读取时需要对ByteBuf的长度进行检查，如果有足够的字节，才进行整数的读取。这个工作其实可以交给Netty去做，使用ReplayingDecoder基类编写解码器，就不用进行长度检测了。
+
+ReplayingDecoder是ByteToMessageDecoder的子类，作用是：
+
+- 在读取ByteBuf缓冲区之前，需要检查是否有足够的字节
+- 有，则正常读取；没有则会停止解码
+
+我们现在将创建Byte2IntegerReplayDecoder类继承ReplayingDecoder：
+
+```java
+public class Byte2IntegerReplayDecoder extends ReplayingDecoder {
+    @Override
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
+        int i = in.readInt();
+        System.out.println("解码出一个整数" + i);
+        out.add(i);
+    }
+}
+```
+
+继承ReplayingDecoder实现一个解码器，就不用编写长度判断的代码。这是因为它的内部定义了一个新的二进制缓冲区类ReplayingDecoderBuffer，对ByteBuf缓冲区进行了装饰。该装饰器的特点是：在缓冲区真正读数据之前，首先进行长度的判断：如果长度合格，则读取数据；否则，抛出ReplayError。ReplayingDecoder捕获到ReplayError后，会留着数据，等待下一次IO事件到来时再读取。
+
+简单来讲，ReplayingDecoder对输入的ByteBuf进行了偷梁换柱，在将外部传入的ByteBuf缓冲区传给子类之前，换成了自己装饰过的ReplayingDecoderBuffer缓冲区。也就是说，在Byte2IntegerReplayDecoder中的decode方法所得到的实参in的值，它的直接类型并不是原始的ByteBuf类型，而是ReplayingDecoderBuffer类型。ReplayingDecoderBuffer类型继承了ByteBuf类型，包装了ByteBuf类型的大部分读取方法。ReplayingDecoderBuffer对ByteBuf类型的读取方法做什么样的功能增强呢？主要是进行二进制数据长度的判断，如果长度不足，则抛出异常。这个异常会反过来被ReplayingDecoder基类所捕获，将解码工作停掉。
+
+```java
+//ReplayingDecoderBuffer的readInt方法
+@Override
+public int readInt() {
+    checkReadableBytes(4);
+    return buffer.readInt();
+}
+```
+
+实质上，ReplayingDecoder的作用远远不止于进行长度判断，它更重要的作用是用于分包传输的应用场景。
+
+在底层通讯协议中，数据是分包进行传输的，也就是说一份数据可能会有很多个包，比如发送端发送4个字符串，接收端可能会接收到3个ByteBuf数据缓冲，如下图。在Java阻塞式IO中，由于读取不完整的信息就会一直阻塞，但是在NIO中如何保证接受的数据完整就成了一个大问题。在Netty中，理论上可以通过ReplayingDecoder解决。
+
+![image-20220528132700615](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220528132700615.png)
+
+这个图是以字符串为例，为了简单，我们下面用整形举个例子，这个例子的场景是整数序列解码，并且将它们两两一组进行相加，重点是，解码过程中需要保持发送时的次序。
+
+在实现这个例子前，我们先来了解ReplayingDecoder一个很重要的属性——state成员属性，因为要完成这个例子我们需要这个属性。该成员属性的作用：保存当前解码器在解码过程中的所处阶段。我们下面看一下ReplayingDecoder重要属性和构造方法：
+
+```java
+private final ReplayingDecoderByteBuf replayable = new ReplayingDecoderByteBuf();//缓冲区装饰类
+private S state;//解码过程中所处的阶段，类型是泛型，默认为Object
+private int checkpoint = -1;//读指针检查点，默认为-1
+
+/**
+ * Creates a new instance with no initial state (i.e: {@code null}).
+ */
+protected ReplayingDecoder() {
+    this(null);
+}
+
+/**
+ * Creates a new instance with the specified initial state.
+ */
+protected ReplayingDecoder(S initialState) {
+    state = initialState;
+}
+```
+
+在上面的Byte2IntegerReplayDecoder中我们继承时没有给泛型，但是我们要完成整数序列解码要用到泛型，或者说要用到state属性，因为整数序列的解码工作不可能通过一次完成，要完成两个整数的提取并相加就需要解码两次，每一次解码只能解码出一个整数，只有在第二个整数提取之后，然后才能求和，整个解码的工作才算完成，这里边存在了两个阶段，具体的阶段需要使用state来记录。代码实现如下：
+
+```java
+public class IntegerAddDecoder extends ReplayingDecoder<IntegerAddDecoder.PHASE> {
+
+    enum PHASE{
+        PHASE_1,PHASE_2;
+    }
+    public IntegerAddDecoder(){
+        //初始化父类的state属性为PHASE_1，表示现在是解码的第一个阶段
+        super(PHASE.PHASE_1);
+    }
+    private int first;
+    private int second;
+    @Override
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
+        switch (state()){
+            case PHASE_1:
+                //读取数据，第一步仅提取第一个整数
+                first = in.readInt();
+                //设置状态为第二步
+                checkpoint(PHASE.PHASE_2);
+                break;
+            case PHASE_2:
+                //读取第二个数据
+                second = in.readInt();
+                //第二步还需要计算两者的结果
+                Integer sum = first + second;
+                //和作为解码结果
+                out.add(sum);
+                //设置状态为第一步
+                checkpoint(PHASE.PHASE_1);
+                break;
+            default:
+                break;
+        }
+    }
+}
+```
+
+在上面这个例子中我们使用了两个父类的函数，分别是state()和checkpoint()，其中state()用于获取当前阶段的值而checkpoint()则用于更新当前状态。当然除了更新当前状态checkpoint()还可以用于设置“读指针检查点”。
+
+读指针检查点就是ReplayingDecoder的重要成员，用于暂存内部的ReplayingDecoderBuffer装饰器的readerIndex读指针，有点类似mark标记。当读数据时，一旦缓冲区可读的二进制数据不够，缓冲区装饰器ReplayingDecoderBuffer在抛出ReplayError异常之前，会把readerIndex读指针的值，还原到之前通过checkpoint（…）方法设置的“读指针检查点”。于是乎，在ReplayingDecoder下一次重新读取时，还会从“读指针检查点”的位置开始读取。
+
+回到上面的例子，该方法就是如此，每一次读取完成后，会切换阶段并且保持当前的读指针检查点，以便于可读数据不足后帮助读指针恢复。这个例子的测试方法与自定义Byte2IntegerDecoder整数解码器类似，这里就不再赘述。
+
+#### **字符串的分包解码器**
+
+#### **MessageToMessage解码器**
 
 ### 13.8.2 常用的内置Decoder
 
 ### 13.8.3 Encoder原理
+
+在Netty的业务处理完成后，业务处理的结果往往是某个Java POJO对象，需要编码成最终的ByteBuf二进制类型，通过流水线写入到底层的Java通道，这就需要用到Encoder编码器。
+
+编码器是一个Outbound出站处理器，负责处理“出站”数据；其次，编码器将上一站Outbound出站处理器传过来的输入（Input）数据进行编码或者格式转换，然后传递到下一站ChannelOutboundHandler出站处理器。
+
+编码器与解码器相呼应，Netty中的编码器负责将“出站”的某种Java POJO对象编码成二进制ByteBuf，或者转换成另一种Java POJO对象。编码器是ChannelOutboundHandler的具体实现类。一个编码器将出站对象编码之后，编码后数据将被传递到下一个ChannelOutboundHandler出站处理器，进行后面出站处理。由于最后只有ByteBuf才能写入到通道中去，因此可以肯定通道流水线上装配的第一个编码器一定是把数据编码成了ByteBuf类型（因为出栈顺序是从后向前的，可以见我在13.2.4中的图片）
+
+#### **MessageToByteEncoder**
+
+#### **MessageToMessageEncoder**
 
 ### 13.8.4 解码器与编码器的结合
 
 ## 13.9 序列化和反序列化
 
 ### 13.9.1 粘包和拆包
+
+
 
 ### 13.9.2 JSON协议通信
 
