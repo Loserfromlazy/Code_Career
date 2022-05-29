@@ -3302,7 +3302,43 @@ Netty提供了很多开箱即用的解码器，一般情况下能满足很多场
 
 #### **MessageToByteEncoder**
 
+MessageToByteEncoder是一个非常重要的编码器基类，它位于Netty的`io.netty.handler.codec`包中。MessageToByteEncoder的功能是将一个Java POJO对象编码成一个ByteBuf数据包。它是一个抽象类，仅仅实现了编码的基础流程，在编码过程中，通过调用encode抽象方法来完成。但是，它的encode编码方法是一个抽象方法，没有具体的encode编码逻辑实现，实现encode抽象方法的工作需要子类去完成。下面举个例子：
 
+```java
+public class Integer2ByteEncoder extends MessageToByteEncoder<Integer> {
+    @Override
+    protected void encode(ChannelHandlerContext ctx, Integer msg, ByteBuf out) throws Exception {
+        out.writeInt(msg);
+        System.out.println("integer:"+msg);
+    }
+}
+```
+
+上面的例子编码完成后将msg写入out，将输出的ByteBuf数据包发送到下一站。同理，下面给出测试类：
+
+```java
+@Test
+public void testIntegerToByteEncoder(){
+    ChannelInitializer initializer = new ChannelInitializer() {
+        @Override
+        protected void initChannel(Channel ch) throws Exception {
+            ch.pipeline().addLast(new Integer2ByteEncoder());
+        }
+    };
+    EmbeddedChannel embeddedChannel = new EmbeddedChannel(initializer);
+    for (int i = 0; i < 100; i++) {
+        //x
+        embeddedChannel.write(i);
+    }
+    embeddedChannel.flush();
+    //读取模拟出战数据包
+    ByteBuf byteBuf = embeddedChannel.readOutbound();
+    while (byteBuf!=null){
+        System.out.println(byteBuf.readInt());
+        byteBuf = embeddedChannel.readOutbound();
+    }
+}
+```
 
 #### **MessageToMessageEncoder**
 
