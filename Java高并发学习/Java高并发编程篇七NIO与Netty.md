@@ -3006,9 +3006,291 @@ public class IntegerAddDecoder extends ReplayingDecoder<IntegerAddDecoder.PHASE>
 
 #### **字符串的分包解码器**
 
+通过整数分包的例子，我们对ReplayingDecoder的分阶段解码已经有了一个很好的了解。现在我们就来了解字符串的分包传输。但是与整数不同的是，字符串的长度不固定，那么如何获取这个字符串的长度信息呢？在Netty中，可以采用Header-Content内容传输协议，该协议内容主要如下：
+
+1. 在协议的Head部分放置字符串的字节长度，Head部分用一个int描述即可。
+2. 在协议的Content部分，放置的是字符串的字节数组。
+
+在实际的传输过程中，一个Header—Content内容包，在发送端会被编码成一个ByteBuf包，到达对端后，可能被分为很多个ByteBuf接受包，对于这些参差不齐的ByteBuf就可以用ReplayingDecoder获得Header-Content内容，代码如下：
+
+首先创建字符串解码器，具体的过程与数字解码器相同，只是多读取了字符串的长度而已。
+
+```java
+public class StringReplayingDecoder extends ReplayingDecoder<StringReplayingDecoder.PHASE> {
+
+    enum PHASE{
+        PHASE_1,PHASE_2
+    }
+    private int length;
+    private byte[] inBytes;
+    public StringReplayingDecoder(){
+        super(PHASE.PHASE_1);
+    }
+
+    @Override
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
+        switch (state()){
+            case PHASE_1:
+                //读取字符串长度
+                length = in.readInt();
+                //新建byte数组
+                inBytes = new byte[length];
+                checkpoint(PHASE.PHASE_2);
+                break;
+            case PHASE_2:
+                //读取字符串内容
+                in.readBytes(inBytes,0,length);
+                //结果保存
+                out.add(new String(inBytes, StandardCharsets.UTF_8));
+                checkpoint(PHASE.PHASE_1);
+                break;
+            default:
+                break;
+        }
+    }
+}
+```
+
+然后我们可以编写一个打印字符串的handler类（用于模拟在流水线的数据）：
+
+```java
+public class StringProcessHandler extends ChannelInboundHandlerAdapter {
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        System.out.println("打印字符串: "+ msg);
+    }
+}
+```
+
+最后编写一个测试类：
+
+```java
+Test
+public void StringReplayingDecoderTest(){
+    ChannelInitializer initializer = new ChannelInitializer() {
+        @Override
+        protected void initChannel(Channel ch) throws Exception {
+            ch.pipeline().addLast(new StringReplayingDecoder());
+            ch.pipeline().addLast(new StringProcessHandler());
+        }
+    };
+    EmbeddedChannel embeddedChannel = new EmbeddedChannel(initializer);
+    Random random = new Random();
+    byte[] bytes = "发送的字符串".getBytes(StandardCharsets.UTF_8);
+    for (int i = 0; i < 100; i++) {
+        int nextInt = random.nextInt(3)+1;
+        ByteBuf buffer = Unpooled.buffer();
+        buffer.writeInt(bytes.length*nextInt);
+        for (int j = 0; j < nextInt; j++) {
+            buffer.writeBytes(bytes);
+        }
+        embeddedChannel.writeInbound(buffer);
+    }
+}
+```
+
+然而，在实际的开发中，不太建议继承这个类，原因如下：
+
+1. 不是所有的ByteBuf操作都被ReplayingDecoderBuffer装饰类所支持，可能有些ByteBuf方法在ReplayingDecoder的decode实现方法中被使用时就会抛出ReplayError异常。
+2. 在数据解码逻辑复杂的应用场景，ReplayingDecoder在解码速度上相对较差。因为在ByteBuf中长度不够时，ReplayingDecoder会捕获一个ReplayError异常，这时会把ByteBuf中的读指针还原到之前的读指针检查点（checkpoint），然后结束这次解析操作，等待下一次IO读事件。在网络条件比较糟糕时，一个数据包的解析逻辑会被反复执行多次，此时解析过程是一个消耗CPU的操作，所以解码速度上相对较差。所以，ReplayingDecoder更多的是应用于数据解析逻辑简单的场景
+
+所以我们现在用ByteToMessageDecoder来改写StringReplayingDecoder，代码如下：
+
+```java
+public class StringByteDecoder extends ByteToMessageDecoder {
+
+    @Override
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
+        //可读字节小于4，消息头没读满
+        if (in.readableBytes()<4){
+            return;
+        }
+        //在真正读取缓冲区消息前，调用markReaderIndex设置mark标记
+        in.markReaderIndex();
+        int length = in.readInt();
+        //如果剩余消息长度不够，需要reset指针
+        if (in.readableBytes()<length){
+            //读指针reset到消息头的readIndex位置处
+            in.resetReaderIndex();
+            return;
+        }
+        byte [] bytes = new byte[length];
+        in.readBytes(bytes, 0, length);
+        out.add(new String(bytes,StandardCharsets.UTF_8));
+    }
+}
+```
+
 #### **MessageToMessage解码器**
 
+上面的解码器都是将二进制ByteBuf转换成Pojo对象。实际上还存在着将Pojo对象转换成另一种Pojo对象的解码器，在这种应用场景下的Decoder解码器，需要继承`MessageToMessageDecoder<T>`类。其中泛型T就是指定入站消息的JavaPOJO类型。MessageToMessageDecode使用了模板模式，也有一个decode抽象方法。下面将给出一个将Integer转换成String的解码器实现：
+
+```java
+public class Int2StringDecoder extends MessageToMessageDecoder<Integer> {
+    @Override
+    protected void decode(ChannelHandlerContext ctx, Integer msg, List<Object> out) throws Exception {
+        out.add(String.valueOf(msg));
+    }
+}
+```
+
+测试类：
+
+```java
+@Test
+public void Byte2IntegerDecoderTest(){
+    ChannelInitializer initializer = new ChannelInitializer() {
+        @Override
+        protected void initChannel(Channel ch) throws Exception {
+            ch.pipeline().addLast(new IntegerAddDecoder());
+            ch.pipeline().addLast(new Int2StringDecoder());
+            ch.pipeline().addLast(new StringProcessHandler());
+        }
+    };
+    EmbeddedChannel embeddedChannel = new EmbeddedChannel(initializer);
+    for (int i = 0; i < 100; i++) {
+        ByteBuf buffer = Unpooled.buffer();
+        buffer.writeInt(i);
+        embeddedChannel.writeInbound(buffer);
+    }
+}
+```
+
 ### 13.8.2 常用的内置Decoder
+
+Netty提供了很多开箱即用的解码器，一般情况下能满足很多场景，下面学习几个常用的解码器：
+
+1. 固定长度数据包解码器—FixedLengthFrameDecoder
+
+   适用场景：每个接收到的数据包的长度，都是固定的，例如 100个字节。在这种场景下，只需要把这个解码器加到流水线中，它会把入站ByteBuf数据包拆分成一个个长度为100的数据包，然后发往下一个channelHandler入站处理器。（这里的一个数据包指的是一个ByteBuf）
+
+2. 行分割数据包解码器—LineBasedFrameDecoder
+
+   每个ByteBuf数据包，使用换行符（或者回车换行符）作为数据包的边界分割符。在这种场景下，只需要把这个LineBasedFrameDecoder解码器加到流水线中，Netty会使用换行分隔符，把ByteBuf数据包分割成一个一个完整的应用层ByteBuf数据包，再发送到下一站。下面给出示例：
+
+   ```java
+   public class NettyDecoder {
+       static String split = "\r\n";//发送\r\n 或者\n 都会进行解析
+       static String content= "hello world";
+   
+       @Test
+       public void testLineBasedFrameDecoder(){
+           ChannelInitializer initializer = new ChannelInitializer() {
+               @Override
+               protected void initChannel(Channel ch) throws Exception {
+                   //LineBasedFrameDecoder支持配置一个最大长度值，如果读取到最大值还没发现换行符就会抛出异常。
+                   ch.pipeline().addLast(new LineBasedFrameDecoder(1024));
+                   ch.pipeline().addLast(new StringDecoder());
+                   ch.pipeline().addLast(new StringProcessHandler());
+               }
+           };
+           EmbeddedChannel embeddedChannel = new EmbeddedChannel(initializer);
+           Random random = new Random();
+           for (int i = 0; i < 100; i++) {
+               int nextInt = random.nextInt(3)+1;
+               ByteBuf byteBuf = Unpooled.buffer();
+               for (int j = 0; j < nextInt; j++) {
+                   byteBuf.writeBytes(content.getBytes(StandardCharsets.UTF_8));
+               }
+               byteBuf.writeBytes(split.getBytes(StandardCharsets.UTF_8));
+               embeddedChannel.writeInbound(byteBuf);
+           }
+       }
+   
+   }
+   ```
+
+3. 自定义分隔符数据包解码器—DelimiterBasedFrameDecoder
+
+   DelimiterBasedFrameDecoder是LineBasedFrameDecoder按照行分割的通用版本。不同之处在于，这个解码器更加灵活，可以自定义分隔符，而不是局限于换行符。如果使用这个解码器，那么所接收到的数据包，末尾必须带上对应的分隔符。DelimiterBasedFrameDecoder解码器不仅可以使用换行符，还可以将其他的特殊字符作为数据包的分隔符，例如制表符“\t”。其构造方法如下：
+
+   ```java
+   public DelimiterBasedFrameDecoder(
+       int maxFrameLength, //解码的数据包的最大长度
+       boolean stripDelimiter, //解码后的数据包是否去掉分隔符，一般选择是
+       ByteBuf delimiter) {//分隔符
+       this(maxFrameLength, stripDelimiter, true, delimiter);
+   }
+   ```
+
+   这个的例子略，整体与上面的示例没有不同，可以根据上面的例子testLineBasedFrameDecoder自行修改。
+
+4. 自定义长度数据包解码器—LengthFieldBasedFrameDecoder
+
+   这是一种基于灵活长度的解码器。在ByteBuf数据包中，加了一个长度域字段，保存了原始数据包的长度。解码的时候，会按照这个长度进行原始数据包的提取。传输内容中的Length Field长度字段的值，是指存放在数据包中要传输内容的字节数。普通的基于Header-Content协议的内容传输，尽量用内置的LengthFieldBasedFrameDecoder来解码。
+
+   下面给出示例：
+
+   ```java
+   public class NettyDecoder {
+       static String content = "hello world";
+       @Test
+       public void testLengthFieldBasedFrameDecoder() {
+           //参数：1. maxFrameLength 发送数据包的最大长度，即一个数据包最大可发送1024个字节
+           //2.lengthFieldOffset 长度字段偏移量，指的是长度字段位于整个数据包内部字节数据中的下标索引值
+           //3.lengthFieldLength 长度字段所占的字节数。例如长度字段是一个int，则该字节位4
+           //4.lengthAdjustment 长度矫正值。加入协议中包含了长度字段，协议版本号、魔数等，那么解码时就需要进行长度矫正。
+           //长度矫正的计算公式：内容字段偏移量-长度字段偏移量-长度的字节数。在本例中为 4 - 0 - 4 = 0
+           //5.initialBytesToStrip丢弃的起始字节数。在有效的数据字段前面，如果还有一些其他字段的字节，最为最终解析的结果可以丢弃。
+           //比如，本例子中，前面有四个字节的长度字段，最终的结果不需要这个字段，所以可以丢弃。
+           LengthFieldBasedFrameDecoder decoder = new LengthFieldBasedFrameDecoder(1024, 0, 4, 0, 4);
+           ChannelInitializer initializer = new ChannelInitializer() {
+               @Override
+               protected void initChannel(Channel ch) throws Exception {
+                   ch.pipeline().addLast(decoder);
+                   ch.pipeline().addLast(new StringDecoder(StandardCharsets.UTF_8));
+                   ch.pipeline().addLast(new StringProcessHandler());
+               }
+           };
+           EmbeddedChannel embeddedChannel = new EmbeddedChannel(initializer);
+           Random random = new Random();
+           for (int i = 0; i < 100; i++) {
+               ByteBuf byteBuf = Unpooled.buffer();
+               String str = "第" + i + "次发送" + content;
+               byte[] bytes = str.getBytes(StandardCharsets.UTF_8);
+               byteBuf.writeInt(bytes.length);
+               byteBuf.writeBytes(bytes);
+               embeddedChannel.writeInbound(byteBuf);
+           }
+   
+           try {
+               Thread.sleep(Integer.MAX_VALUE);
+           } catch (InterruptedException e) {
+               e.printStackTrace();
+           }
+       }
+   
+   
+   }
+   ```
+
+   本例中的Head-Content的大小如下图所示：
+
+   ![image-20220529144137217](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220529144137217.png)
+
+   Head-Content协议是最为简单的内容传输协议。而在实际使用过程中，则没有那么简单，除了长度和内容，在数据包中还可能包含了其他字段，例如，包含了协议版本号：
+
+   ![image-20220529144820111](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220529144820111.png)
+
+   那么这个时候，构造函数参数该如何计算呢？参数计算如下：
+
+   1. maxFrameLength 可以为1024，自定
+   2. lengthFieldOffset  0，表示字段长度在整个数据包在第一个位置
+   3. lengthFieldLength 4，表示长度字段占四个字节
+   4. lengthAdjustment 2，计算方法：内容字段偏移量-长度字段偏移量-长度的字节数 = 6 - 0 - 4 = 2
+   5. initialBytesToStrip 6，最终的content字段需要抛弃前面的6个字节的长度和版本
+
+   我们再举个复杂的例子：
+
+   ![image-20220529145135992](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220529145135992.png)
+
+   这时参数计算如下：
+
+   1. maxFrameLength 可以为1024，自定
+   2. lengthFieldOffset  2，表示字段长度在整个数据包在第2个字节的位置
+   3. lengthFieldLength 4，表示长度字段占四个字节
+   4. lengthAdjustment 4，计算方法：内容字段偏移量-长度字段偏移量-长度的字节数 = 10 - 2 - 4 = 4
+   5. initialBytesToStrip 10，最终的content字段需要抛弃前面的10个字节的长度和版本和魔数
 
 ### 13.8.3 Encoder原理
 
@@ -3020,15 +3302,29 @@ public class IntegerAddDecoder extends ReplayingDecoder<IntegerAddDecoder.PHASE>
 
 #### **MessageToByteEncoder**
 
+
+
 #### **MessageToMessageEncoder**
 
+
+
 ### 13.8.4 解码器与编码器的结合
+
+在实际的开发中，由于数据的入站和出站关系紧密，因此编码器和解码器的关系很紧密。编码和解码更是一种紧密的、相互配套的关系。在流水线处理时，数据的流动往往一进一出，进来时解码，出去时编码。所以，在同一个流水线上，加了某种编码逻辑，常常需要加上一个相对应的解码逻辑。编码器和解码器，分开实现在两个不同的类中，导致的一个结果是，相互配套的编码器和解码器在加入到通道的流水线时，常常需要分两次添加。现在问题是：具有相互配套逻辑的编码器和解码器能否放在同一个类中呢？这就要用到Netty的新类型——Codec（编解码器）类型。
+
+#### **ByteToMessageCodec**
+
+
+
+#### **CombinedChannelDuplexHandler**
+
+
 
 ## 13.9 序列化和反序列化
 
 ### 13.9.1 粘包和拆包
 
-
+关于粘包和拆包详细内容可以见我的博客[NIO和Netty](https://www.cnblogs.com/yhr520/p/15384520.html)的**第三部分Netty的粘包和半包**，这里就不再重复整理一遍笔记了。
 
 ### 13.9.2 JSON协议通信
 
