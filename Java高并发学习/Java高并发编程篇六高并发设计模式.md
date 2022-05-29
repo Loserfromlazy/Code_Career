@@ -211,7 +211,7 @@ Master-Worker模式的核心思想为分而治之，Master角色负责接收和�
 
 Netty是基于Reactor模式的具体实现，体现了Master-Worker模式的思想。Netty的EventLoop（Reactor角色）可以对应到Master-Worker模式的Worker角色，而Netty的EventLoopGroup轮询组则可以对应到Master-Worker模式的Master角色。
 
-> 关于Netty的学习，可以参考本人的博客[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)
+> 关于Netty的学习，可以参考本人的博客[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)或者是我的下一篇学习笔记Java高并发编程篇七NIO与Netty
 
 ### 7.2.3 Nginx中的Master-Worker模式的实现
 
