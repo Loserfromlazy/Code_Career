@@ -3342,7 +3342,50 @@ public void testIntegerToByteEncoder(){
 
 #### **MessageToMessageEncoder**
 
+如果需要将POJO对象转换成POJO对象，那么需要继承另外一个Netty的重要编码器——MessageToMessageEncoder编码器，并实现它的encode抽象方法。在子类的encode方法实现中，完成原POJO类型到目标POJO类型的转换逻辑。在encode实现方法中，编码完成后，将解码后的目标对象加入到encode方法中的实参List输出容器即可。下面给出代码示例：
 
+```java
+public class String2IntegerEncoder extends MessageToMessageEncoder<String> {
+    @Override
+    protected void encode(ChannelHandlerContext ctx, String msg, List<Object> out) throws Exception {
+        final char[] chars = msg.toCharArray();
+        for (char aChar : chars) {
+            //ascii 48 是0的编码；57 是9的编码
+            if (aChar>=48 && aChar<=57){
+                final String s = String.valueOf(aChar);
+                out.add(Integer.valueOf(s));
+            }
+        }
+    }
+}
+```
+
+下面给出测试用例：
+
+```java
+@Test
+public void testMessageToMessageEncoder(){
+    ChannelInitializer initializer = new ChannelInitializer() {
+        @Override
+        protected void initChannel(Channel ch) throws Exception {
+            //流水线出站从后至前，出站时需要将Integer转换成ByteBuf
+            ch.pipeline().addLast(new Integer2ByteEncoder());
+            ch.pipeline().addLast(new String2IntegerEncoder());
+        }
+    };
+    EmbeddedChannel embeddedChannel = new EmbeddedChannel(initializer);
+    for (int i = 0; i < 100; i++) {
+        System.out.println("i am number"+i);
+        embeddedChannel.write("i am number"+i);
+    }
+    embeddedChannel.flush();
+    ByteBuf buf = embeddedChannel.readOutbound();
+    while (buf != null){
+        System.out.println("buf= "+buf.readInt());
+        buf = embeddedChannel.readOutbound();
+    }
+}
+```
 
 ### 13.8.4 解码器与编码器的结合
 
@@ -3350,27 +3393,181 @@ public void testIntegerToByteEncoder(){
 
 #### **ByteToMessageCodec**
 
+完成POJO到ByteBuf数据包的编解码器基类，叫做`ByteToMessageCodec<I>`，它是一个抽象类。从功能上说，继承它就等同于继承了ByteToMessageDecoder解码器和MessageToByteEncoder编码器这两个基类。编解码器ByteToMessageCodec同时包含了编码encode和解码decode两个抽象方法，这两个方法都需要我们自己实现.
 
+```java
+public class Byte2IntegerCodec extends ByteToMessageCodec<Integer> {
+    @Override
+    protected void encode(ChannelHandlerContext ctx, Integer msg, ByteBuf out) throws Exception {
+        out.writeInt(msg);
+        System.out.println("write msg,msg="+msg);
+    }
+
+    @Override
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
+        if (in.readableBytes()>=4){
+            final int i = in.readInt();
+            System.out.println("int:"+i);
+            out.add(i);
+        }
+    }
+}
+```
+
+同理，还有MessageToMessageCodec，这个实例略。
 
 #### **CombinedChannelDuplexHandler**
 
+上面的Codec是通过继承实现的，继承是需要将编码和解码强制放到一个类中，除此之外还可以通过组合的方式实现。Netty中提供了一个新的组合器CombinedChannelDuplexHandler基类。下面给出示例：
 
+```java
+public class IntegerHandler extends CombinedChannelDuplexHandler<Byte2IntegerDecoder,Integer2ByteEncoder> {
+    public IntegerHandler() {
+        super(new Byte2IntegerDecoder(),new Integer2ByteEncoder());
+    }
+}
+```
+
+仅仅只需要继承CombinedChannelDuplexHandler即可，不需要像ByteToMessageCodec那样，把编码逻辑和解码逻辑都挤在同一个类中了，还是复用原来的分开的编码器和解码器实现代码。总之，使用CombinedChannelDuplexHandler可以保证有了相反逻辑关系的encoder编码器和decoder解码器，既可以结合使用，又可以分开使用，十分方便。
 
 ## 13.9 序列化和反序列化
 
-### 13.9.1 粘包和拆包
+“序列化”和“反序列化”一定会涉及POJO的编码和格式化（Encoding & Format），目前我们可选择的编码方式有：
+
+- 使用JSON。将Java POJO对象转换成JSON结构化字符串。基于HTTP协议，在Web应用、移动开发方面等，这是常用的编码方式，因为JSON的可读性较强。但是它的性能稍差。
+- 基于XML。和JSON一样，数据在序列化成字节流之前都转换成字符串。可读性强，性能差，异构系统、Open API类型的应用中常用。
+- 使用Java内置的编码和序列化机制，可移植性强，性能稍差，无法跨平台（语言）。
+- 开源的二进制的序列化/反序列化框架，例如Apache Avro，Apache Thrift、Protobuf等。前面的两个框架和Protobuf相比，性能非常接近，而且设计原理如出一辙；其中Avro在大数据存储（RPC数据交换、本地存储）时比较常用；Thrift的亮点在于内置了RPC机制，所以在开发一些RPC交互式应用时，客户端和服务器端的开发与部署都非常简单。
+
+其中Protobuf是一个高性能、易扩展的序列化框架，性能比较高，其性能的有关的数据可以参看官方文档。Protobuf本身非常简单，易于开发，而且结合Netty框架，可以非常便捷地实现一个通信应用程序。反过来，Netty也提供了相应的编解码器，为Protobuf解决了有关Socket通信中“半包、粘包”等问题。
+
+### 13.9.1 粘包和半包
 
 关于粘包和拆包详细内容可以见我的博客[NIO和Netty](https://www.cnblogs.com/yhr520/p/15384520.html)的**第三部分Netty的粘包和半包**，这里就不再重复整理一遍笔记了。
 
+这里补充一下粘包和半包的底层过程：
+
+底层网络是以二进制字节报文的形式来传输数据的。
+
+- 读数据的过程大致为：当IO可读时，Netty会从底层网络将二进制数据读到ByteBuf缓冲区中，再交给Netty程序转成Java POJO对象。
+- 写数据的过程大致为：编码器将一个Java类型的数据转换成底层能够传输的二进制ByteBuf缓冲数据。
+
+在发送端Netty的应用层进程缓冲区，程序以ByteBuf为单位来发送数据，但是到了底层操作系统内核缓冲区，底层会按照协议的规范对数据包进行二次封装，封装成传输层TCP层的协议报文，再进行发送。在接收端收到传输层的二进制包后，首先复制到内核缓冲区，Netty读取ByteBuf时才复制到应用的用户缓冲区。
+
+在接收端，当Netty程序将数据从内核缓冲区复制到用户缓冲区的ByteBuf时，问题就来了：
+
+- 首先，每次读取底层缓冲的数据容量是有限制的，当TCP内核缓冲区的数据包比较大时，可能会将一个底层包分成多次ByteBuf进行复制，进而造成用户缓冲区读到的是半包。
+- 当TCP内核缓冲区的数据包比较小时，一次复制的却不止一个内核缓冲区包，进而造成用户缓冲区读到的是粘包
+
+基本思路是，在接收端，Netty程序需要根据自定义协议，将读取到的进程缓冲区ByteBuf，在应用层进行二次组装，重新组装我们应用层的数据包。接收端的这个过程通常也称为分包，或者叫做拆包。
+
+在Netty中分包的方法，主要有两种方法：
+
+1. 可以自定义解码器分包器：基于ByteToMessageDecoder或者ReplayingDecoder，定义自己的用户缓冲区分包器。
+2. 使用Netty内置的解码器。如可以使用Netty内置的LengthFieldBasedFrameDecoder自定义长度数据包解码器，对用户缓冲区ByteBuf进行正确的分包。
+
 ### 13.9.2 JSON协议通信
 
-### 13.9.3 Protobuf协议通信
+现在的Web应用基本上都会使用到JSON，所以关于JSON的介绍这里就不再赘述了。Java处理JSON数据有三个比较流行的开源类库有：阿里的FastJson、谷歌的Gson和开源社区的Jackson。关于这三个类库和API的使用这里也不过多介绍。我们这里仅学习Netty的关于JSON的相关知识。
+
+#### **JSON的编解码器**
+
+JSON本质上其实也就是字符串，所以传时JSON与传输普通文本其实是一样的，在Netty的Head-Content协议中，解码过程如下：
+
+先使用Netty内置的LengthFieldBasedFrameDecoder解码Head-Content二进制数据包，解码出Content字段的二进制内容。然后使用StringDecoder字符串解码器（Netty内置的解码器）将二进制内容解码成JSON字符串。最后，使用自定义业务解码器JsonMsgDecoder解码器将JSON字符串解码成自定义的POJO业务对象。
+
+同理编码过程如下：
+
+先使用Netty内置StringEncoder编码器将JSON字符串编码成二进制字节数组。然后使用Netty内置LengthFieldPrepender编码器将二进制字节数组编码成Head-Content二进制数据包。
+
+> Netty内置LengthFieldPrepender编码器的作用：在数据包的前面加上内容的二进制字节数组的长度。这个编码器和LengthFieldBasedFrameDecoder解码器是一对，常常配套使用。
+>
+> LengthFieldPrepender的构造函数如下：
+>
+> ```java
+> public LengthFieldPrepender(int lengthFieldLength) {
+>     this(lengthFieldLength, false);
+> }
+> //第一个参数lengthFieldLength表示Head长度字段所占用的字节数，
+> //第二个参数lengthIncludesLengthFieldLength表示Head字段的总长度值是否包含长度字段自身的字节数
+> public LengthFieldPrepender(int lengthFieldLength, boolean lengthIncludesLengthFieldLength) {
+>     this(lengthFieldLength, 0, lengthIncludesLengthFieldLength);
+> }
+> ```
+
+#### **JSON的传输案例**
+
+下面给出案例，服务端接收客户端的数据包，解码成JSON，然后转换成POJO，客户端将POJO转换成JSON字符串，编码后发送到服务器端。
+
+
+
+### 13.9.3 Protobuf协议通信使用
+
+#### **介绍**
+
+Protobuf全称是Google Protocol Buffer，Google提出的一种数据交换的格式，是一套类似JSON或者XML的数据传输格式和规范，用于不同应用或进程之间进行通信。Protobuf具有以下特点：
+
+- 语言无关，平台无关
+
+  Protobuf支持Java、 C++,、Python、JavaScript等多种语言，支持跨多个平台。
+
+- 高效
+
+  比XML更小（3~10倍），更快（20 ~ 100倍），更为简单。
+
+- 扩展性，兼容性好
+
+  可以更新数据结构，而不影响和破坏原有的旧程序。
+
+是Protobuf更加适合于高性能、快速响应的数据传输应用场景，它是一种二进制的协议，本身不具有可读性，只有反序列化后才能可读，正因为二进制所以序列化后体积比JSON和XML小，更适合高性能的通信服务器。微信的传输协议就采用了Protobuf协议。
+
+#### **控制台生成POJO和Builder**
+
+我们先编写一个proto文件：
+
+~~~protobuf
+//头部声明
+syntax = "proto3";
+package com.learn.netty.protocol;
+//开始Java选项配置
+option java_package = "com.learn.netty.protocol";
+option java_outer_classname = "MsgProtos";
+//消息定义
+message Msg{
+	uint32 id =1;
+	string content = 2;
+}
+~~~
+
+在“proto”文件中，使用message关键字来定义消息的结构体。在生成“proto”对应的Java代码时，每个具体的消息结构体将对应于一个最终的Java POJO类。结构体的字段对应到POJO类的属性。
+
+在编写完proto文件后我们可以利用文件生成POJO和Builder，proto有两种方式控制台命令和maven插件。一般使用maven插件，当然我们这里也介绍一下命令行的方式。
+
+想使用首先要安装protobuf，官方Github下载对应的安装包，我们这里就以windows为例，下载完后解压，**然后将bin目录配置到环境变量中**，解压完后如下图所示：
+
+![image-20220530171803401](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220530171803401.png)
+
+然后我们输入命令`protoc.exe --java_out=. 1.proto `生成Java类：其中`--java_out=.`表示Java类的输出路径是当前路径，1.proto是我们编写好的proto文件
+
+![image-20220530172056503](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220530172056503.png)
+
+#### **maven插件生成POJO和Builder**
+
+#### **Protobuf的序列化和反序列化示例**
 
 ### 13.9.4 Protobuf编码解码实践
 
+#### **Netty内置的Protobuf基础编解码器**
+
+#### **Protobuf传输案例**
+
 ### 13.9.5 Protobuf协议语法
 
+
+
 ### 13.9.6 序列化反序列化、编码解码之间的关系
+
+
 
 
 
