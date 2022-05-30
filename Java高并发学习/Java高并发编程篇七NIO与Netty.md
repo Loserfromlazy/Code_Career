@@ -3553,19 +3553,105 @@ message Msg{
 
 #### **maven插件生成POJO和Builder**
 
+但是更加常用的是Maven插件，使用protobuf-maven-plugin插件，可以非常方便的生成消息的POJO类和Builder的Java代码。具体操作如下：
+
+先在pom中增加插件配置：
+
+```xml
+<plugin>
+    <groupId>org.xolstice.maven.plugins</groupId>
+    <artifactId>protobuf-maven-plugin</artifactId>
+    <version>0.5.0</version>
+    <extensions>true</extensions>
+    <configuration>
+        <!--protobuf 文件路径-->
+        <protoSourceRoot>
+            ${project.basedir}/protobuf
+        </protoSourceRoot>
+        <!--目标路径-->
+        <outputDirectory>${project.build.sourceDirectory}</outputDirectory>
+        <!--设置是否在生成Java文件前清空outputDirectory文件-->
+        <clearOutputDirectory>false</clearOutputDirectory>
+        <!--临时目录-->
+        <temporaryProtoFileDirectory>
+            ${project.build.sourceDirectory}/proto-temp
+        </temporaryProtoFileDirectory>
+        <!--protoc可执行文件路径-->
+        <protocExecutable>
+            ${project.basedir}/protobuf/protoc3.6.1.exe
+        </protocExecutable>
+    </configuration>
+    <executions>
+        <execution>
+            <goals>
+                <goal>compile</goal>
+                <goal>test-compile</goal>
+            </goals>
+        </execution>
+    </executions>
+</plugin>
+```
+
 #### **Protobuf的序列化和反序列化示例**
+
+
 
 ### 13.9.4 Protobuf编码解码实践
 
 #### **Netty内置的Protobuf基础编解码器**
 
+Netty默认支持Protobuf的编码与解码，内置了一套基础的Protobuf编码和解码器。Netty内置的基础Protobuf编码器/解码器为：ProtobufEncoder编码器和ProtobufDecoder解码器。此外，还提供了一组简单的解决半包问题的编码器和解码器。
+
+1. ProtobufEncoder编码器
+
+   这个解码器实现逻辑非常简单，直接使用了Protobuf POJO类实例的toByteArray()方法将自身编码成二进制字节，然后放入Netty的Bytebuf缓冲区，发送到下一站，源码如下：
+
+   ```java
+   @Sharable
+   public class ProtobufEncoder extends MessageToMessageEncoder<MessageLiteOrBuilder> {
+       @Override
+       protected void encode(ChannelHandlerContext ctx, MessageLiteOrBuilder msg, List<Object> out)
+               throws Exception {
+           if (msg instanceof MessageLite) {
+               out.add(wrappedBuffer(((MessageLite) msg).toByteArray()));
+               return;
+           }
+           if (msg instanceof MessageLite.Builder) {
+               out.add(wrappedBuffer(((MessageLite.Builder) msg).build().toByteArray()));
+           }
+       }
+   }
+   ```
+
+2. ProtobufDecoder解码器
+
+   ProtobufDecoder与ProtobufEncoder相互对应，只不过使用的时候，ProtobufDecoder需要指定一个Protobuf POJO类实例，作为解码的原型参考，解码时根据原型实例找到对应的Parser解析器，将二进制字节解码成Protobuf POJO类实例。在Java NIO通信中，仅仅使用以上这组编码器和解码器，传输过程中会存在粘包/半包的问题。Netty也提供了配套的Head-Content类型的Protobuf编码器和解码器，在二进制码流之前加上二进制字节数组的长度。
+
+3. ProtobufVarint32LengthFieldPrepender长度编码器
+
+   这个编码器的作用是，在ProtobufEncoder生成的字节数组之前，前置一个varint32数字，表示序列化的二进制字节数量或者长度
+
+4. ProtobufVarint32FrameDecoder长度解码器
+
+   ProtobufVarint32FrameDecoder和ProtobufVarint32LengthFieldPrepender相互对应，其作用是，根据数据包中长度域（varint32类型）中的长度值，解码一个足额的字节数组，然后将字节数组交给下一站的解码器ProtobufDecoder。varint32是一种紧凑的表示数字的方法，它不是一种固定长度（如32位）的数字类型。varint32它用一个或多个字节来表示一个数字，值越小的数字，使用的字节数越少，值越大使用的字节数越多。varint32根据值的大小自动进行收缩，这能减少用于保存长度的字节数。也就是说，varint32与int类型的最大区别是：varint32用一个或多个字节来表示一个数字，而int是固定长度的数字。varint32不是固定长度，所以为了更好地减少通信过程中的传输量，消息头中的长度尽量采用varint格式。
+
 #### **Protobuf传输案例**
+
+
 
 ### 13.9.5 Protobuf协议语法
 
 
 
 ### 13.9.6 序列化反序列化、编码解码之间的关系
+
+#### **序列化和反序列化的原理**
+
+
+
+#### **编码和解码的原理**
+
+
 
 
 
