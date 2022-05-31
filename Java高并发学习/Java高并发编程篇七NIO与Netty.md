@@ -3495,9 +3495,11 @@ JSON本质上其实也就是字符串，所以传时JSON与传输普通文本其
 > }
 > ```
 
-#### **JSON的传输案例**
+#### **JSON的传输案例 todo**
 
-下面给出案例，服务端接收客户端的数据包，解码成JSON，然后转换成POJO，客户端将POJO转换成JSON字符串，编码后发送到服务器端。
+下面给出案例，服务端接收客户端的数据包，解码成JSON，然后转换成POJO，客户端将POJO转换成JSON字符串，编码后发送到服务器端。当然我们这里的服务端只有InBound处理器，也就是说不会收到消息后不会有消息到对端。
+
+
 
 
 
@@ -3561,25 +3563,14 @@ message Msg{
 <plugin>
     <groupId>org.xolstice.maven.plugins</groupId>
     <artifactId>protobuf-maven-plugin</artifactId>
-    <version>0.5.0</version>
-    <extensions>true</extensions>
-    <configuration>
-        <!--protobuf 文件路径-->
-        <protoSourceRoot>
-            ${project.basedir}/protobuf
-        </protoSourceRoot>
-        <!--目标路径-->
-        <outputDirectory>${project.build.sourceDirectory}</outputDirectory>
-        <!--设置是否在生成Java文件前清空outputDirectory文件-->
+    <version>0.6.1</version>
+
+    <configuration><!-- proto文件目录 -->
+        <protoSourceRoot>${project.basedir}/src/main/proto</protoSourceRoot>
+        <!-- 生成的Java文件目录 -->
+        <outputDirectory>${project.basedir}/src/main/java/</outputDirectory>
         <clearOutputDirectory>false</clearOutputDirectory>
-        <!--临时目录-->
-        <temporaryProtoFileDirectory>
-            ${project.build.sourceDirectory}/proto-temp
-        </temporaryProtoFileDirectory>
-        <!--protoc可执行文件路径-->
-        <protocExecutable>
-            ${project.basedir}/protobuf/protoc3.6.1.exe
-        </protocExecutable>
+        <!--<outputDirectory>${project.build.directory}/generated-sources/protobuf</outputDirectory>-->
     </configuration>
     <executions>
         <execution>
@@ -3592,7 +3583,42 @@ message Msg{
 </plugin>
 ```
 
-#### **Protobuf的序列化和反序列化示例**
+然后再pom中增加依赖：
+
+```xml
+<dependency>
+    <groupId>com.google.protobuf</groupId>
+    <artifactId>protobuf-java</artifactId>
+    <version>3.19.1</version>
+</dependency>
+```
+
+然后我们再proto文件目录中将之前的文件拷贝进去：
+
+```protobuf
+syntax = "proto3";
+package com.learn.protocol;
+
+option java_package  = "com.learn.protobuf.protocol";
+option java_outer_classname = "MsgProtos";
+
+message Msg{
+ uint32 id =1;
+ string content = 2;
+}
+```
+
+目录结构如下：
+
+![image-20220531104900396](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220531104900396.png)
+
+然后我们使用插件进行编译：
+
+![image-20220531104925026](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220531104925026.png)
+
+这时再去看生成目录下就有文件了，我这里是protocol包下
+
+#### **Protobuf的序列化和反序列化示例 todo**
 
 
 
@@ -3635,11 +3661,15 @@ Netty默认支持Protobuf的编码与解码，内置了一套基础的Protobuf�
 
    ProtobufVarint32FrameDecoder和ProtobufVarint32LengthFieldPrepender相互对应，其作用是，根据数据包中长度域（varint32类型）中的长度值，解码一个足额的字节数组，然后将字节数组交给下一站的解码器ProtobufDecoder。varint32是一种紧凑的表示数字的方法，它不是一种固定长度（如32位）的数字类型。varint32它用一个或多个字节来表示一个数字，值越小的数字，使用的字节数越少，值越大使用的字节数越多。varint32根据值的大小自动进行收缩，这能减少用于保存长度的字节数。也就是说，varint32与int类型的最大区别是：varint32用一个或多个字节来表示一个数字，而int是固定长度的数字。varint32不是固定长度，所以为了更好地减少通信过程中的传输量，消息头中的长度尽量采用varint格式。
 
-#### **Protobuf传输案例**
+#### **Protobuf传输案例 todo**
 
 
 
 ### 13.9.5 Protobuf协议语法
+
+在Protobuf中，通信协议的格式是通过“.proto”文件定义的。一个`.proto`文件有两大组成部分：头部声明、消息结构体的定义。头部声明的部分，主要包含了协议的版本、包名、特定语言的选项设置等；消息结构体部分，可以定义一个或者多个消息结构体。
+
+
 
 
 
@@ -3647,7 +3677,7 @@ Netty默认支持Protobuf的编码与解码，内置了一套基础的Protobuf�
 
 #### **序列化和反序列化的原理**
 
-
+在之前的分布式Java程序中，需要进行远程调用，把本地的结果对象通过网络传输到远程的服务。比如客户端调用服务端的用户查询接口（API），服务端查询到Pojo对象后通过远程调用把查询的结果通过TCP连接传输到客户端。在TCP连接上只能通过数据包传输二进制字节流
 
 #### **编码和解码的原理**
 
