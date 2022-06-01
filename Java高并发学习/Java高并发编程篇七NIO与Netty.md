@@ -3495,13 +3495,152 @@ JSON本质上其实也就是字符串，所以传时JSON与传输普通文本其
 > }
 > ```
 
-#### **JSON的传输案例 todo**
+#### **JSON的传输案例**
 
 下面给出案例，服务端接收客户端的数据包，解码成JSON，然后转换成POJO，客户端将POJO转换成JSON字符串，编码后发送到服务器端。当然我们这里的服务端只有InBound处理器，也就是说不会收到消息后不会有消息到对端。
 
 
 
+首先编写传输的消息实体类：
 
+```java
+@Data
+public class JsonMsg {
+    //id Field(域)
+    private int id;
+    //content Field(域)
+    private String content = "Json测试消息";
+
+    public static JsonMsg parseFromJson(String json) {
+        return JSONObject.parseObject(json, JsonMsg.class);
+    }
+
+    public String convertToJson() {
+        return JSONObject.toJSONString(this);
+    }
+
+    public JsonMsg(int id) {
+        this.id = id;
+    }
+
+    public JsonMsg() {
+        this.id = RandomUtil.randomInt(100);
+    }
+
+}
+```
+
+然后编写自定义服务端业务处理Handler：
+
+```java
+public class JsonMsgHandler extends ChannelInboundHandlerAdapter {
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        String json = (String) msg;
+        JsonMsg jsonMsg = JsonMsg.parseFromJson(json);
+        System.out.println("收到一个数据包："+jsonMsg);
+    }
+}
+```
+
+然后编写服务端代码：
+
+```java
+public class JsonServer {
+    public void start() {
+        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        ServerBootstrap serverBootstrap = new ServerBootstrap();
+        try {
+            serverBootstrap
+                    .group(bossGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .localAddress(8999)
+                    .option(ChannelOption.SO_KEEPALIVE, true)
+                    .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                    .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(1024, 0, 4, 0, 4));
+                            ch.pipeline().addLast(new StringDecoder(StandardCharsets.UTF_8));
+                            ch.pipeline().addLast(new JsonMsgHandler());
+                        }
+                    });
+            ChannelFuture channelFuture = serverBootstrap.bind().sync();
+            final ChannelFuture closeFuture = channelFuture.channel().closeFuture();
+            closeFuture.sync();
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+        }
+    }
+
+    public static void main(String[] args) {
+        new JsonServer().start();
+    }
+}
+```
+
+然后编写客户端代码：java
+
+
+
+```
+public class JsonClient {
+    static String content = "发送测试数据";
+    public void start(){
+        Bootstrap bootstrap = new Bootstrap();
+        EventLoopGroup workGroup = new NioEventLoopGroup();
+        try {
+            bootstrap.group(workGroup)
+                    .channel(NioSocketChannel.class)
+                    .remoteAddress("localhost",8999)
+                    .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                    .handler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ch.pipeline().addLast(new LengthFieldPrepender(4));
+                            ch.pipeline().addLast(new StringEncoder(StandardCharsets.UTF_8));
+                        }
+                    });
+            ChannelFuture future = bootstrap.connect();
+            future.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture future) throws Exception {
+                    if (future.isSuccess()){
+                        System.out.println("连接成功");
+                    }else {
+                        System.out.println("连接失败");
+                    }
+                }
+            });
+            future.sync();
+            Channel channel = future.channel();
+            for (int i = 0; i < 100; i++) {
+                JsonMsg msg = new JsonMsg();
+                msg.setId(i);
+                msg.setContent("发送测试数据");
+                channel.writeAndFlush(msg.convertToJson());
+            }
+            channel.flush();
+
+            ChannelFuture closeFuture = channel.closeFuture();
+            closeFuture.sync();
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            workGroup.shutdownGracefully();
+        }
+    }
+
+    public static void main(String[] args) {
+        new JsonClient().start();
+    }
+}
+```
 
 ### 13.9.3 Protobuf协议通信使用
 
