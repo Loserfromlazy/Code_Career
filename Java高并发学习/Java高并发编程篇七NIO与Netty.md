@@ -3757,9 +3757,85 @@ message Msg{
 
 这时再去看生成目录下就有文件了，我这里是protocol包下
 
-#### **Protobuf的序列化和反序列化示例 todo**
+#### Protobuf的序列化和反序列化示例
 
+序列化和反序列化之前需要使用Builder构造者构建POJO消息对象
 
+Protobuf为每个message消息结构体生成的Java类中，包含了一个POJO类、一个Builder类。构造POJO消息，首先使用POJO类的newBuilder静态方法获得一个Builder构造者，其次POJO每一个字段的值，需要通过Builder构造者的setter方法去设置。字段值设置完成之后，使用构造者的build()方法构造出POJO消息对象。示例代码如下：
+
+```java
+@SpringBootTest
+class ProtobufApplicationTests {
+    public static MsgProtos.Msg buildMsg(){
+        final MsgProtos.Msg.Builder builder = MsgProtos.Msg.newBuilder();
+        builder.setId(1001);
+        builder.setContent("测试数据");
+        return builder.build();
+    }
+}
+```
+
+构建完消息对象后就需要进行序列化，以下是三种序列化和反序列化的三种方式：
+
+1. 序列化和反序列化第一种方式
+
+   这种方式主要是通过Protobuf的POJO对象的toByteArray方法将POJO对象转换成字节数组，然后调用Protobuf的POJO对象的parseFrom进行反序列化：测试方法如下：
+
+   ```java
+   @Test
+   public void SAD1() throws IOException {
+       MsgProtos.Msg msg = buildMsg();
+       //将对象序列化为二进制数组
+       byte[] bytes = msg.toByteArray();
+       ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+       outputStream.write(bytes);
+       //反序列化
+       byte[] byteArray = outputStream.toByteArray();
+       MsgProtos.Msg msgGet = MsgProtos.Msg.parseFrom(byteArray);
+       System.out.println(msgGet.getId());
+       System.out.println(msgGet.getContent());
+   }
+   ```
+
+2. 序列化和反序列化第二种方式
+
+   第二种方式是通过调用Protobuf生成的POJO对象的writeTo方法将POJO对象的二进制字节写出到输出流。通过调用Protobuf生成的POJO对象的parseFrom方法，Protobuf从输入流中读取二进制码然后反序列化。这种方式在阻塞式场景中是没问题的，但是这种方式在异步操作的NIO应用场景中，存在粘包/半包的问题。下面是示例：
+
+   ```java
+   @Test
+   public void SAD2() throws IOException {
+       MsgProtos.Msg msg = buildMsg();
+       //将对象序列化为二进制码流
+       ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+       msg.writeTo(outputStream);
+       ByteArrayInputStream inputStream = new ByteArrayInputStream(outputStream.toByteArray());
+   
+       //从二进制码流反序列化到protobuf对象
+       MsgProtos.Msg msgGet = MsgProtos.Msg.parseFrom(inputStream);
+       System.out.println(msgGet.getId());
+       System.out.println(msgGet.getContent());
+   }
+   ```
+
+3. 序列化和反序列化第三种方式
+
+   这种方式通过调用Protobuf生成的POJO对象的writeDelimitedTo（OutputStream）方法在序列化的字节码之前添加了字节数组的长度。这一点类似于前面介绍的Head-Content协议，只不过Protobuf做了优化，长度的类型不是固定长度的int类型，而是可变长度varint32类型。
+
+   ```java
+   @Test
+   public void SAD3() throws IOException {
+       MsgProtos.Msg msg = buildMsg();
+       //将对象序列化为二进制码流
+       ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+       msg.writeDelimitedTo(outputStream);
+       ByteArrayInputStream inputStream = new ByteArrayInputStream(outputStream.toByteArray());
+   
+       //从二进制码流反序列化到protobuf对象
+       MsgProtos.Msg msgGet = MsgProtos.Msg.parseDelimitedFrom(inputStream);
+       System.out.println(msgGet.getId());
+       System.out.println(msgGet.getContent());
+   }
+   ```
 
 ### 13.9.4 Protobuf编码解码实践
 
@@ -3800,9 +3876,133 @@ Netty默认支持Protobuf的编码与解码，内置了一套基础的Protobuf�
 
    ProtobufVarint32FrameDecoder和ProtobufVarint32LengthFieldPrepender相互对应，其作用是，根据数据包中长度域（varint32类型）中的长度值，解码一个足额的字节数组，然后将字节数组交给下一站的解码器ProtobufDecoder。varint32是一种紧凑的表示数字的方法，它不是一种固定长度（如32位）的数字类型。varint32它用一个或多个字节来表示一个数字，值越小的数字，使用的字节数越少，值越大使用的字节数越多。varint32根据值的大小自动进行收缩，这能减少用于保存长度的字节数。也就是说，varint32与int类型的最大区别是：varint32用一个或多个字节来表示一个数字，而int是固定长度的数字。varint32不是固定长度，所以为了更好地减少通信过程中的传输量，消息头中的长度尽量采用varint格式。
 
-#### **Protobuf传输案例 todo**
+#### **Protobuf传输案例**
 
+这个案例整体上和JSON的案例差不多，下面给出代码：
 
+```java
+public class ProtobufServer {
+
+    public void start(){
+        ServerBootstrap serverBootstrap = new ServerBootstrap();
+        EventLoopGroup bossGroup = new NioEventLoopGroup();
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        try {
+            serverBootstrap
+                    .group(bossGroup,workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .localAddress(8999)
+                    .option(ChannelOption.SO_KEEPALIVE, true)
+                    .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                    .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+            serverBootstrap.childHandler(new ChannelInitializer<SocketChannel>() {
+                @Override
+                protected void initChannel(SocketChannel ch) throws Exception {
+                    //protobufDecoder仅负责编码，不支持读半包，所以在之前要有读半包处理器。
+                    //三种方式：
+                    // 使用netty提供ProtobufVarint32FrameDecoder
+                    // 继承netty提供的通用半包处理器 LengthFieldBasedFrameDecoder
+                    // 继承ByteToMessageDecoder类，自己处理半包
+                    ch.pipeline().addLast(new ProtobufVarint32FrameDecoder());
+                    ch.pipeline().addLast(new ProtobufDecoder(MsgProtos.Msg.getDefaultInstance()));
+                    ch.pipeline().addLast(new MyProtoHandler());
+                }
+            });
+            ChannelFuture channelFuture = serverBootstrap.bind().sync();
+            System.out.println(" 服务器启动成功，监听端口: " + channelFuture.channel().localAddress());
+            ChannelFuture closeFuture = channelFuture.channel().closeFuture();
+            closeFuture.sync();
+        }catch (Exception e){
+            e.printStackTrace();
+        }finally {
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+        }
+
+    }
+
+    static class MyProtoHandler extends ChannelInboundHandlerAdapter {
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+            MsgProtos.Msg protoMsg = (MsgProtos.Msg) msg;
+            System.out.println("收到一个 MsgProtos.Msg 数据包 :");
+            System.out.println("protoMsg.getId()=" + protoMsg.getId());
+            System.out.println("protoMsg.getContent()=" + protoMsg.getContent());
+        }
+    }
+
+    public static void main(String[] args) {
+        new ProtobufServer().start();
+    }
+}
+```
+
+```java
+public class ProtobufClient {
+    static String content = "测试消息";
+
+    public void start() {
+        Bootstrap bootstrap = new Bootstrap();
+        //创建reactor 线程组
+        EventLoopGroup workerLoopGroup = new NioEventLoopGroup();
+
+        try {
+            bootstrap.group(workerLoopGroup);
+            bootstrap.channel(NioSocketChannel.class);
+            bootstrap.remoteAddress("127.0.0.1", 8999);
+            bootstrap.option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+
+            bootstrap.handler(new ChannelInitializer<SocketChannel>() {
+                @Override
+                protected void initChannel(SocketChannel ch) throws Exception {
+                    ch.pipeline().addLast(new ProtobufVarint32LengthFieldPrepender());
+                    ch.pipeline().addLast(new ProtobufEncoder());
+                }
+            });
+            ChannelFuture f = bootstrap.connect();
+            f.addListener((ChannelFuture futureListener) ->
+            {
+                if (futureListener.isSuccess()) {
+                    System.out.println("客户端连接成功!");
+
+                } else {
+                    System.out.println("客户端连接失败!");
+                }
+
+            });
+            f.sync();
+            Channel channel = f.channel();
+            //发送 Protobuf 对象
+            for (int i = 0; i < 1000; i++) {
+                MsgProtos.Msg user = build(i, i + "->" + content);
+                channel.writeAndFlush(user);
+                System.out.println("当前报文个数" + i);
+            }
+            channel.flush();
+            ChannelFuture closeFuture = channel.closeFuture();
+            closeFuture.sync();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            workerLoopGroup.shutdownGracefully();
+        }
+
+    }
+
+    //构建ProtoBuf对象
+    public MsgProtos.Msg build(int id, String content) {
+        MsgProtos.Msg.Builder builder = MsgProtos.Msg.newBuilder();
+        builder.setId(id);
+        builder.setContent(content);
+        return builder.build();
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        new ProtobufClient().start();
+    }
+}
+```
 
 ### 13.9.5 Protobuf协议语法
 
