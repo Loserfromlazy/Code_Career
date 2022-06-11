@@ -4006,7 +4006,67 @@ public class ProtobufClient {
 
 ### 13.9.5 Protobuf协议语法
 
-在Protobuf中，通信协议的格式是通过“.proto”文件定义的。一个`.proto`文件有两大组成部分：头部声明、消息结构体的定义。头部声明的部分，主要包含了协议的版本、包名、特定语言的选项设置等；消息结构体部分，可以定义一个或者多个消息结构体。
+在Protobuf中，通信协议的格式是通过“.proto”文件定义的。一个`.proto`文件有两大组成部分：头部声明、消息结构体的定义。头部声明的部分，主要包含了协议的版本、包名、特定语言的选项设置等；消息结构体部分，可以定义一个或者多个消息结构体。在Java中用protobuf编译器编译后，会生成Java中的POJO类和Builder类，然后就可以进行获取设置字段和消息序列化和反序列化。
+
+**proto文件头部声明**
+
+~~~protobuf
+//开始声明
+syntax = "proto3";
+package com.myim.protocol
+//开始java选项配置
+option java_package = "com.myim.protocol"
+option java_outer_classname = "MsgProto"; 
+~~~
+
+下面来进行介绍：
+
+1. syntax版本号
+
+   对于proto文件，第一个非空非注释行必须注明protobuf语法版本，默认是proto2
+
+2. package包
+
+   和Java类似，protobuf通过package指定包名，避免消息冲突（即同名但包名不同可共存）。
+
+   通过package，还可以实现消息的引用，比如在proto文件中引用其他proto文件的实体类：
+
+   ```protobuf
+   //第一个文件 ，其他略...
+   package com.myim.protocol
+   message Msg{
+   	//...
+   }
+   //第二个文件 ，其他略...
+   package com.myim.protocol
+   message Msg{
+   	com.111.Msg =1;
+   }
+   ```
+
+3. option配置
+
+   不是所有的option 配置选项都会生效，option选项是否生效与“.proto”文件使用的一些特定的语言场景有关。在Java语言中，以“java_”打头的“option”选项会生效.
+
+   - 选项“option java_package”表示Protobuf编译器在生成Java POJO消息类时，生成在此选项所配置的Java包名下。如果没有该选项，则会以头部声明中的package作为Java包名。
+
+   - 选项“option java_multiple_files”表示在生成Java类时的打包方式，具体来说，有以下两种方式：
+
+     - 方式1：一个消息对应一个独立的Java类。
+
+     - 方式2：所有的消息都作为内部类，打包到一个外部类中。
+
+       此选项的值，默认为false，表示使用外部类打包的方式。如果设置 true，则使用第一种方式生成Java类，则一个消息对应一个POJO Java类，多个消息结构体会对应到多个类。
+
+   - 选项“option java_outer_classname”表示在Protobuf编译器在生成Java POJO消息类时，如果采用的是上面的方式2（全部POJO类都作为内部类打包在同一个外部类中），则以此选项所配置的值，作为唯一外部类的类名
+
+**proto的消息结构体和消息字段**
+
+**proto的数据类型**
+
+**proto的其他规范**
+
+
 
 
 
