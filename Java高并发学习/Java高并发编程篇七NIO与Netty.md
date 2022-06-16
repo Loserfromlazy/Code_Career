@@ -3588,7 +3588,7 @@ public class JsonServer {
 
 
 
-```
+```java
 public class JsonClient {
     static String content = "发送测试数据";
     public void start(){
@@ -3756,6 +3756,8 @@ message Msg{
 ![image-20220531104925026](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220531104925026.png)
 
 这时再去看生成目录下就有文件了，我这里是protocol包下
+
+> PS：以上在win11上会编译失败，输出乱码，暂未找到原因。
 
 #### Protobuf的序列化和反序列化示例
 
