@@ -4,17 +4,6 @@
 
 > 参考资料：Spring Cloud、Nginx高并发核心编程尼恩编著、以及互联网资源
 >
-> 本文主要是对尼恩大佬的Spring Cloud、Nginx高并发核心编程一书中的知识的学习记录以及对不懂的地方进行补充学习记录。
->
-> **本文并不是对原书的照搬，而是对原书学习理解后重新编写代码并记录整理笔记和自己的理解，本文不会发博客，只会存在本人的Github的[Code_Career项目](https://github.com/Loserfromlazy/Code_Career)中**
->
-> 此笔记中的例子全部是本人上机编写运行后的代码非原书中的代码例子。
->
-> 此笔记中的图片非特殊标注全部是自己根据理解手画的或者是截图后二次编写的，请勿盗图。
->
-> 部分源码不会全部展示，请自行去查阅源代码
-
-本文主要是对原书的Nginx部分进行学习整理。
 
 # 一、Nginx/OpenResty详解
 
@@ -36,4 +25,20 @@ Nginx有以下3个主要社区分支：
 - 反向代理的主要场景是服务端。服务提供方可以通过反向代理服务器轻松实现目标服务器的动态切换，实现多目标服务器的负载均衡等。
 
 通俗点来说，正向代理（如Squid、Proxy）是对客户端的伪装，隐藏了客户端的IP、头部或者其他信息，服务器得到的是伪装过的客户端信息；反向代理（如Nginx）是对目标服务器的伪装，隐藏了目标服务器的IP、头部或者其他信息，客户端得到的是伪装过的目标服务器信息。
+
+### 1.1.2 Nginx启动与停止
+
+这里用windows平台和OpenResty举例：
+
+首先下载OpenResty的压缩包，然后解压，最后双击nginx.exe即可启动，启动后浏览器输入localhost，如果出现以下页面则启动成功。（Nginx同理）
+
+![image-20220616132152559](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220616132152559.png)
+
+关于Nginx的在windows/linux平台更详细的安装过程和编写更方便的nginx/OpenResty脚本的过程，这里推荐尼恩的博客，写的很详细，这里就不再赘述：
+
+> [windows平台安装和脚本编写](https://www.cnblogs.com/crazymakercircle/p/12111283.html)
+>
+> [linux平台安装和脚本编写](https://www.cnblogs.com/crazymakercircle/p/12115651.html)
+
+## 1.2 Nginx原理
 
