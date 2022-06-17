@@ -142,11 +142,22 @@ mail #mail服务配置块
 
 ### 1.2.5 Nginx请求处理流程
 
+Nginx中HTTP请求的处理流程可以分为4步：
 
+1. 读取解析请求行
+2. 读取解析请求头
+3. 多阶段处理，执行handler处理器列表
+4. 将结果返回给客户端
 
-### 1.2.6 Nginx请求的11个阶段
+多阶段处理时Nginx处理HTTP请求流程中重要的一步，Nginx将请求划分为11个阶段，在完成第一步和第二步后，Nginx将请求封装到请求结构体中ngx_http_request中，然后进入到第三步。
 
+![image-20220617152852910](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220617152852910.png)
 
+1. post-read阶段：完成读取解析请求头和请求行后，首先就是这个阶段，注册在这个阶段的处理器不多，标准模块的ngx_realip处理器就在这个模块，而ngx_realip的作用是改写请求的来源地址。
+
+   > ngx_realip：当Nginx处理的请求
+
+2. server-rewrite
 
 
 
