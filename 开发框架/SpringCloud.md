@@ -1602,6 +1602,147 @@ feign:
       enabled: true
 ```
 
+### 4.4.7 Feign的文件上传
+
+Feign的文件上传与SpringMVC的写法基本类似，但是唯一不同的是Feign中要用@RequestPart注解来接收文件，下面给出示例：
+
+正常的Controller代码：
+
+```java
+@ApiOperation(value = "上传文件")
+@RequestMapping(value ="/upload",method = RequestMethod.POST)
+public Response<FilesVo> upload(@RequestParam("file") MultipartFile file) {
+    //fileService是注入的Service层的业务类
+    return fileService.upload(file);//fileService类里的代码略，里面按照自己的业务逻辑上传文件即可
+}
+```
+
+Controller对应的Feign接口代码：
+
+```java
+@FeignClient(name = "file",
+        path = "/file",
+        fallbackFactory = FilesFeignFallback.class
+)
+public interface FilesFeign {
+    @ApiOperation(value = "上传文件")
+    @RequestMapping(value = "/upload",method = RequestMethod.POST,consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    Response<FilesVo> upload(@RequestPart("file") MultipartFile file);
+}
+```
+
+这里需要注意几点：
+
+1. 请求一定要加上consumes = MediaType.MULTIPART_FORM_DATA_VALUE，表明当前请求是上传文件的请求
+
+2. 注解要使用@RequestPart而不是@RequestParam，否则不能识别要上传的文件。
+
+3. 通过feign接口传来的文件参数名一定是file，否则会报找不到此文件`Required request part 'file' is not present`
+
+   举个例子，见下面代码：
+
+   ```java
+   //这里将调用feign接口上传文件方法抽出来了，目的是优化可读性，分离变于不变
+   private Response<FileVo> upload(MultipartFile file) {
+      
+       MultipartFile mockMultipartFile = null;
+       try {
+           ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(file.getBytes());
+           //这里转换的目的是，给MultipartFile加上参数名
+           mockMultipartFile = new MockMultipartFile("file", file.getOriginalFilename(), "", byteArrayInputStream);
+       } catch (IOException e) {
+           log.error("文件转换失败");
+           return ResponseUtil.responseInit(ResponseCodeEnum.BASE_ERROR_0.getCode(), "文件转换失败", "File conversion failed", null);
+       }
+   
+       //如果我直接将file传入feign接口，就像下面注释的一样，那么就会报错，所以上面进行了转换，目的就是为了加一个参数名file
+       //当然如果有更好的办法，也欢迎各位进行指正
+       //Response<FilesVo> filesVoResponse = filesFeign.upload(file);
+       Response<FilesVo> filesVoResponse = filesFeign.upload(mockMultipartFile);
+       //。。。后面代码略
+   }
+   ```
+
+以上就是Spring Cloud Feign上传文件需要注意的地方。
+
+其实Feign对单文件上传支持的很好，只要没有马虎基本都不会出错。下面再着重介绍一下关于多文件上传，Feign是不支持多文件上传的，如果按照上面的写法会发现请求发不过去，会包feign codec的错误，这是因为Feign没有提供或原始的编码器有问题（更具体的原因暂时没有更深入的排查）。所以如果想通过Feign进行多文件上传，那么就需要按照以下方法进行编写：
+
+首先需要引入Feign多文件上传的jar包，maven地址：
+
+```xml
+<dependency>
+    <groupId>io.github.openfeign.form</groupId>
+    <artifactId>feign-form</artifactId>
+    <version>3.8.0</version>
+</dependency>
+<dependency>
+    <groupId>io.github.openfeign.form</groupId>
+    <artifactId>feign-form-spring</artifactId>
+</dependency>
+```
+
+然后需要手动编写多文件请求的编码器，代码如下：
+
+```java
+public class MutipartEncoder extends SpringFormEncoder {
+
+    public MutipartEncoder(Encoder delegate) {
+        super(delegate);
+        MultipartFormContentProcessor processor = (MultipartFormContentProcessor) getContentProcessor(MULTIPART);
+        processor.addWriter(new SpringSingleMultipartFileWriter());
+        processor.addWriter(new SpringManyMultipartFilesWriter());
+    }
+
+    @Override
+    public void encode(Object object, Type bodyType, RequestTemplate template) throws EncodeException {
+        if (bodyType != null && bodyType.equals(MultipartFile[].class)) {
+            MultipartFile[] file = (MultipartFile[]) object;
+            if(file != null) {
+                Map data = Collections.singletonMap(file.length == 0 ? "" : file[0].getName(), object);
+                super.encode(data, MAP_STRING_WILDCARD, template);
+                return;
+            }
+        }
+        super.encode(object, bodyType, template);
+    }
+}
+```
+
+然后将上面的编码器加入到配置文件中，也就是创建一个配置类，代码如下：
+
+```java
+@Configuration
+public class FeignMultipartSupportConfig {
+
+    @Autowired
+    private ObjectFactory<HttpMessageConverters> messageConverters;
+
+    @Bean
+    public Encoder feignEncoder() {
+        return new MutipartEncoder(new SpringEncoder(messageConverters));
+    }
+
+}
+```
+
+然后给自己的FeignClient类加上这个配置：
+
+```java
+@FeignClient(name = "file",
+        path = "/file",
+        fallbackFactory = FilesOaFeignFallback.class,
+        configuration = FeignMultipartSupportConfig.class
+)
+public interface FilesFeign {
+
+    @ApiOperation(value = "上传多个文件")
+    @RequestMapping(value = "/uploadFiles", method = RequestMethod.POST,consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    Response<List<FilesVo>> uploadFiles(@RequestPart("files") MultipartFile[] files);
+}
+```
+
+完成以上即可以进行多文件上传了。
+
 ## 4.5 GateWay
 
 Spring Cloud GateWay是Spring Cloud的⼀个全新项⽬，⽬标是取代Netflflix Zuul，它基于Spring5.0+SpringBoot2.0+WebFlux（基于⾼性能的Reactor模式响应式通信框架Netty，异步⾮阻塞模型）等技术开发，性能⾼于Zuul，官⽅测试，GateWay是Zuul的1.6倍，旨在为微服务架构提供⼀种简单有效的统⼀的API路由管理⽅式。
