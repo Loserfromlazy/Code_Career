@@ -300,11 +300,275 @@ Nginx 请求处理的 11 个阶段中，有些阶段是必备的，有些阶段�
 
 ### 1.3.1 events事件驱动配置
 
+一个典型的events事件模型配置块的示例：
 
+~~~nginx
+events {
+    use epoll; #使用epoll类型的IO多路复用
+    worker_connections 204800; #最大连接数限制为20万
+    accept_mutex on;#各个worker通过锁来获取新连接
+}
+~~~
+
+1. worker_connections 用于配置每个Worker进程能打开的最大并发连接数量，指令参数为连接数的上限。
+
+2. use use 指令用于配置 IO 多路复用模型，有多种模型可配置，常用的有 select、epoll 两种。在windows的默认为select。可以通过将nginx的日志级别调整为debug，在errors_log中就可以看到了，以下是我的日志：
+
+   ~~~
+   2022/06/20 14:05:08 [notice] 10024#11096: using the "select" event method
+   2022/06/20 14:05:08 [notice] 10024#11096: openresty/1.21.4.1
+   ~~~
+
+3. accept_mutex 
+
+   这个指令用于配置各个Worker进程是否通过互斥锁有序接收新的连接请求。on参数表示各个Worker通过互斥锁有序接受新请求；off参数指每个新请求到达时会通知（唤醒）所有的Worker进程参与争抢，但只有一个进程可获得连接。配置off参数会造成惊群问题影响性能。accept_mutex指令的参数默认为on。
+
+### 1.3.2 虚拟主机配置
+
+配置虚拟主机可使用 server 指令。虚拟主机的基础配置包含套接字配置、虚拟主机名称配置等。
+
+**虚拟主机的监听套接字配置：**
+
+1. 使用listen指令直接配置监听端口
+
+   ~~~nginx
+   server{
+       listen 80;
+   }
+   ~~~
+
+2. 使用listen指令配置监听的IP和端口
+
+   ~~~nginx
+   server{
+       listen 127.0.0.1:80;
+   }
+   ~~~
+
+**虚拟主机名称配置：**
+
+虚拟主机名称配置可使用 server_name 指令。基于微服务架构的分布式平台有很多类型的服务，比如文件服务、后台服务、基础服务等。很多情况下，可以通过域名前缀的方式进行 URL 路径区分，示例如下：
+
+~~~nginx
+#后台管理服务的虚拟主机
+server {
+    listen 80;
+    server_name admin.demo.com;
+    location /{
+        default_type 'text/html';
+        charset utf-8;
+        echo "this is admin server";
+    }
+}
+#文件服务的虚拟主机
+server {
+    listen 80;
+    server_name file.demo.com;
+    location /{
+        default_type 'text/html';
+        charset utf-8;
+        echo "this is file server";
+    }
+}
+#默认服务的虚拟主机
+server {
+    listen 80 default;
+    server_name demo.com  *.demo.com;#如果没有前缀，这就是默认访问的虚拟主机
+    location /{
+        default_type 'text/html';
+        charset utf-8;
+        echo "this is default server";
+    }
+}
+~~~
+
+当然如果想访问上面的3个虚拟主机，那么就需要域名服务器或本地hosts文件解析出域名对应的IP地址，所以可以修改本地hosts文件：
+
+127.0.0.1 demo.com
+
+127.0.0.1 file.demo.com
+
+127.0.0.1 admin.demo.com
+
+127.0.0.1 xxx.demo.com
+
+重启Nginx后，在浏览器中访问，结果如下：
+
+![image-20220620144800519](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220620144800519.png)
+
+多个虚拟主机的优先级如下：
+
+1. 字符串精确匹配：如果请求域名为`admin.demo.com`,那么就会匹配到名称为`admin.demo.com`的虚拟主机
+2. 左侧`*`通配符匹配：若浏览器请求的域名为 `xxx.crazydemo.com`，则会匹配到`*.crazydemo.com`虚拟主机。因为配置文件中并没有server_name为xxx.crazydemo.com的主机，所以退而求其次，名称为`*.crazydemo.com`的虚拟主机按照通配符规则匹配成功
+3. 右侧`*`通配符匹配：右侧通配符和左侧通配符匹配类似，只不过优先级低于左侧通配符匹配
+4. 正则表达式匹配：与通配符匹配类似，不过优先级更低。
+5. default_server：在listen指令后面如果带有default的指令参数，就代表这是默认的、最后兜底的虚拟主机，如果前面的匹配规则都没有命中，就只能命中 default_server 指定的默认主机。
+
+### 1.3.3 错误页面配置
+
+错误页面的配置指令为error_page,格式如下：
+
+~~~nginx
+error_page code ... [=[response]] uri;
+~~~
+
+code表示响应码，可以同时配置多个：uri表示错误页面，一般为服务器上的静态资源页面。例如：
+
+~~~nginx
+server{
+    listen 80;
+    server_name admin.demo.com;
+    location /{
+        default_type 'text/html';
+        charset utf-8;
+        echo "this is admin server";
+    }
+    error_page 404 /404.html;
+    error_page 500 502 503 504 /50x.html
+}
+~~~
+
+error_page 指令除了可用于 server 上下文外，还可用于 http、server、location、if in location 等上下文。
+
+### 1.3.4 长连接相关配置
+
+配置长连接的有效时长可以使用keppalive_timeout指令，格式如下：
+
+~~~nginx
+keepalive_timeout timeout [header_timeout];
+~~~
+
+其中timeout参数用于设置保持连接超时时长，0表示禁止长连接，默认为75s。如果要配置长连接的一条连接允许的最大请求数，可以使用，以下指令：
+
+~~~nginx
+keepalive_request number;
+~~~
+
+其中number参数用于设置在一条长连接上被允许请求的资源的最大数量，默认为100。如果要配置向客户端发送响应报文的超时限制，可以使用下面的指令：
+
+~~~nginx
+send_timeout time;
+~~~
+
+其中time参数用于设置Nginx向客户端发送响应报文的超时限制，此处时长是指两次向客户但写操作之间的间隔时长，并非整个响应过程的传输时长。
+
+### 1.3.5 访问日志配置
+
+Nginx 将客户端的访问日志信息记录到指定的日志文件中，用于后期分析用户的浏览行为等，此功能由 ngx_http_log_module 模块负责，其指令在 HTTP 处理流程的 log 阶段执行。格式如下：
+
+~~~nginx
+access_log path [format [buffer=size] [gzip[=level]] [flush=time] [if=condition]];
+~~~
+
+其中，path表示日志文件的本地路径；format表示日志输出的格式名称。定义日志输出的格式的指令是log_format:`log_format name string ...;`其中name参数用于指定格式名称；string参数用于设置格式字符串，可以有多个。字符串中可以使用Nginx核心模块及其他模块的内置变量。
+
+举例：
+
+~~~nginx
+http{
+    #定义日志格式
+    log_format format_main '$remote_addr - $remote_user [$time_local] $request -' '$status - $body_bytes_sent [$http_referer]' '[$http_user_agent] [$http_x_forwarded_for]';
+    #配置：日志文件、访问日志格式
+    access_log logs/access_main.log format_main;
+}
+~~~
+
+修改配置后，重启Nginx，然后发一条请求（用上面配置的hosts域名访问），就可以在access_main.log中看到新增的日志记录。
+
+> 下面介绍一下各个Nginx内置变量：
+>
+> 1. $request:记录用户的HTTP请求起始行
+> 2. $status:记录HTTP状态码
+> 3. $remote_addr:记录访问网站的客户端地址
+> 4. $remote_user:记录访问网站的客户端用户名你
+> 5. $time_local:记录访问时间与时区
+> 6. $body_bytes_sent:记录服务器发送给客户端的响应body字节数
+> 7. $http_referer:记录此次请求是从哪个链接访问过来的，可以根据其进行防盗链的监测
+> 8. $http_user_agent:记录客户端访问信息，如浏览器手机客户端等
+> 9. $http_x_forwarded_for:当前有正向代理服务器时，此参数用于保持客户端真实的IP地址。该参数生效的前提是；前端的代理服务器上进行了相关的x_forwarded_for设置。
+
+### 1.3.6 Nginx核心模块内置变量
+
+Nginx 核心模块 ngx_http_core_module 中定义了一系列存储 HTTP 请求信息的变量，例如$http_user_agent、$http_cookie 等。这些内置变量在 Nginx 配置过程中使用较多，下面介绍常用内置变量：
+
+- $arg_PARAMETER：请求URL中以PARAMETER为名称的参数值。请求参数即URL的的值，如`/index.php?site=www.ttlsa.com`，可以用$arg_site 取得`www.ttlsa.com`这个值.
+- $args：请求URL中的整个参数串，其作用与$query_string相同
+- $binary_remote_addr：二进制形式的客户端地址
+- $body_bytes_sent：传输给客户端的字节数，响应头不计算在内
+- $bytes_sent：传输给客户端的字节数，包含响应头和响应体
+- $content_length：等同于$http_content_length，用于获取请求体body的大小，指的是Nginx从客户端收到的请求头中Content-Length字段的值，不是发送给客户端响应中的Content-Length，如果想获取响应中的Content-Length，应该用$sent_http_content_length
+- $request_length：请求的字节数（包括请求行、请求头和请求体）。由于$request_length是请求解析过程中不断累加的，如果解析请求时出现异常，那么$request_length是已经累加部分的长度，不是完整长度。
+- $connection：TCP 连接的序列号
+- $connection_requests：TCP 连接当前的请求数量
+- $content_type：请求中的 Content-Type 请求头字段值
+- $cookie_name：请求中名称 name 的 cookie 值
+- $document_root：当前请求的文档根目录或别名
+- $uri：当前请求中的 URI（不带请求参数，参数位于$args 变量）$uri 变量值不包含主机名，举个例子像`/foo/bar.html`这样
+- $request_uri：包含客户端请求参数的原始 URI，不包含主机名，此参数不可以修改，举个例子像`/foo/bar.html? name=value`这样
+- $host：请求的主机名。优先级为：HTTP 请求行的主机名 > HOST 请求头字段 > 符合请求的服务器名
+- $http_NAME：名称为NAME的请求头的值。如果实际请求头NAME中包含中画线`-`，那么需要将中画线`-`替换为下画线`_`；如果实际请求头 name 中包含大写字母，那么可以替换为小写字母。例如获取 Accept-Language 请求头的值，变量名称为$http_accept_language
+- $msec：当前的 UNIX 时间戳。UNIX 时间戳是从 1970 年 1 月 1 日（UTC/GMT 的午夜）开始所经过的秒数，不考虑闰秒
+- $nginx_version：获取 Nginx 版本
+- $pid：获取 Worker 工作进程的 PID
+- $proxy_protocol_addr：代理访问服务器的客户端地址，如果是直接访问，那么该值为空字符串
+- $realpath_root：当前请求的文档根目录或别名的真实路径，会将所有符号连接转换为真实路径
+- $remote_addr：客户端请求地址
+- $remote_port：客户端请求端口
+- $request_body：客户端请求主体。此变量可在 location 中使用，将请求主体通过proxy_pass、fastcgi_pass、uwsgi_pass 和 scgi_pass 传递给下一级的代理服务器
+- $request_completion：如果请求成功，那么值为 OK；如果请求未完成或者请求不是一个范围请求的最后一部分，那么值为空
+- $request_filename：当前请求的文件路径，由 root 或 alias 指令与 URI 请求结合生成
+- $request_length：请求的长度，包括请求的地址、HTTP 请求头和请求主体
+- $request_method：HTTP 请求方法，比如 GET 或 POST 等
+- $request_time：处理客户端请求使用的时间，从读取客户端的第一个字节开始计时
+- $scheme：请求使用的 Web 协议，如 HTTP 或 HTTPS
+- $sent_http_NAME：设置任意名称为NAME的 HTTP 响应头字段。例如，如果需要设置响应头 Content-Length，那么将“-”替换为下画线，大写字母替换为小写字母，变量为`$sent_http_content_length`
+- $server_addr：服务器端地址为了避免访问操作系统内核，应将 IP 地址提前设置在配置文件中
+- $server_name：虚拟主机的服务器名，如 demo.com
+- $server_port：虚拟主机的服务器端口
+- $server_protocol：服务器的 HTTP 版本，通常为 HTTP/1.0 或 HTTP/1.1
+- $status：HTTP 响应代码
 
 ## 1.4 location路由规则匹配
 
+location 路由匹配发生在 HTTP 请求处理的 find-config 配置查找阶段，主要功能是：根据请求的 URI 地址匹配 location 路由表达式，如果匹配成功，就执行 location 后面的上下文配置块。
 
+### 1.4.1 location语法
+
+Nginx配置文件中，location配置项的语法格式如下：
+
+~~~nginx
+location [=|~|~*|^*] 模式字符串{
+	...
+}
+~~~
+
+按照匹配符号不同，可以分为精准匹配、普通匹配、正则匹配、默认根路径匹配。
+
+1. 精准匹配
+
+   精准匹配的符号标记为`=`，下面是一个location的例子：
+
+   ~~~nginx
+   location = /test {
+       echo "location = /test";
+   }
+   ~~~
+
+   如果请求的URI和精准匹配的模式字符串`/test`完全相同，那么精准匹配通过。精准匹配的优先级最高。
+
+2. 普通匹配
+
+   
+
+3. 正则匹配
+
+   
+
+4. 默认根路径匹配
+
+   
+
+### 1.4.2 常用配置
 
 ## 1.5 Nginx的rewrite模块
 
