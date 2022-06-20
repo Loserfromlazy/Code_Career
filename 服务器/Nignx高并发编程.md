@@ -155,9 +155,160 @@ Nginx中HTTP请求的处理流程可以分为4步：
 
 1. post-read阶段：完成读取解析请求头和请求行后，首先就是这个阶段，注册在这个阶段的处理器不多，标准模块的ngx_realip处理器就在这个模块，而ngx_realip的作用是改写请求的来源地址。
 
-   > ngx_realip：当Nginx处理的请求
+   > ngx_realip：当Nginx处理的请求经过了某个正向代理服务器的转发后，ip地址可能就不是真实IP地址了，而是变成下游服务器的IP，解决办法之一就是将原来的IP地址放到HTTP请求头中，Nginx获取后传给Nginx的上游服务器，ngx_realip就是这个作用。
+   >
+   > 比如以下配置：将正向代理服务器192.168.0.100的所有请求的IP地址修改为请求头X-MY-IP所指定的值，然后放在$remote_addr内置标准变量中。
+   >
+   > ~~~nginx
+   > server{
+   >     listen 8080;
+   >     set_real_ip_from 192.168.0.100;
+   >     real_ip_header X-MY-IP;
+   >     location /test {
+   >         echo "from: $remote_addr"
+   >     }
+   > }
+   > ~~~
 
 2. server-rewrite
 
+   这个阶段是server块中的请求地址重写阶段，在进行UIR与location路由规则匹配之前可以修改请求的URI地址。大部分在server块中的配置项都在这个阶段运行，比如：
 
+   ~~~nginx
+   server{
+       listen 8080;
+       set $a hello;#在server-rewrite阶段运行
+       location /test {
+           set $b "$a world";
+           echo $b;
+       }
+       set $b hello;#在server-rewrite阶段运行
+   }
+   ~~~
+
+   两个变量赋值直接写在server配置块中，因此他们就运行在server-rewrite阶段。
+
+3. find-config
+
+   这个阶段叫配置查找阶段，主要功能是根据URL地址去匹配location路由表达式。此阶段由Nginx HTTP Core模块全部负责，并完成当前请求URL和location配置块之间的配对工作，这个阶段不支持 Nginx 模块注册处理程序。
+
+   在`find-config`阶段之前，客户端请求并没有与任何location配置块相关联,在此之前的 post-read 和 server-rewrite 阶段来说，只有 server 配置块以及更外层作用域中的配置项才会起作用，location 配置块中的配置项不起作用。
+
+4. rewrite
+
+   由于Nginx在find-config阶段完成了当前请求和location的匹配，因此从rewrite阶段开始，location配置块中的指令就起作用了。
+
+   这个阶段也叫请求地址重写阶段，rewrite 阶段也叫请求地址重写阶段，注册在 rewrite 阶段的指令首先是 ngx_rewrite 模块的指令，比如 break、if、return、rewrite、set 等。其次，第三方ngx_lua 模块中的 set_by_lua 指令和rewrite_by_lua 指令也能在此阶段注册。
+
+5. post-rewrite
+
+   请求地址URI重写提交阶段，防止修改递归修改URI造成死循环（一个请求执行 10 次就会被 Nginx 认定为死循环）该阶段只能由 Nginx HTTP Core（ngx_http_core_module）模块实现。
+
+6. preaccess
+
+   访问权限检查准备阶段，控制访问频率的 ngx_limit_req 模块和限制并发度的 ngx_limit_zone模块的相关指令就注册在此阶段。
+
+7. access
+
+   在访问权限检查阶段，配置指令大多是执行访问控制类型的任务，比如检查用户的访问权限、检查用户的来源IP地址是否合法等。在此阶段注册的指令有：HTTP标准模块ngx_http_access_module 的指令、第三方 ngx_auth_request 模块的指令、第三方 ngx_lua 模块的access_by_lua 指令等。
+
+   > 比如，deny和allow指令属于ngx_http_access_module模块，使用示例如下：
+   >
+   > ~~~nginx
+   > server{
+   >     #...
+   >     #拒绝全部
+   >     location = /denyall {
+   >         dent all;
+   >     }
+   >     #允许来源ip属于192.168.0.0/24网段或127.0.0.1的请求，其他来源的ip全部拒绝
+   >     location =  /allowsome {
+   >         allow 192.168.0.0/24;
+   >         allow 127.0.0.1;
+   >         deny all;
+   >         echo "this is ok";
+   >     }
+   >     #...
+   > }
+   > ~~~
+   >
+   > 如果同一个location配置了多个allow/deny配置项，access阶段的配置项之间是按照配置的先后顺序匹配的，匹配成功一个跳出。在上面的例子中，如果客户端的ip是127.0.0.1，则匹配到` allow 127.0.0.1;`配置项后就不在匹配后面的`deny all;`，也就是说不会被拒绝。如果这些配置项的指令来自不同的模块，则每个模块会执行一个访问控制类型的指令。
+   >
+   > echo 指令用于返回内容，在 location 上下文中，该指令注册在 content 生产阶段。由于 echo 指令不是注册在 access 阶段，因此在 access 阶段不执行该指令的配置项。
+
+8. post-access
+
+   访问权限检查提交阶段。如果请求不被允许访问Nginx服务器，该阶段负责向用户返回错误响应。在access阶段可能存在多个访问控制模块的指令注册，post-access阶段的satisfy配置指令可以用于控制它们之间的协作方式。比如：
+
+   ~~~nginx
+   location =  /satisfy-demo {
+           satisfy any;
+           access_by_lua "ngx.exit(ngx.OK)";
+           deny all;
+           echo "this is ok";
+       }
+   ~~~
+
+   在这个例子中，deny指令属于HTTP标准模块的ngx_http_access_module访问控制模块，而access_by_lua指令属于第三方ngx_lua模块，两个模块都有自己的计算结果，需要最终进行结果统一。
+
+   而这个统一工作由satisfy指令负责：
+
+   - 逻辑或操作
+
+     具体的配置项为`satisfy any;`,表示访问控制模块A、B、C或更多只要其中任意一个通过验证就算通过
+
+   - 逻辑与操作
+
+     具体的配置项为`satisfy all;`,表示访问控制模块A、B、C或更多全部模块都通过验证才算通过
+
+9. try-files
+
+   如果HTTP请求访问静态资源文件，那么try-files配置项可以使这个请求按顺序访问多个静态资源文件，直到某个静态文件符合选取条件。这个阶段不支持Nginx模块注册处理程序，只有一个标准配置指令`try-files`。
+
+   try-files 指令接收两个以上任意数量的参数，每个参数都指定了一个 URI，Nginx 会在 try-files阶段依次把前 N-1 个参数映射为文件系统上的对象（文件或者目录），然后检查这些对象是否存在。若 Nginx 发现某个文件系统对象存在，则查找成功，进而在 try-files 阶段把当前请求的 URI改写为该对象所对应的参数 URI（但不会包含末尾的斜杠字符，也不会发生“内部跳转”）。如果前 N-1 个参数所对应的文件系统对象都不存在，try-files 阶段就会立即发起“内部跳转”，跳转到最后一个参数（第 N 个参数）所指定的 URI。
+
+   这里举个例子：
+
+   ~~~nginx
+   root /var/www;    #root指令把查找文件的根目录配置为/var/www/
+   location = /try_files-demo {
+       try_files /foo /bar  /last;
+   }
+   # 对应到前面 try_files的最后一个URI
+   location /last{
+       echo "uri: $uri";
+   }
+   ~~~
+
+   这里 try-files 会在文件系统查找前两个参数对应的文件 /var/www/foo 和 /var/www/bar 所对应的文件是否存在。如果不存在，此时 Nginx 就会在 try-files 阶段发起到最后一个参数所指定的URI（/last）的内部跳转。
+
+10. content
+
+    大部分 HTTP 模块会介入内容产生阶段，是所有请求处理阶段中重要的阶段。Nginx 的 echo指令、第三方 ngx_lua 模块的 content_by_lua 指令都注册在此阶段。
+
+    > 这里要注意的是，每一个 location 只能有一个“内容处理程序”，因此，当在 location 中同时使用多个模块的 content 阶段指令时，只有一个模块能成功注册成为“内容处理器”。例如 echo和 content_by_lua 同时注册，最终只会有一个生效，但具体是哪一个生效，结果是不稳定的。
+
+11. log
+
+    日志模块处理阶段，记录日志。
+
+Nginx 将一个HTTP请求分为11个处理阶段，这样做让每个HTTP模块可以只专注于完成一个独立、简单的功能。而一个请求的完整处理过程由多个 HTTP 模块共同合作完成，可以极大地提高多个模块合作的协同性、可测试性和可扩展性。
+
+Nginx 请求处理的 11 个阶段中，有些阶段是必备的，有些阶段是可选的，各个阶段可以允许多个模块的指令同时注册。但是，find-config、post-rewrite、post-access、try-files 四个阶段是不允许其他模块的处理指令注册的，它们仅注册了 HTTP 框架自身实现的几个固定的方法。同一个阶段内的指令，Nginx 会按照各个指令的上下文顺序执行对应的 handler 处理器方法。
+
+## 1.3 Nginx的基础配置
+
+### 1.3.1 events事件驱动配置
+
+
+
+## 1.4 location路由规则匹配
+
+
+
+## 1.5 Nginx的rewrite模块
+
+
+
+## 1.6 反向代理和负载均衡
 
