@@ -40,6 +40,17 @@ Nginx有以下3个主要社区分支：
 >
 > [linux平台安装和脚本编写](https://www.cnblogs.com/crazymakercircle/p/12115651.html)
 
+| 命令         | windows                 | linux               | 备注                                                         |
+| ------------ | ----------------------- | ------------------- | ------------------------------------------------------------ |
+| 启动         | `start .\nginx.exe`     | `./nginx`           | 启动服务                                                     |
+| 停止         | `.\nginx.exe -s quit`   | `./nginx -s qiut`   | quit安全停止，stop快速停止                                   |
+| 重载         | `.\nginx.exe -s reload` | `./nginx -s reload` | 修改配置文件后重新加载                                       |
+| 重新打开日志 | `.\nginx.exe -s reopen` | `./nginx -s reopen` | 重新打开日志，剪切日志，日志备份转移，不更改日志文件名**；而 **reload 更改配置会新按照最新的日志名创建文件 |
+
+> 学习前有一点需要注意：如果你的echo在浏览器上只能下载文件后才能看到内容，那么你就可以通过加请求头来解决此问题(我的是因为使用了windows版本的openresty有此问题，我在linux上安装的没有此问题)，请求头如下：
+>
+> add_header Content-Type text/plain; 
+
 ## 1.2 Nginx原理
 
 ### 1.2.1 Reactor模式
@@ -562,7 +573,7 @@ location [=|~|~*|^*] 模式字符串{
 
    ~~~nginx
    location ^~ /test {
-       echo "location: ^~/test"
+       echo "location= ^~/test"
    }
    ~~~
 
@@ -570,10 +581,10 @@ location [=|~|~*|^*] 模式字符串{
 
    ~~~nginx
    location ^~ /test {
-       echo "location: ^~/test"
+       echo "location= ^~/test"
    }
    location ^~ /test/long {
-       echo "location: ^~/test"
+       echo "location= ^~/test"
    }
    ~~~
 
@@ -594,7 +605,7 @@ location [=|~|~*|^*] 模式字符串{
    
    ~~~nginx
    location / {
-       echo "默认根路径匹配： /";
+       echo "默认根路径匹配= /";
    }
    ~~~
    
@@ -656,7 +667,352 @@ location [=|~|~*|^*] 模式字符串{
 
 ## 1.5 Nginx的rewrite模块
 
+Nginx的rewrite模块是ngx_http_rewrite_module标准模块，主要功能是重写请求URI，也是nginx默认安装的模块，rewrite模块会根据PCRE正则重写URI，然后根据指令参数或者发起内部跳转再进行一次location匹配，或者直接进行30x重定向返回客户端。
 
+> rewrite模块的指令是一门微型编程语言，包含set、rewrite、break、if、return等一系列指令
+
+### 1.5.1 set指令
+
+set指令主要用于存放变量值，在Nginx的配置文件中，变量只有一种，就是字符串。set指令格式：
+
+~~~nginx
+set $var value;
+~~~
+
+> 在nginx中，变量的定义和使用都要以$开头。另外变量名不能和Nginx服务器预设的变量名同名。
+
+下面举个例子：
+
+~~~nginx
+set $a "hello world";#对变量a进行赋值
+set $b "$a,hello nginx";#通过变量a构造变量b
+~~~
+
+像上面，在字符串中使用变量a，在linux shell脚本中常用到，叫做变量插值。set指令不仅有赋值的功能，还有创建nginx变量的作用，即当变量不存在时会自动创建，比如上面例子的变量a。
+
+Nginx 变量一旦创建，其变量名的可见范围就是整个 Nginx 配置，甚至可以跨越不同虚拟主机的 server 配置块。但是，对于每个请求，所有变量都有一份独立的副本，或者说都有各变量用来存放值的容器的独立副本，彼此互不干扰。Nginx 变量的生命周期是不可跨越请求边界的。
+
+### 1.5.2 rewrite指令
+
+rewrite指令主要功能是改写请求的URI，可以使用在server、location、if in location。格式如下：
+
+~~~nginx
+rewrite regrex replacement [flga];
+~~~
+
+如果regrex匹配URI，URI就会被替换成replacement的计算结果，replacement一般是一个变量插值表达式，其计算结果的字符串就是新的URI。比如：
+
+~~~nginx
+location /download/ {
+    rewrite ^/download/(.*)/video/(.*)$ /view/$1/mp3/$2.mp3 last;
+    rewrite ^/download/(.*)/audio/(.*)$ /view/$1/mp3/$2.rmvb last;
+    return 404;
+}
+location /view {
+    #add_header Content-Type text/plain;
+    echo "uri: $uri";
+}
+~~~
+
+在浏览器中请求匹配上面例子的地址，如`http://crazydemo.com/download/1/video/10`，访问之后地址发生了重写，并且发生了location 的跳转。
+
+![image-20220621103443572](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220621103443572.png)
+
+> 在上面的例子中，replacement中的$1和$2是从regrex正则表达式从原始URI中匹配出来的子字符串，也叫正则捕获组。
+
+如果同一个上下文中有多个rewrite指令，那么就会按照rewrite指令出现的顺序进行匹配，匹配成功后可以用第三个指令[flag]进行设置：
+
+1. 如果 flag 参数使用 last 值，并且匹配成功，那么停止处理任何 rewrite 相关的指令，立即用计算后的新 URI 开始下一轮的 location 匹配和跳转。前面的例子使用的就是 last 参数值。
+
+2. 如果 flag 参数使用 break 值，就如同 break 指令的字面意思一样，停止处理任何 rewrite 的相关指令，但是不进行 location 跳转
+
+   如果我们将上面的last改成break，我们就能看到效果：
+
+   ~~~nginx
+   location /view {
+       #add_header Content-Type text/plain;
+       echo "uri: $uri";
+   }
+   
+   location /download/ {
+       rewrite ^/download/(.*)/video/(.*)$ /view/$1/mp3/$2.mp3 break;
+       rewrite ^/download/(.*)/audio/(.*)$ /view/$1/mp3/$2.rmvb break;
+       #add_header Content-Type text/plain;
+       echo	"break: $uri";
+       return 404;
+   }
+   ~~~
+
+   我们访问地址后，效果如下：
+
+   ![image-20220621104843435](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220621104843435.png)
+
+   可以看到地址发生了重写，但是location 并没有跳转，而是直接结束了。
+
+   在 location 上下文中，last 和 break 是有区别的：last 其实就相当于一个新的 URL，Nginx 进行了一次新的 location 匹配，通过 last 获得一个可以转到其他 location 配置中处理的机会（内部的重定向）；而 break 在一个 location 中将原来的 URL（包括 URI 和 args）改写之后，再继续进行后面的处理，这个重写之后的请求始终都是在同一个 location 上下文中，并没有发生内部跳转。
+
+   > 这里要注意：**last 和 break 的区别仅仅发生在 location 上下文中；如果发生在 server 上下文，那么 last 和 break 的作用是一样的。**
+   >
+   > 还要注意：在 location 上下文中的 rewrite 指令使用 last 指令参数会再次以新的 URI 重新发起内部重定向，再次进行 location 匹配，而新的 URI 极有可能和旧的 URI 一样再次匹配到相同的目标 location 中，这样死循环就发生了。当循环到第 10 次时，Nginx 会终止这样无意义的循环并返回 500 错误。
+
+3. 如果 rewrite 指令使用的 flag 参数的值是 permanent，就表示进行外部重定向，也就是在客户端进行重定向。此时，服务器将新 URI 地址返回给客户端浏览器，并且返回 301（永久重定向的响应码）给客户端。客户端将使用新的重定向地址再发起一次远程请求。
+
+   **外部重定向与内部重定向是有本质区别的。从数量上说，外部重定向有两次请求，内部重定向只有一次请求。**
+
+4. 如果 rewrite 指令使用的 flag 参数的值是 redirect，就表示进行外部重定向，表现的行为与permanent 参数值完全一样，不同的是返回 302（临时重定向的响应码）给客户端。
+
+### 1.5.3 if条件指令
+
+if指令的格式如下：
+
+~~~nginx
+if(condition){...}
+~~~
+
+当if条件满足时，执行配置块中的指令，if指令的配置块相当于一个新的上下文作用域。if指令适用于server和location。
+
+if的congdition有如下几种：
+
+- `==`：相等
+- `!=`：不相等
+- `~`：区分字母大小写的模式匹配
+- `~*`：不区分大小写的模式匹配
+- 还有其它的专用比较符号，比如判断文件或目录是否存在的符号等。
+
+举个例子：
+
+~~~nginx
+location /test {
+    if ($http_user_agent ~* "Firefox"){#注意空格
+        return 403;
+    }
+    if ($http_user_agent ~* "Chrome"){
+        return 301;
+    }
+    return 404;
+}
+~~~
+
+我们用不同的浏览器访问会有不同的返回码显示。
+
+上面我们用到了return 指令。return 指令用于返回 HTTP 的状态码。return 指令会停止同一个作用域的剩余指令处理，并返回给客户端指定的响应码。return 指令可以用于 server、location、if 上下文中，执行阶段是rewrite 阶段。其指令的格式如下：
+
+~~~nginx
+#格式一：返回响应的状态码和提示文字，提示文字可选
+return code [text];
+
+#格式二：返回响应的重定向状态码(如 301)和重定向 URL
+return code URL;
+
+#格式三：返回响应的重定向 URL，默认的返回状态码是临时重定向 302
+return URL;
+~~~
+
+### 1.5.4 add_header指令
+
+response header 一般是以 key：value 的形式，我们用add_header指令就可以增加响应头。格式如下：
+
+~~~nginx
+add_header key value
+#例如
+add_header Content-Type text/plain;
+~~~
+
+我们以非常常用的 response header，Content-Type举例：
+
+~~~nginx
+add_header Content-Type 'text/html; charset=utf-8'
+~~~
+
+使用ajax跨域请求时，会发送一条预检请求OPTIONS，用于判断是否安全或服务端是否支持跨域。预检请求一般是由浏览器发出的，用户一般不知情，而对于客户端来说只有预检请求返回成功才会正式请求，这样就会损失一定性能，因此一般会在Nginx代理服务端对预检请求提前进行拦截，并设置较长有效期：
+
+~~~nginx
+upstream zuul{
+    server "192.168.22.123:8999";
+    keepalive 1000;
+}
+server{
+    listen 80;
+    server_name nginx.server *.nginx.server;
+    default_type 'text/html';
+    charset utf-8;
+    
+    #将请求转发到上游服务器，但是OPTIONS请求直接返回
+    location{
+        if($request_method = 'OPTIONS'){
+            add_header Access-Control-Max-Age 1728000;#用来指定本次预检请求的有效期,目前设置为1728000秒
+            add_header Access-Control-Allow-Origin *;
+            add_header Access-Control-Allow-Credentials true;
+            add_header Access-Control-Allow-Methods 'GET,POST,OPTIONS';
+            add_header Access-Control-Allow-Header 'Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,token';
+            return 204;
+        }
+        proxy_pass http://zuul/;
+    }
+}
+~~~
+
+### 1.5.5 指令的执行顺序
+
+Nginx 的请求处理阶段共有11个，分别是 post-read、server-rewrite、find-config、rewrite、post-rewrite、preaccess、access、post-access、try-files、content 以及 log。其中3 个比较常见的按照执行时的先后顺序依次是 rewrite 阶段、access 阶段以及 content 阶段。
+
+Nginx 的配置指令一般只会注册并运行在其中的某一个处理阶段，比如set指令就是在 rewrite阶段运行的，而echo指令只会在content阶段运行。在一次请求处理流程中，rewrite阶段总是在content 阶段之前执行。因此，属于rewrite阶段的配置指令（示例中的 set）总是会无条件地在content 阶段的配置指令（示例中的 echo）之前执行，即便是 echo 配置项出现在 set 配置项的前面。
+
+举个例子：
+
+~~~nginx
+location {
+    set $a 'hello';
+    echo $a;
+    set $a 'world';
+    echo $a;
+}
+~~~
+
+这个指令输出结果如下：
+
+![image-20220621150807605](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220621150807605.png)
+
+这就是因为set指令就在rewrite阶段运行，而echo在content阶段运行，而rewrite阶段总是在content阶段之前执行，因此结果会变成这样。
 
 ## 1.6 反向代理和负载均衡
+
+单体 Nginx 的性能虽然不错，但也是有瓶颈的。打个比方：用户请求发起一个请求，网站显示的图片量比较大，如果这个时候有大量用户同时访问，全部的工作量都集中到了一台服务器上，服务器不负重压，可能就崩溃了。高并发场景下，自然需要多台服务器进行集群，既能防止单个节点崩溃导致平台无法使用，又能提高一些效率。一般来说，Nginx 完成 10 万多用户同时访问，程序就相对容易崩溃。
+
+下面我们来配置Nginx的反向代理和负载均衡。
+
+### 1.6.1 demo环境
+
+因为要模拟代理，因此我准备了一台linux的云服务器（如果没有云服务器也可以准备一台虚拟机进行测试），然后在上面安装了nginx/openresty，然后我让这个云服务器上的监听80和8081端口，我们的80端口用作nginx的监听端口，然后8081端口模拟代理服务器，也就是说整体流程是这样的，我在本地向云服务器nginx发送请求，nginx通过反向代理将请求转发到127.0.0.1:8081（也就是说8081模拟被代理的tomcat或其他服务器）。通过这种方式进行模拟反向代理。
+
+云服务器上的nginx配置：
+
+~~~nginx
+server {
+	listen 8081;
+	server_name locahost;
+	default_type 'text/html';
+	charset utf-8;
+
+	location / {
+		echo "uri: $uri,host: $host,remote_addr:$remote_addr,proxy_add_x_forwarded_for:$proxy_add_x_forwarded_for,http_x_forwarded_for:$http_x_forwarded_for"; 		
+	}
+}
+server {
+    listen       80;
+    server_name  localhost;
+
+	default_type 'text/html';
+	charset utf-8;
+    location / {
+        echo "默认根路径匹配";
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+        root   html;
+    }
+}
+~~~
+
+### 1.6.2 proxy_pass反向代理指令
+
+proxy_pass 反向代理指令处于 ngx_http_proxy_module 模块，并且注册在 HTTP请求 11 个阶段的 content 阶段。格式如下：
+
+~~~nginx
+proxy_pass 目标URL前缀;
+~~~
+
+当proxy_pass后面的目标URL格式为`协议+IP[:port]+/`的格式（最后有/根路径）时，表示最终的结果路径会把location指令的URI前缀也给加上，这里称为不带前缀代理。
+
+反之如果目标URL格式为`协议+IP[:port]`的格式（没有/根路径）时，表示最终Nginx不会把location指令的URI前缀也给加上，这里称为带前缀代理。
+
+1. 不带location前缀代理
+
+   这种是proxy_pass的目标URL前缀加上根路径的形式：
+
+   ~~~nginx
+   location /test_no_pre {
+       proxy_pass http://127.0.0.1:8081/;
+   }
+   ~~~
+
+   我们将上面的配置加到服务器的nginx的配置文件中，然后刷新配置，然后我们访问服务器上的此地址：
+
+   ![image-20220621164224215](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220621164224215.png)
+
+   我们可以看到，$uri 变量输出的代理 URI 为`/test.html`，并没有在结果 URL 中看到 location 配置指令的前缀`/test_no_pre`
+
+2. 带前缀代理
+
+   这种是proxy_pass的目标URL前缀不加上根路径的形式：
+
+   ~~~nginx
+   location /test_pre {
+       proxy_pass http://127.0.0.1:8081;
+   }
+   ~~~
+
+   我们将上面的配置加到服务器的nginx的配置文件中，然后刷新配置，然后我们访问服务器上的此地址：
+
+   ![image-20220621165846814](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220621165846814.png)
+
+   我们可以看到，$uri 变量输出的代理 URI 为`/test_pre/test.html`
+
+3. 带部分前缀代理
+
+   除了上面两种代理，还有一种带部分前缀的代理。如果proxy_pass的路径参数不只有ip和端口，还有部分目标URI的路径，那么最终的代理URI就由两部分组成：一部分是配置项中的目标URI前缀，还有一部分是请求URI中去掉location前缀剩余的部分。举个例子：
+
+   ~~~nginx
+   location /test_uri_1 {
+       proxy_pass http://127.0.0.1:8081/contextA;
+   }
+   location /test_uri_2 {
+       proxy_pass http://127.0.0.1:8081/contextB;
+   }
+   ~~~
+
+   
+
+
+
+### 1.6.3 proxy_set_head请求头设置指令
+
+
+
+### 1.6.4 upstream上游服务器组
+
+
+
+### 1.6.5 upstream的上有服务器配置
+
+
+
+### 1.6.6 upstream的负载分配方式
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
