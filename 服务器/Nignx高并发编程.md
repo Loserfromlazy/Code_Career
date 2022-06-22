@@ -965,32 +965,314 @@ proxy_pass 目标URL前缀;
 
    ~~~nginx
    location /test_uri_1 {
-       proxy_pass http://127.0.0.1:8081/contextA;
+       proxy_pass http://127.0.0.1:8081/contextA/;
    }
    location /test_uri_2 {
        proxy_pass http://127.0.0.1:8081/contextB;
    }
    ~~~
 
+   我们将上面的配置加到服务器的nginx的配置文件中，然后刷新配置，然后我们访问服务器上的此地址：
+   
+   ![image-20220622085554426](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220622085554426.png)
+   
+   ![image-20220622085742111](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220622085742111.png)
+   
+   可以看到无论我们加不加根路径，nginx都会将端口号后面的路径给加上，只是在代理路径中去掉了 location 指令的匹配前缀。
    
 
+仅仅使用 proxy_pass 指令进行请求转发，发现很多原始请求信息都丢了。明显的是客户端 IP 地址，前面的例子中请求都是从我们的电脑发出去的，经过代理服务器之后，服务端返回的 remote_addr 客户端 IP 地址并不是我们自己的ip地址，而是变成了代理服务器的 IP 127.0.0.1。
 
+这时我们就需要使用proxy_set_head解决原始信息丢失的问题。
 
 ### 1.6.3 proxy_set_head请求头设置指令
 
+在反向代理之前，proxy_set_head指令能够重新添加/定义字段并传递给代理服务器的请求头，格式如下：
 
+~~~nginx
+#head_field请求头 field_value值
+proxy_pass_header head_field field_value;
+~~~
+
+举个例子，比如经过反向代理后，对于目标服务器来说，客户端已经变成了nginx，目标服务器无法获取真实IP，比如我们的服务器是Tomcat的那么获取的ip（比如用Java的request.getRemoteAddr()）其实拿到的是nginx的IP，所以我们通过这个指令将真实客户端地址保持在请求头中，这样目标服务器通过获取请求头中的内容就可以获取真实客户端ip地址了。
+
+~~~nginx
+location /test_pre_head/ {
+    proxy_pass http://127.0.0.1:8081/;
+    proxy_set_header  X-real-ip $remote_addr;
+}
+~~~
+
+在Java中使用`request.getHeader("X-real-ip")`就能获取到真正的客户端IP。
+
+当然，在整个请求链路上可能不止一次反向代理，因此如果想获取整个转发记录也可以通过设置请求头的方式，如下：
+
+~~~nginx
+location /test_prefix {
+    proxy_pass http://127.0.0.1:8081;
+    proxy_set_header  X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+~~~
+
+这里使用了系统变量$proxy_add_x_forwarded_for，它的第一个地址就是客户端真实地址，然后每转发一次就在后面累加一次代理地址。
+
+一般为了不丢失信息会将信息都保存在头部：
+
+~~~nginx
+location /test {
+    proxy_pass http://127.0.0.1:8081;
+    proxy_set_header  X-Forwarded-For $proxy_add_x_forwarded_for;#转发记录
+    proxy_set_header  X-real-ip $remote_addr;#客户端ip
+    proxy_set_header Host $host;#当前的目标主机
+    proxy_redirect off;
+}
+~~~
+
+> proxy_redirect 指令的作用是修改从上游被代理服务器传来的应答头中的 Location 和 Refresh字段，尤其是当上游服务器返回的响应码是重定向或刷新请求,如HTTP响应码是301或者302时proxy_redirect 可以重设 HTTP 头部的 location 或 refresh 字段值。off 参数表示禁止所有的proxy_redirect 指令
 
 ### 1.6.4 upstream上游服务器组
 
+假设 Nginx 只有反向代理没有负载均衡，它的价值会大打折扣。Nginx 在配置反向代理时可以通过负载均衡机制配置一个上游服务器组（多台上游服务器）。当组内的某台服务器宕机时仍能保持系统可用，从而实现高可用。
+
+Nginx的负载均衡主要使用upstream上游服务器组指令，格式如下：
+
+~~~nginx
+upstream name {
+    #......配置块
+}
+~~~
+
+upstream指令的那么是指定上游服务器组的名称，内部使用server指令定义组内的上游候选服务器。这个指令与server有点类似，其功能是加入一个特殊的虚拟主机server几点，特殊之处在于此指令是服务器组，可以包含一个或多个上游server。比如：
+
+~~~nginx
+upstream testNode {
+    server "192.168.22.1:8080";#上游候选服务器1
+    server "192.168.22.2:8080";#上游候选服务器2
+    server "192.168.22.3:8080";#上游候选服务器3
+    server "192.168.22.4:8080";#上游候选服务器4
+}
+~~~
+
+当请求过来时，testNode主机节点的作用是按照默认负载均衡算法（带权重的轮询算法）在 4 个上游候选服务中选取一个进行请求转发。
+
+我们下面测试一下负载均衡，首先配置一下upstream，然后配置两个用于负载的两个虚拟主机，然后最后配置代理主机
+
+~~~nginx
+upstream testNode {
+        server "127.0.0.1:9090";#上游候选服务器1
+        server "127.0.0.1:9091";#上游候选服务器2
+    }
+#用于负载的虚拟主机
+server {
+    listen 9090;
+    server_name locahost;
+    default_type 'text/html';
+    charset utf-8;
+
+    location / {
+        echo "9090";
+    }
+}
+#用于负载的虚拟主机
+server {
+    listen 9091;
+    server_name localhost;
+    default_type 'text/html';
+    charset utf-8;
+    location / {
+        echo '9091';
+    }
+}
+
+server {
+        listen       80;
+        server_name  localhost;
+     
+        default_type 'text/html';
+        charset utf-8;
+        location / {
+           echo "默认根路径匹配";
+        }
+        location /balance {
+                proxy_pass http://testNode;
+        }
+}
+~~~
 
 
-### 1.6.5 upstream的上有服务器配置
 
+然后我们访问`http://服务器ip地址/balance`然后就能观察到在两个虚拟主机之间进行了负载均衡。
 
+### 1.6.5 upstream的上游服务器配置
+
+upstream 块中将使用 server 指令定义组内的上游候选服务器。内部 server 指令的语法如下：
+
+~~~nginx
+server address [parameters];
+~~~
+
+这个内嵌的server指令可以用于定义上游服务器的地址和其它可选参数，它的地址可以指定为域名或者IP地址带端口，如果未指定端口则默认使用80.
+
+其中server指令的可选参数如下：
+
+1. weight=numbwer,设置上游服务器权重，默认情况下upstream使用加权轮询负载均衡，weight默认为1，如果某个上游服务器宕机就自动剔除。配置权重如下：
+
+   ~~~nginx
+   upstream testNode {
+           server "127.0.0.1:9090" weight=2;
+           server "127.0.0.1:9091" weight=2;
+       }
+   ~~~
+
+   权重越大，将被分发到更多请求。
+
+2. max_conns=number,设置上游服务器最大连接数。默认为0表示没有限制。如果 upstream 服务器组没有通过 zone 指令设置共享内存，那么在单个Worker工作进程范围内对上游服务的最大连接数进行限制；如果upstream服务器组通过zone指令设置了共享内存，那么在全体的 Worker 工作进程范围内对上游服务进行统一的最大连接数限制。
+
+3. backup，此参数用于标识该server是备份的上游节点，当普通的上游服务（非backup）不可用时，请求将被转发到备份的节点上，当普通的上游服务（非backup）可用时，请求将不会被转发到备份的节点上
+
+4. down，此参数用于标识该server节点不可用或者永久下线。
+
+5. max_fils=number，最大错误次数。此参数是用于判断上游服务不可访问的参数之一。该参数表示请求转发最多失败number次就判定该server为不可用。max_fails参数的默认次数为 1，表示转发失败 1 次，该 server 即不可用。如果此参数设置为 0，就会禁用不可用的判断，一直不断地尝试连接后端 server。
+
+6. fail_timeout=time，失败测试的时间长度。一般与上面的max_fils参数一起使用。指的是在fail_timeout时间范围内最多尝试max_fails次，就判定该server为不可用。fail_timeout参数的默认值为10秒。
+
+> server 指令在进行 max_conns 连接数配置时，Nginx 内部会涉及共享内存区域的使用，配置共享内存区域的指令为 zone，其具体语法如下：
+>
+> ~~~nginx
+> zone name [size];
+> ~~~
+>
+> 如果配置了 upstream 的共享内存区域，那么其运行时状态（包括最大连接数）在所有的Worker工作进程之间是共享的。在name相同的情况下，不同的 upstream 组将共享同一个区，这种情况下，size 参数的大小值只需设置一次。
+>
+> 举个例子：
+>
+> ~~~nginx
+> upstream gateway {
+> 	zone upstream_gateway 64k;#名称为upstream_gateway，大小为64K的共享内存区域
+> 	server "127.0.0.1:9090" weight=3 max_conns=500;
+>     server "127.0.0.1:9091" fail_timeout=20s max_fails=2;
+>     server "127.0.0.1:9092" backup;
+> }
+> ~~~
 
 ### 1.6.6 upstream的负载分配方式
 
+upstream 大致有 3 种负载分配方式:
 
+1. 加权轮询
+
+   默认情况下使用加权轮询，默认权重为1，并且各个上游服务器weight相同，表示每个请求按照到达顺序逐一分配到不同的服务器上。例子略，上面已经演示过了。
+
+2. hash指令
+
+   基于hash函数值进行负载均衡，hash函数的key可以包含文本、变量或两者组合。hash函数负载均衡是一个独立的指令，格式如下：
+
+   ~~~nginx
+   hash key [consistent];
+   ~~~
+
+   > 如果 upstream 组中摘除掉一个 server，就会导致 hash 值重新计算，即原来的大多数key 可能会寻址到不同的 server 上。若配置有 consistent 参数，则 hash 一致性将选择 Ketama 算法。这个算法的优势是，如果有 server 从 upstream 组里摘除掉，那么只有少数的 key 会重新映射到其他的 server 上，即大多数 key 不受 server 摘除的影响，还走到原来的 server。这对提高缓存server 命中率有很大帮助。
+
+   举个例子：
+
+   ~~~nginx
+   upstream testHash {
+       hash $euquest_uri consistent;
+       server "192.168.0.1:9090";
+       server "192.168.0.2:9091";
+       server "192.168.0.3:9092";
+   }
+   ~~~
+
+3. ip_hash指令
+
+   基于客户端的ip的hash值进行负载均衡，这样每个客户端固定访问一个后端服务器，可以解决类似session不能跨服务器的问题，如果上游服务不可用，那么就需要手动删除或配置down参数。例子：
+
+   ~~~nginx
+   upstream testHash {
+       ip_hash;
+       server "192.168.0.1:9090";
+       server "192.168.0.2:9091";
+       server "192.168.0.3:9092";
+   }
+   ~~~
+
+# 二、Nginx的lua编程
+
+Nginx 毫无疑问是高性能 Web 服务器很好的选择。除此之外，Nginx 还具备可编程能力，理论上可以使用 Nginx 的扩展组件 ngx_lua 开发各种复杂的动态应用。不过，由于Lua 是一种脚本动态语言，因此不太适合做复杂业务逻辑的程序开发。但是，在高并发场景下，Nginx Lua 编程是解决性能问题的利器。
+
+## 2.1 应用场景
+
+1. API网关：实现数据校验前置、请求过滤、API请求聚合、AB测试、灰度发布、降级、监控等功能。开源网关Kong就是基于Nginx Lua开发的
+
+2. 高速缓存：可以对响应内容进行缓存，减少到后端的请求提升性能。比如Nginx Lua可以和Java容器（Tomcat）或Redis整合，由Java容器进行业务处理和数据缓存，而Nginx负责都缓存并进行响应，从而解决Java容器的性能瓶颈。
+
+3. 简单的动态Web应用
+
+   可以完成一些业务逻辑处理少但是耗费CPU的简单应用，比如模板页面的渲染。一般Nginx Lua页面渲染处理流程为：从Redis获取业务处理结果数据，从本地加载XML/HTML页面模板，然后进行页面渲染。
+
+4. 网关限流：缓存、降级、限流是解决高并发的三大利器，Nginx内置了令牌限流的的算法，但是对于分布式的限流场景，可以通过Nginx Lua编程定制自己的限流机制。
+
+## 2.2 入门
+
+### 2.2.1 ngx_lua
+
+lua是一种轻量级、可嵌入式的脚本语言，因为其小巧轻量，所以可以在Nginx中嵌入Lua VM，请求时创建一个VM，请求结束时回收VM。
+
+ngx_lua是Nginx的一个拓展模块，将Lua VM嵌入Nginx中，从而可以在内部运行Lua脚本，使Nginx变成一个web容器。ngx_lua提供了与Nginx交互的很多API，对于开发人员来说只要学习API就能开发，对于开发Web应用来说，如果接触过Servlet，可以发现ngx_lua与Servlet类似，无外乎是接收请求、参数解析、功能处理、返回响应。
+
+使用 ngx_lua 开发 Web 应用时，有很多源码的Lua基础性模块可供使用，比如 OpenResty 就提供了一些常用的 ngx_lua 开发模块：
+
+- lua-resty-memcached:通过Lua操作Memcached缓存
+- lua-resty-mysql：通过Lua操作MySQL数据库
+- lua-resty-redis：通过Lua操作Redis缓存
+- lua-resty-dns：通过Lua操作DNS域名服务器
+- lua-resty-limit-traffic：通过Lua进行限流
+- lua-resty-template：通过Lua进行模板渲染
+
+除了上述常用组件外，还有很多第三方的ngx_lua组件（lua-resty-jwt、lua-resty-kafka），对于大部分应用场景来说，现在ngx_lua生态环境组件已经足够，如果不能满足需求，也可以开发自己的Lua模块。
+
+### 2.2.2 创建Nginx Lua项目
+
+通过IDEA->New Project新建一个Lua项目：
+
+![image-20220622142428340](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220622142428340.png)
+
+当然创建前需要先安装Lua的插件，如果你的IDEA里没有Lua的插件，那么就没有这个Lua项目的选项，插件安装下面这个即可。
+
+![image-20220622142547274](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220622142547274.png)
+
+新建完的工程只有一个src目录，因此需要我们自己创建文件夹，我们可以创建nginx的配置文件和存放lua脚本的文件夹，具体怎么存放文件夹都可以自己定，下图是我的目录：
+
+![image-20220622160839231](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220622160839231.png)
+
+但是nginx的配置文件一定要放在src目录下，与存放lua脚本的文件夹平级，因为在 nginx-debug.conf 中会应用到 Lua 脚本，使用的是相对路径，如果目录的相对位置不对，就会找不到 Lua 脚本。
+
+以下是nginx-debug.conf的内容：
+
+
+
+## 2.3 Lua基础
+
+
+
+## 2.4 Nginx Lua基础
+
+
+
+## 2.5 Nginx Lua编程示例
+
+
+
+## 2.6 重定向和内部子请求
+
+
+
+## 2.7 Nginx Lua操作Redis
+
+
+
+## 2.8 Nginx Lua编程实战
 
 
 
