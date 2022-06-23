@@ -2,7 +2,7 @@
 
 转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
 
-> 参考资料：Spring Cloud、Nginx高并发核心编程尼恩编著、以及互联网资源
+> 参考资料：Spring Cloud、Nginx高并发核心编程尼恩编著、以及菜鸟教程等互联网资源
 >
 
 # 一、Nginx/OpenResty详解
@@ -50,6 +50,37 @@ Nginx有以下3个主要社区分支：
 > 学习前有一点需要注意：如果你的echo在浏览器上只能下载文件后才能看到内容，那么你就可以通过加请求头来解决此问题(我的是因为使用了windows版本的openresty有此问题，我在linux上安装的没有此问题)，请求头如下：
 >
 > add_header Content-Type text/plain; 
+
+下面我们对nginx的启动命令参数进行详细的了解：
+
+nginx的原始启动命令就是nginx，但是可以传参数，就像上面停止重载时的-s参数，下面我们来详细的了解一下各个参数的含义：
+
+1. `-v`
+
+   查看nginx的版本：
+
+   ~~~
+   D:\IDEA\LuaDemo>nginx -v
+   nginx version: openresty/1.21.4.1
+   ~~~
+
+2. `-c`
+
+   此参数用于指定一个Nginx配置文件来替换默认的Nginx配置文件，例如我们下面要学习的lua编程中就是这么替换nginx的配置文件的：
+
+   D:\IDEA\LuaDemo\src>nginx -p ./ -c nginx-demo.conf
+
+3. `-t`
+
+   用于测试Nginx的配置文件，如果不能确定Nginx配置文件的语法是否正确，就可以通过Nginx的-t命令进行测试。
+
+4. `-p`
+
+   此参数用于设置前缀路径，nginx配置文件中用到的相对路径都会加上这个前缀
+
+5. `-s`
+
+   表示给nginx发送进程信号包括stop（停止）或reload（重载）
 
 ## 1.2 Nginx原理
 
@@ -1215,6 +1246,16 @@ Nginx 毫无疑问是高性能 Web 服务器很好的选择。除此之外，Ngi
 
 ## 2.2 入门
 
+我们这里使用的是windows上的openresty/1.21.4.1，而且需要将其配置到环境变量中，方法如下：
+
+新建变量，然后选择openresty的根目录
+
+![image-20220623111050927](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220623111050927.png)
+
+然后配置到path中即可：
+
+![image-20220623111205603](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220623111205603.png)
+
 ### 2.2.1 ngx_lua
 
 lua是一种轻量级、可嵌入式的脚本语言，因为其小巧轻量，所以可以在Nginx中嵌入Lua VM，请求时创建一个VM，请求结束时回收VM。
@@ -1232,7 +1273,7 @@ ngx_lua是Nginx的一个拓展模块，将Lua VM嵌入Nginx中，从而可以在
 
 除了上述常用组件外，还有很多第三方的ngx_lua组件（lua-resty-jwt、lua-resty-kafka），对于大部分应用场景来说，现在ngx_lua生态环境组件已经足够，如果不能满足需求，也可以开发自己的Lua模块。
 
-### 2.2.2 创建Nginx Lua项目
+### 2.2.2 创建和启动Nginx Lua项目
 
 通过IDEA->New Project新建一个Lua项目：
 
@@ -1242,7 +1283,7 @@ ngx_lua是Nginx的一个拓展模块，将Lua VM嵌入Nginx中，从而可以在
 
 ![image-20220622142547274](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220622142547274.png)
 
-新建完的工程只有一个src目录，因此需要我们自己创建文件夹，我们可以创建nginx的配置文件和存放lua脚本的文件夹，具体怎么存放文件夹都可以自己定，下图是我的目录：
+**新建完的工程只有一个src目录**，因此需要我们自己创建文件夹，我们可以创建nginx的配置文件和存放lua脚本的文件夹，具体怎么存放文件夹都可以自己定，下图是我的目录：
 
 ![image-20220622160839231](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220622160839231.png)
 
@@ -1250,15 +1291,644 @@ ngx_lua是Nginx的一个拓展模块，将Lua VM嵌入Nginx中，从而可以在
 
 以下是nginx-debug.conf的内容：
 
+```nginx
+worker_processes  1;
+
+#开发环境
+error_log  logs/error.log  debug;
+#生产环境
+#error_log  logs/error.log;
+
+#pid     logs/nginx.pid;
+
+events {
+  worker_connections  1024;
+}
+
+http {
+      default_type 'text/html';
+      charset utf-8;
+
+      log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+      '$status $body_bytes_sent "$http_referer" '
+      '"$http_user_agent" "$http_x_forwarded_for"';
+      access_log  logs/access_main.log  main;
 
 
-## 2.3 Lua基础
+      sendfile        on;
+      #tcp_nopush     on;
+
+      #keepalive_timeout  0;
+      keepalive_timeout  65;
+
+      #gzip  on;
+
+      #指定缓存信息
+      lua_shared_dict ngx_cache 128m;
+      #保证只有一个线程去访问redis或是mysql-lock for cache
+      lua_shared_dict cache_lock 100k;
+      #lua扩展加载
+
+      # for linux
+       #lua_package_path "./?.lua;/vagrant/LuaDemoProject/src/?/?.lua;/vagrant/LuaDemoProject/src/?.lua;/usr/local/openresty/lualib/?/?.lua;/usr/local/openresty/lualib/?.lua;;";
+       #lua_package_cpath "/usr/local/openresty/lualib/?/?.so;/usr/local/openresty/lualib/?.so;;";
+
+      # for windows
+      lua_package_path "./?.lua;C:/dev/refer/LuaDemoProject/src/?.lua;D:/openresty/openresty-1.21.4.1-win64/lualib/?.lua;;";
+      lua_package_cpath "D:/openresty/openresty-1.21.4.1-win64/lualib/?.dll;;";
 
 
+      # 初始化项目
+      init_by_lua_file luaScript/init/loading_config.lua;
+
+      #调试模式（即关闭lua脚本缓存)
+      lua_code_cache off;
+
+       server {
+          listen       80 default;
+          server_name  localhost;
+          default_type 'text/html';
+          charset utf-8;
+
+
+
+          location / {
+            echo "默认根路径匹配: /";
+          }
+
+
+          #测试lua是否可以执行
+          location  /lua {
+            content_by_lua 'ngx.say("Hello, Lua!")';
+          }
+       }
+  }
+```
+
+上面配置文件中用到的lua脚本如下：
+
+```lua
+-- 加载cjson
+cjson = require("cjson");
+-- 加载string
+string = require("string");
+--table = require("table");
+--[[
+   项目内公共包配置
+]]
+-- 加载resty.core
+require("resty.core");
+```
+
+创建完项目后，我们就可以启动项目，启动项目是通过启动Nginx来执行Lua项目(这里能直接用nginx命令是因为配置了环境变量)，启动等相关命令如下：
+
+启动Lua项目：
+
+`D:\IDEA\LuaDemo\src>nginx -p ./ -c nginx-demo.conf`
+
+重启
+
+`D:\IDEA\LuaDemo\src>nginx -p ./ -c nginx-demo.conf -s reload`
+
+停止
+
+`D:\IDEA\LuaDemo\src>nginx -p ./ -c nginx-demo.conf -s stop`
+
+## 2.3 Lua基础和入门
+
+Lua 是一种轻量小巧的脚本语言，用标准C语言编写并以源代码形式开放， 其设计目的是为了嵌入应用程序中，从而为应用程序提供灵活的扩展和定制功能。
+
+Lua脚本需要通过Lua解释器来解释执行，除了Lua官方的默认解释器外，目前使用广泛的Lua解释器叫作LuaJIT。LuaJIT 是采用 C 语言编写的Lua脚本解释器。LuaJIT被设计成全兼容标准Lua 5.1，因此LuaJIT 代码的语法和标准 Lua 的语法没多大区别。LuaJIT 和 Lua 的一个区别是，LuaJIT 的运行速度比标准 Lua 快数十倍，可以说是一个 Lua 的高效率版本。
+
+### 2.3.1 Lua中模块
+
+与Java类似，实际开发的 Lua 代码需要进行分模块开发。Lua 中的一个模块对应一个 Lua 脚本文件。使用 require 指令导入 Lua 模块，第一次导入模块后，所有 Nginx 进程全局共享模块的数据和代码，每个 Worker 进程需要时会得到此模块的一个副本，不需要重复导入，从而提高 Lua 应用的性能。
+
+下面给出一个例子：
+
+```lua
+--定义一个应用程序公有的Lua对象
+local app_info = {version = "1.0"}
+--增加一个path属性，保存Nginx进程所保存的Lua模块路径，包括conf配置文件的部分路径
+app_info.path = package.path;
+
+--局部函数，取得最大值
+local function max(num1,num2)
+    if num1>num2 then
+        result = num1;
+    else
+        result = num2
+    end
+    return result;
+end
+
+--统一的模块对象
+local _Module = {
+    app_info = app_info;
+    max = max;
+}
+return _Module
+```
+
+模块内的所有对象、数据、函数都定义成局部变量或者局部函数。然后，对于需要暴露给外部的对象或者函数，作为成员属性保存到一个统一的 Lua 局部对象（如_Module）中，通过返回这个统一的局部对象将内部的成员对象或者方法暴露出去，从而实现 Lua 的模块化封装。
+
+接下来我们使用上面的封装好的lua模块：
+
+我们在ngixn的配置文件中添加：
+
+```nginx
+#第一个lua脚本 hellword
+location /helloworld {
+  default_type 'text/html';
+  charset utf-8;
+  content_by_lua_file luaScript/module/helloworld.lua;
+}
+```
+
+然后编写helloworld.lua脚本
+
+```lua
+--导入自定义模块
+local basic = require("luaScript.module.base");
+
+ngx.say("hello world." );
+ngx.say("<hr>" );
+
+--使用模块的成员属性
+ngx.say("Lua path is: " .. basic.app_info.path);
+ngx.say("<hr>" );
+--使用模块的成员方法
+ngx.say("max 1 and 11 is: ".. basic.max(1,11) );
+```
+
+然后使用`nginx -p ./ -c nginx-demo.conf -s reload`命令，重载ngixn，然后我们访问`localhost/helloworld`就可以看到对应的内容了,如下图：
+
+![image-20220623131424928](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220623131424928.png)
+
+lua中导入模块时使用`require(目录1.目录2.模块名)`源目录之间的`/`斜杠分隔符改成`.`点号分隔符。这一点和 Java的包名的分隔符类似。
+
+Lua 文件查找时，**首先会在 Nginx 的当前工作目录查找，如果没有找到，就会在 Nginx 的 Lua包路径 lua_package_path 和 lua_package_cpath 声明的位置查找**。整个 Lua 文件的查找过程和 Java的.class 文件查找的过程很类似。需要注意的是，Lua 包路径需要在 nginx.conf 配置文件中进行配置,如下面代码（完整配置文件上面已给出）:
+
+~~~nginx
+# for windows
+http{
+    #...略
+    lua_package_path "./?.lua;C:/dev/refer/LuaDemoProject/src/?.lua;D:/openresty/openresty-1.21.4.1-win64/lualib/?.lua;;";
+	lua_package_cpath "D:/openresty/openresty-1.21.4.1-win64/lualib/?.dll;;";
+	#...略
+}
+~~~
+
+这里有两个包路径配置项：lua_package_path用于配置 Lua 文件的包路径；lua_package_cpath用于配置C语言模块文件的包路径。在Linux 系统上，C语言模块文件的类型是`.so`在 Windows平台上，C语言模块文件的类型是`.dll`。Lua 包路径如果需要配置多个路径，那么路径之间使用分号`;`分隔。末尾的两个分号`;;`表示加上 Nginx 默认的 Lua 包搜索路径，其中包含Nginx的安装目录下的lua目录。
+
+在OpenResty的lualib下已经提供了大量的第三方开发库，如CJSON、Redis客户端、Mysql客户端等，并且这些模块已经包含到默认的搜索路径中。在在OpenResty的lualib下的模块可以直接在lua文件中通过require导入，比如：
+
+~~~lua
+local redis = require("resty.redis")
+~~~
+
+### 2.3.2 Lua数据类型
+
+lua 是动态类型语言，和 JavaScript 等脚本语言类似，变量没有固定的数据类型，每个变量可以包含任意类型的值。且变量不要类型定义,只需要为变量赋值。值可以存储在变量中，作为参数传递或结果返回。
+
+Lua 中有 8 个基本类型分别为：nil、boolean、number、string、userdata、function、thread 和 table。使用内置的 type（…）方法可以获取该变量的数据类型。
+
+| 数据类型 | 描述                                                         |
+| :------- | :----------------------------------------------------------- |
+| nil      | 这个最简单，只有值nil属于该类，表示一个无效值（在条件表达式中相当于false）。 |
+| boolean  | 包含两个值：false和true。                                    |
+| number   | 表示双精度类型的实浮点数                                     |
+| string   | 字符串由一对双引号或单引号来表示                             |
+| function | 由 C 或 Lua 编写的函数                                       |
+| userdata | 表示任意存储在变量中的C数据结构                              |
+| thread   | 表示执行的独立线路，用于执行协同程序                         |
+| table    | Lua 中的表（table）其实是一个"关联数组"（associative arrays），数组的索引可以是数字、字符串或表类型。在 Lua 里，table 的创建是通过"构造表达式"来完成，最简单构造表达式是{}，用来创建一个空表。 |
+
+下面给出例子，首先编写方法：
+
+```lua
+local function showDataType()
+    local i;
+    ngx.say("字符串类型：");ngx.say(type("hello,world"));ngx.say("<br>");
+    ngx.say("方法类型：");ngx.say(type(showDataType));ngx.say("<br>");
+    ngx.say("布尔类型：");ngx.say(type(true));ngx.say("<br>");
+    ngx.say("整数类型：");ngx.say(type(11));ngx.say("<br>");
+    ngx.say("浮点数类型：");ngx.say(type(11.1));ngx.say("<br>");
+    ngx.say("nil类型：");ngx.say(type(nil));ngx.say("<br>");
+    ngx.say("未赋值类型：");ngx.say(type(i));ngx.say("<br>");
+end
+```
+
+然后在helloworld模块调用此方法：
+
+```lua
+local basic = require("luaScript.module.base");
+ngx.say(basic.showDataType())
+```
+
+![image-20220623133755345](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220623133755345.png)
+
+lua的数据结构有以下需要注意的几点：
+
+1. nil 是一种类型，在 Lua 中表示“无效值”。nil 也是一个值，表示变量是否被赋值，如果变量没有被赋值，那么值为 nil，类型也为 nil。 与 Nginx 略微有一点不同，OpenResty 还提供了一种特殊的空值，即 ngx.null，用来表示空值，但是不同于 nil。
+
+2. boolean（布尔类型）的可选值为 true 和 false。在 Lua 中，只有 nil 与 false 为“假”，其他所有值均为“真”，比如数字 0 和空字符串都是“真”。这一点和 Java 语言的 boolean 类型还是有一点区别的。
+
+3. number 类型用于表示实数，与 Java 中的 double 类型类似。但是又有区别，Lua 的整数类型也是 number。一般来说，Lua 中的 number 类型是用双精度浮点数来实现的。可以使用数学函数math.lua来操作 number 类型的变量。在 math.lua 模块中定义了大量数字操作方法，比如定义了 floor（向下取整）和 ceil（向上取整）等操作。
+
+4. table 类型实现了一种抽象的“关联数组”，相当于 Java 中的 Map。“关联数组”是一种具有特殊索引方式的数组，索引（也就是 Map 中的 key）通常是 number 类型或者 string 类型，也可以是除 nil 以外的任意类型的值。默认情况下，table 中的 key 是 number 类型的，并且 key 的值为递增的数字。
+
+5. 运行时，Lua会自动在string和numbers之间自动进行类型转换，当一个字符串使用算术操作符时， string 就会被转成数字。
+
+   ```
+   print("10"+ 1)     --> 11
+   print("10 + 1")  --> 10 + 1
+   print("hello"+ 1)    -- 报错 (无法转换 "hello")
+   ```
+
+   反过来，当 Lua 期望一个 string 而碰到数字时，会将数字转成 string。
+
+   ```
+   print(10 .. 20) --> 1020
+   ```
+
+   `..`在Lua中是字符串连接符，当在一个数字后面写`..`时，必须加上空格以防止被解释错。
+
+6. 和 JavaScript 脚本语言类似，在 Lua 中的函数也是一种数据类型，类型为 function。函数可以存储在变量中，可以作为参数传递给其他函数，还可以作为其他函数的返回值。定义一个有名字的函数本质上是定义一个函数对象，然后赋值给变量名称（函数名）
+
+### 2.3.3 Lua字符串
+
+lua中有三种方式表示字符串：
+
+1. 使用一对半角英文单引号例如：'hello'
+2. 使用一对半角英文双引号例如："hello"
+3. 使用双方括号的方式定义，例如[["add\name","hello"]],双方括号中的任何转义字符不会被处理
+
+Lua的字符串的值是不可改变的，类似Java，如果需要改变就要根据要求创建一个新的字符串并返回。且Lua不支持下标访问字符串的某个字符。
+
+Lua中的主要字符串操作如下：
+
+1. `..`字符串拼接
+
+   ~~~lua
+   local function stringOperator()
+       local str = "hello" .. "world" .. "!";
+       print(str);
+       ngx.say(str);
+   end
+   ~~~
+
+2. `string.len(s)`获取字符串长度
+
+   ~~~lua
+   local function stringLen()
+       local str = "hello" .. "world" .. "!";
+       ngx.say(string.len(str));
+       ngx.say("<br>");
+       ngx.say(#str);
+   end
+   ~~~
+
+   此功能与`#`运算符类似，这个运算符也是取字符串长度，开发建议使用#来获取Lua字符串长度
+
+3. `string.format(formatString,...)`格式化字符串
+
+   第一个参数表示需要进行格式化的字符串规则，例如：
+
+   ~~~lua
+   --简单的圆周率格式化规则
+   string.format(" 保留两位小数的圆周率 %.4f", 3.1415926);
+   --格式化日期
+   string.format("%s %02d-%02d-%02d", "今天 is:", 2020, 1, 1))；
+   ~~~
+
+   格式指令由%加上一个类型字母组成，比如%s（字符串格式化）、%d（整数格式化）、%f（浮点数格式化）等，在%和类型符号的中间可以选择性地加上一些格式控制数据，比如%02d，表示进行两位的整数格式输出。总体来说，formatString 参数中的格式化指令规则与标准 C 语言中 printf 函数的格式化规则基本相同。
+
+4. `string.find(str,substr[,init[,plain]])`字符串匹配
+
+    在一个指定的目标字符串 str 中搜索指定的内容 substr，如果找到了一个匹配的子串，就会返回这个子串的起始索引和结束索引，不存在则返回 nil。**init** 指定了搜索的起始位置，默认为 1，可以一个负数，表示从后往前数的字符个数。**plain** 表示是否以正则表达式匹配。以下实例查找字符串 "Lua" 的起始索引和结束索引位置：
+
+   ~~~
+   > string.find("Hello Lua user", "Lua", 1)  
+   7  9
+   ~~~
+
+5. `string.upper(s)`字符串转大写
+
+   接收一个字符串s，返回一个把所有小写字母变成大写字母的字符串。与 string.upper(s)方法类似，string.lower(s)方法的作用是接收一个字符串s，返回一个全部字母变成小写的字符串。
+
+### 2.3.4 Lua变量
+
+变量在使用前，需要在代码中进行声明，即创建该变量。编译程序执行代码之前编译器需要知道如何给语句变量开辟存储区，用于存储变量的值。
+
+Lua 变量有三种类型：全局变量、局部变量、表中的域。Lua 中的变量全是全局变量，哪怕是语句块或是函数里，除非用 local 显式声明为局部变量。局部变量的作用域为从声明位置开始到所在语句块结束。变量的默认值均为 nil。例子（来源于菜鸟教程）：
+
+~~~lua
+-- test.lua 文件脚本
+a = 5               -- 全局变量
+local b = 5         -- 局部变量
+
+function joke()
+    c = 5           -- 全局变量
+    local d = 6     -- 局部变量
+end
+
+joke()
+print(c,d)          --> 5 nil
+
+do
+    local a = 6     -- 局部变量
+    b = 6           -- 对局部变量重新赋值
+    print(a,b);     --> 6 6
+end
+
+print(a,b)      --> 5 6
+~~~
+
+### 2.3.4 Lua数组
+
+Lua数组内部采用哈希表保存键值对，类似Java中的HashMap，不同的是Lua在初始化普通数组时如果不显示指定元素的key，默认用数字索引作为key。
+
+定义一个数组使用花括号即可，中间加上初始化的元素序列，元素之间逗号隔开：
+
+~~~lua
+--普通数组
+local array = {"111","hello","world"}
+--键值对数组
+local array1 = {k1="111",k2="hello",k3="world"}
+~~~
+
+取得数组元素值使用[]形式为array[key],对于键值对形式的数组key就是键。这里要注意的是，普通数组的数字下标从1开始，且普通数组的长度是从第一个元素开始计算到最后一个非nil为止。举例：
+
+~~~lua
+--遍历上面的数组
+for i =1 , 3 do
+	ngx.say(i .. "=" .. array[i] .. " ");
+end
+
+for k,v in pairs(array1) do
+    ngx.say(k .. "=" .. array[k] .. " ");
+end
+~~~
+
+Lua 定义了一个负责数组和容器操作的 table 模块，主要的操作如下:
+
+| 序号 | 方法 & 用途                                                  |
+| :--- | :----------------------------------------------------------- |
+| 1    | **table.concat (table [, sep [, start [, end]]]):**concat是concatenate(连锁, 连接)的缩写. table.concat()函数列出参数中指定table的数组部分从start位置到end位置的所有元素, 元素间以指定的分隔符(sep)隔开。 |
+| 2    | **table.insert (table, [pos,] value):**在table的数组部分指定位置(pos)插入值为value的一个元素. pos参数可选, 默认为数组部分末尾. |
+| 3    | **table.maxn (table)**指定table中所有正数key值中最大的key值. 如果不存在key值为正数的元素, 则返回0。(**Lua5.2之后该方法已经不存在了,本文使用了自定义函数实现**) |
+| 4    | **table.remove (table [, pos])**返回table数组部分位于pos位置的元素. 其后的元素会被前移. pos参数可选, 默认为table长度, 即从最后一个元素删起。 |
+| 5    | **table.sort (table [, comp])**对给定的table进行升序排序。   |
+| 6    | **table.getn (t)**获取长度                                   |
+
+### 2.3.5 Lua流程控制
+
+1. if
+
+   以关键词 if 开头，以关键词 end 结束。这一点和 Java 不同，Java 中使用右花括号作为分支结构体的结束符号。例子（来源于菜鸟教程）
+
+   ~~~lua
+   --[ 定义变量 --]
+   a = 10;
+   
+   --[ 使用 if 语句 --]
+   if( a < 20 )
+   then
+      --[ if 条件为 true 时打印以下信息 --]
+      print("a 小于 20" );
+   end
+   print("a 的值为:", a);
+   ~~~
+
+2. if-else
+
+   例子（来源于菜鸟教程）
+
+   ~~~lua
+   --[ 定义变量 --]
+   a = 100;
+   --[ 检查条件 --]
+   if( a < 20 )
+   then
+      --[ if 条件为 true 时执行该语句块 --]
+      print("a 小于 20" )
+   else
+      --[ if 条件为 false 时执行该语句块 --]
+      print("a 大于 20" )
+   end
+   print("a 的值为 :", a)
+   ~~~
+
+3. if-elseif-else
+
+   例子（来源于菜鸟教程）
+
+   ~~~lua
+   --[ 定义变量 --]
+   a = 100
+   
+   --[ 检查布尔条件 --]
+   if( a == 10 )
+   then
+      --[ 如果条件为 true 打印以下信息 --]
+      print("a 的值为 10" )
+   elseif( a == 20 )
+   then  
+      --[ if else if 条件为 true 时打印以下信息 --]
+      print("a 的值为 20" )
+   elseif( a == 30 )
+   then
+      --[ if else if condition 条件为 true 时打印以下信息 --]
+      print("a 的值为 30" )
+   else
+      --[ 以上条件语句没有一个为 true 时打印以下信息 --]
+      print("没有匹配 a 的值" )
+   end
+   print("a 的真实值为: ", a )
+   ~~~
+
+4. for循环
+
+   Lua 编程语言中数值 for 循环语法格式:
+
+   ```
+   for var=exp1,exp2,exp3 do  
+       <执行体>  
+   end  
+   ```
+
+   var 从 exp1 变化到 exp2，每次变化以 exp3 为步长递增 var，并执行一次 **"执行体"**。exp3 是可选的，如果不指定，默认为1。
+
+   例子（来源于菜鸟教程）
+
+   ~~~lua
+   for i=1,f(x) do
+       print(i)
+   end
+    
+   for i=10,1,-1 do
+       print(i)
+   end
+   ~~~
+
+5. foreach
+
+   泛型 for 循环通过一个迭代器函数来遍历所有值，类似 java 中的 foreach 语句。
+
+   Lua 编程语言中泛型 for 循环语法格式:
+
+   ```
+   --打印数组a的所有值  
+   a = {"one", "two", "three"}
+   for i, v in ipairs(a) do
+       print(i, v)
+   end 
+   ```
+
+   i是数组索引值，v是对应索引的数组元素值。ipairs是Lua提供的一个迭代器函数，用来迭代数组。
+
+   例子（来源于菜鸟教程）
+
+   ~~~lua
+   days = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"}  
+   for i,v in ipairs(days) do  
+       print(v) 
+   end  
+   ~~~
+
+### 2.3.6 Lua函数
+
+Lua 编程语言函数定义格式如下：
+
+```lua
+optional_function_scope function function_name( argument1, argument2, argument3..., argumentn)
+    function_body
+    return result_params_comma_separated
+end
+```
+
+解析：
+
+- **optional_function_scope:** 该参数是可选的制定函数是全局函数还是局部函数，未设置该参数默认为全局函数，如果你需要设置函数为局部函数需要使用关键字 **local**。
+- **function_name:** 指定函数名称。
+- **argument1, argument2, argument3..., argumentn:** 函数参数，多个参数以逗号隔开，函数也可以不带参数。
+- **function_body:** 函数体，函数中需要执行的代码语句块。
+- **result_params_comma_separated:** 函数返回值，Lua语言函数可以返回多个值，每个值以逗号隔开。
+
+例子（来自菜鸟教程）
+
+~~~lua
+--[[ 函数返回两个值的最大值 --]]
+function max(num1, num2)
+
+   if (num1 > num2) then
+      result = num1;
+   else
+      result = num2;
+   end
+
+   return result;
+end
+-- 调用函数
+print("两值比较最大值为 ",max(10,4))
+print("两值比较最大值为 ",max(5,6))
+
+--在lua中也是可以将函数作为参数传递的
+myprint = function(param)
+   print("这是打印函数 -   ##",param,"##")
+end
+
+function add(num1,num2,functionPrint)
+   result = num1 + num2
+   -- 调用传递的函数参数
+   functionPrint(result)
+end
+myprint(10)
+-- myprint 函数作为参数传递
+add(2,5,myprint)
+~~~
+
+当然，**Lua函数可以返回多个结果值**，比如string.find，其返回匹配串"开始和结束的下标"（如果不存在匹配串返回nil）。
+
+ ```
+  > s, e = string.find("www.runoob.com", "runoob") 
+  > print(s, e)
+  5    10
+ ```
+
+除此之外，lua函数还可以使用可变参数：
+
+lua 函数可以接受可变数目的参数，和 C 语言类似，在函数参数列表中使用三点 **...** 表示函数有可变的参数。例子（来源于菜鸟教程）：
+ ```lua
+ function average(...)
+    result = 0
+    local arg={...}    --> arg 为一个表，局部变量
+    for i,v in ipairs(arg) do
+       result = result + v
+    end
+    print("总共传入 " .. #arg .. " 个数")
+    return result/#arg
+ end
+ 
+ print("平均值为",average(10,5,3,4,5,6))
+ --当然我们也可以通过select()来选择可变参
+ function average(...)
+    result = 0
+    local arg={...}
+    for i,v in ipairs(arg) do
+       result = result + v
+    end
+    print("总共传入 " .. select("#",...) .. " 个数")
+    return result/select("#",...)
+ end
+ ```
+
+- **select('#', …)** 返回可变参数的长度。
+- **select(n, …)** 用于返回从起点 **n** 开始到结束位置的所有参数列表。
 
 ## 2.4 Nginx Lua基础
 
+### 2.4.1 Nginx Lua的执行原理
 
+在OpenResty中，每个Worker进程都使用一个Lua VM（Lua虚拟机），当请求被分配到Worker时，将在这个VM中创建一个协程，协程之间数据隔离，每个协程都具有独立的全局变量。
+
+ngx_lua时将lua嵌入nginx，让nginx执行lua脚本，并且高并发、非阻塞地处理各种请求。Lua内置协程可以很好的将异步回调转换成顺序调用的形式。开发者可以采用串行的方式编程，ngx_lua会在执行阻塞IO时自动终端，保存上下文，然后将IO操作委托给nginx事件处理机制，在IO操作完成后，ngx_lua会恢复上下文，程序继续执行，这些操作对用户程序都是透明的。
+
+每个Nginx的Worker进程都持有一个Lua解释器或LuaJIT实例，被这个Worker处理的所有请求共享这个实例。每个请求的context上下文会被Lua轻量级的协程分隔，从而保证各个请求是独立的。ngx_lua采用one-coroutine-per-request的处理模型，对于每个请求都有一个协程用于执行用户代码处理请求，当处理完成后这个协程会销毁。每个协程都有自己一个独立的全局环境，继承于全局共享的、只读的公共数据。所以，被用户代码注入全局空间的任何变量都不会影响其他请求的处理，并且这些变量在请求处理完成后会被释放，这样就保证所有的用户代码都运行在一个 sandbox（沙箱）中，这个沙箱与请求具有相同的生命周期。得益于 Lua 协程的支持，ngx_lua 在处理 10 000 个并发请求时只需要很少的内存。根据测试，ngx_lua处理每个请求只需要 2KB 的内存，如果使用 LuaJIT 就会更少。所以 ngx_lua 非常适合用于实现可扩展的、高并发的服务。
+
+![image-20220623154000791](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220623154000791.png)
+
+
+
+### 2.4.2 Nginx Lua的配置指令
+
+ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 Lua 脚本以及如何返回 Lua脚本的执行结果。
+
+| ngx_lua配置指令         | 指令说明                                                     |
+| ----------------------- | ------------------------------------------------------------ |
+| lua_package_path        | 用于Lua外部库的搜索路径，搜索的文件类型为.lua文件            |
+| lua_package_cpath       | 用于Lua外部库的搜索路径，搜索C语言编写的外部库文件。在Linux中搜索.so类型的文件；在Windows下为.dll文件。 |
+| init_by_lua             | Master进程启动时挂载的Lua代码块，常用于导入公共模块          |
+| init_by_lua_file        | Master进程启动时挂载的Lua脚本文件                            |
+| init_worker_by_lua      | Master进程启动时挂载的Lua代码块，常用于执行一些定时任务      |
+| init_worker_by_lua_file | Master进程启动时挂载的Lua脚本文件，常用于执行一些定时任务    |
+| set_by_lua              | 类似于rewrite模块中的set指令，将Lua代码块的返回结果设置在Nginx的变量中 |
+| set_by_lua_file         | 类似于rewrite模块中的set指令，将Lua脚本文件的返回结果设置在Nginx的变量中 |
+| content_by_lua          | 执行在content阶段的Lua代码块，执行结果作为请求响应的内容。Lua代码块是编写在Nginx |
+|                         |                                                              |
+|                         |                                                              |
+|                         |                                                              |
+|                         |                                                              |
+|                         |                                                              |
+|                         |                                                              |
+|                         |                                                              |
+|                         |                                                              |
+|                         |                                                              |
+
+
+
+### 2.4.3 Nginx Lua的内置常量和变量
 
 ## 2.5 Nginx Lua编程示例
 
