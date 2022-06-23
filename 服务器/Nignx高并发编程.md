@@ -1915,16 +1915,16 @@ ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 L
 | init_worker_by_lua_file | Master进程启动时挂载的Lua脚本文件，常用于执行一些定时任务    |
 | set_by_lua              | 类似于rewrite模块中的set指令，将Lua代码块的返回结果设置在Nginx的变量中 |
 | set_by_lua_file         | 类似于rewrite模块中的set指令，将Lua脚本文件的返回结果设置在Nginx的变量中 |
-| content_by_lua          | 执行在content阶段的Lua代码块，执行结果作为请求响应的内容。Lua代码块是编写在Nginx |
-|                         |                                                              |
-|                         |                                                              |
-|                         |                                                              |
-|                         |                                                              |
-|                         |                                                              |
-|                         |                                                              |
-|                         |                                                              |
-|                         |                                                              |
-|                         |                                                              |
+| content_by_lua          | 执行在content阶段的Lua代码块，执行结果作为请求响应的内容。Lua代码块是编写在Nginx字符串中的Lua脚本，可能需要进行特殊字符转义 |
+| content_by_lua_file     | 执行在content阶段的Lua脚本文件，执行结果作为请求响应的内容   |
+| content_by_lua_block    | 与content_by_lua指令类似，不同之处在于该指令在一对花括号中编写({})lua脚本源码，而不是在nginx字符串中 |
+| rewrite_by_lua          | 执行在rewrite阶段的Lua代码块，完成转发、重定向、缓存等功能。 |
+| rewrite_by_lua_file     | 执行在rewrite阶段的Lua脚本文件，完成转发、重定向、缓存等功能。 |
+| access_by_lua           | 执行在access阶段的Lua代码块，完成ip准入、接口权限等功能。    |
+| access_by_lua_file      | 执行在access阶段的Lua脚本文件，完成ip准入、接口权限等功能。  |
+| header_filter_by_lua    | 响应头部过滤处理的lua代码块，比如可以用于添加响应头的信息    |
+| body_filter_by_lua      | 响应体过滤处理的lua代码块，比如可以用于加密响应体            |
+| log_by_lua              | 异步完成日志记录的lua代码块，比如可以即在本地记录日志，又记录到ELT集群 |
 
 
 
