@@ -1926,9 +1926,15 @@ ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 L
 | body_filter_by_lua      | 响应体过滤处理的lua代码块，比如可以用于加密响应体            |
 | log_by_lua              | 异步完成日志记录的lua代码块，比如可以即在本地记录日志，又记录到ELT集群 |
 
+1. lua_package_path
 
+   用于设置`.lua`外部库的搜索路径，此指令的上下文为http配置块，它的默认值为LUA_PATH环境变量内容或者lua
+
+2. lua_package_cpath
 
 ### 2.4.3 Nginx Lua的内置常量和变量
+
+
 
 ## 2.5 Nginx Lua编程示例
 
