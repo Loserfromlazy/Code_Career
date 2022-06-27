@@ -1924,19 +1924,242 @@ ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 L
 | access_by_lua_file      | 执行在access阶段的Lua脚本文件，完成ip准入、接口权限等功能。  |
 | header_filter_by_lua    | 响应头部过滤处理的lua代码块，比如可以用于添加响应头的信息    |
 | body_filter_by_lua      | 响应体过滤处理的lua代码块，比如可以用于加密响应体            |
-| log_by_lua              | 异步完成日志记录的lua代码块，比如可以即在本地记录日志，又记录到ELT集群 |
+| log_by_lua              | 异步完成日志记录的lua代码块，比如可以即在本地记录日志，又记录到ELT集 |
 
 1. lua_package_path
 
-   用于设置`.lua`外部库的搜索路径，此指令的上下文为http配置块，它的默认值为LUA_PATH环境变量内容或者lua
+   用于设置`.lua`外部库的搜索路径，此指令的上下文为http配置块，它的默认值为LUA_PATH环境变量内容或者lua编译的默认值。
+
+   ~~~lua
+   #设置lua扩展库的搜索路径(;;是默认路径)
+   lua_package_path "./?.lua;C:/dev/refer/LuaDemoProject/src/?.lua;D:/openresty/openresty-1.21.4.1-win64/lualib/?.lua;;";
+   ~~~
+
+   OpenResty可以在搜索路径中使用插值变量，例如可以使用$prefix或${prefix}获取虚拟服务器server的前缀路径，server前缀路径通常在Nginx服务器启动时通过-p PATH命令行选项来指定。
 
 2. lua_package_cpath
 
+   用于设置Lua的C语言模块外部库".so"(Linux)或".dll"(Windows)的搜索路径，此指令上下文为http配置块
+
+   ~~~lua
+   lua_package_cpath "D:/openresty/openresty-1.21.4.1-win64/lualib/?.dll;;";
+   ~~~
+
+   OpenResty可以在搜索路径中使用插值变量，例如可以使用$prefix或${prefix}获取虚拟服务器server的前缀路径，server前缀路径通常在Nginx服务器启动时通过-p PATH命令行选项来指定。
+
+3. init_by_lua
+
+   ~~~lua
+   init_by_lua_file luaScript/init/loading_config.lua;
+   ~~~
+
+   此指令只能用于http上下文，运行在配置加载阶段。当Nginx的master进程在加载Nginx配置文件时，在全局LuaVM级别上运行参数指定的脚本块。当Nginx接收到HUP信号并重新加载配置文件时，LuaVM将会被重新创建，此指令将在新的Lua VM中再次运行。
+
+   如果Lua脚本的缓存是关闭的，那么没请求一次都运行一次init_by_lua程序。通过lua_code_cache指令可以关闭Lua脚本缓存，缓存请求默认是开启的。
+
+   > 在生产场景下都会开启 Lua 脚本缓存，在 init_by_lua 调用 require 所加载的模块文件会缓存在全局的 Lua 注册表 package.loaded 中，所以在这里定义的全局变量和函数可能会污染命名空间，当然也会影响性能
+
+4. lua_code_cache
+
+   lua_code_cache on | off
+
+   此指令用于启动或禁用Lua脚本缓存，可以使用的上下文有http、server、location配置块。当缓存关闭时，通过ngx_lua提供的每一个请求都将在一个单独的LuaVM中运行。在缓存关闭的情况下，在set_by_lua_file、content_by_lua_file、access_by_lua_file等指令中引用的lua脚本都不会缓存，所有的Lua脚本都会重新加载。
+
+   > 如果设置lua_code_cache off（关闭），则每个ngx_lua处理的请求将运行在一个独立的Lua VM实例里，0.9.3版本后有效。这样set_by_lua_file, content_by_lua_file, access_by_lua_file, 等等指令引用的Lua文件将不再缓存到内存， 并且所有Lua模块每次都会从头重新加载。这样**开发者就可以避免改代码然后重启nginx**的操作。但是, 那些直接写在 nginx.conf 里的代码比如由 set_by_lua, content_by_lua, access_by_lua, and rewrite_by_lua 指定的代码不会在你编辑他们时实时更新。因此在开发过程中可以关闭缓存。
+
+   **强烈禁止在生产环境中关闭 Lua 脚本缓存，仅仅可以在开发期间关闭 Lua 脚本缓存**，在禁用 Lua 脚本缓存后，一个简单的"hello world" Lua 示例的性能可能会下降一个数量级。。
+
+5. set_by_lua
+
+   ~~~lua
+   set_by_lua $destVar lua-script-str params
+   ~~~
+
+   功能类似于nginx中的set指令，将Lua脚本的返回结果设置在nginx的变量中。set_by_lua的上下文和执行阶段与nginx的set指令类似。例子：
+
+   ~~~lua
+   location /test_set_lua {
+       set $var1 1;
+       set $var2 2;
+       set_by_lua $sum 'return tonumber(ngx.arg[1]) + tonumber(ngx.arg[2])' $var1  $var2;
+       echo $sum;
+   }
+   ~~~
+
+   例子中将lua脚本的结果设置到$sum变量中。使用 set_by_lua 配置指令时，可以在 Lua 脚本的后面带上一个调用参数列表。在 Lua 脚本中可以通过 Nginx Lua 模块内部内置的 ngx.arg 表容器读取实际参数。
+
+6. access_by_lua
+
+   access_by_lua $destVar lua-script-str
+
+   此指令执行在access阶段，使用Lua脚本进行访问控制，access_by_lua指令运行于access阶段的末尾，虽然同属access阶段 但总是在allow和deny指令后运行。一般可以通过此指令进行复杂的验证操作。比如实时查询数据库或者其他后端服务。举个例子：
+
+   ~~~lua
+   location /test_access {
+       access_by_lua '
+       ngx.log(ngx.DEBUG,"remote_addr=" .. ngx.var.remote_addr);
+       if ngx.var.remote_addr == "127.0.0.1" then
+           return;
+       end
+       ngx.exit(ngx.HTTP_UNAUTHORIZED);
+       ';
+       echo "helloworld";
+   }
+   ~~~
+
+   上面代码中如果请求来源不是127.0.0.1，那么就会返回401，如果没有将请求流程中断，那么access阶段后面的content阶段就会执行输出helloworld
+
+7. content_by_lua
+
+   content_by_lua lua-script-str
+
+   用于设置content阶段的Lua代码，执行结果将作为请求的响应内容，此指令用于location上下文，执行在content阶段，
+
+   在 Nginx 配置文件中编写字符串形式的 Lua 脚本，可能需要进行特殊字符转义，所以在 OpenResty v0.9.17 发行版之后的版本不鼓励使用此指令，改为使用 content_by_lua_block 指令代替。content_by_lua_block 指令 Lua 代码块使用花括号“{ }”定义，不再使用字符串分隔符。
+
 ### 2.4.3 Nginx Lua的内置常量和变量
 
+Nginx Lua的常用内置变量：
 
+| 内置变量   | 说明                                                         |
+| ---------- | ------------------------------------------------------------ |
+| ngx.arg    | 类型为Lua table，此变量用于获取ngx_lua配置指令后面的调用参数值，例如获取在set_by_lua指令后面的调用参数值。 |
+| ngx.var    | 类型为Lua table，此变量引用某个Nginx变量，如果需要对Nginx变量进行赋值，如ngx.var.b=2，那么b应该提前声明。另外也可以使用ngx.vat[捕获组序号]的格式引用location配置块中被正则表达式捕获的捕获组。 |
+| ngx.ctx    | 类型为Lua table，可以用来访问当前请求的Lua上下文数据，其生存周期与当前请求相同（类似Nginx变量） |
+| ngx.header | 类型为Lua table，用于访问HTTP响应头，可以通过ngx.header.HEADER的形式引用某个请求头，如通过ngx.header.set_cookie访问响应头部的Cookie信息 |
+| ngx.status | 用于设置当前请求的HTTP响应码                                 |
+
+Nginx Lua的常用内置常量：
+
+| 内置常量类型   | 说明                                                         |
+| -------------- | ------------------------------------------------------------ |
+| 核心常量       | ngx.OK(0)<br />ngx.ERROE(-1)<br />ngx.AGAIN(-2)<br />ngx.DONE(-4)<br />ngx.DECLINED(-5)<br />ngx.null |
+| HTTP方法常量   | ngx.HTTP_GET<br />ngx.HTTP_HEAD<br />ngx.HTTP_PUT<br />ngx.HTTP_POST<br />ngx.HTTP_DELETE<br />ngx.HTTP_OPTIONS<br />ngx.HTTP_MKCOL<br />ngx.HTTP_COPY<br />ngx.HTTP_MOVE<br />ngx.HTTP_PROPFIND<br />ngx.HTTP_PROPPATCH<br />ngx.HTTP_LOCK<br />ngx.HTTP_UNLOCK<br />ngx.HTTP_PATCH<br />ngx.HTTP_TRACE |
+| HTTP状态码常量 | ngx.HTTP_OK(200)<br />ngx.HTTP_CREATED(201)<br />ngx.HTTP_SPECIAL_RESPONSE(300)<br />ngx.HTTP_MOVED_PERMANENTLY(301)<br />ngx.HTTP_MOVED_TEMPPORARILY(302)<br />ngx.HTTP_SEE_OTHER(303)<br />ngx.HTTP_NOT_MODIFIED(304)<br />ngx.HTTP_BAD_REQUEST(400)<br />ngx.HTTP_UNAUTHORIZED(401)<br />ngx.HTTP_FORBIDDEN(403)<br />ngx.HTTP_NOT_FOUND(404)<br />ngx.HTTP_NOT_ALLOWED(405)<br />ngx.HTTP_GONE(410)<br />ngx.HTTP_INTERNAL_SERVER_ERROR(500)<br />ngx.HTTP_METHOD_NOT_IMPLEMENTED(501)<br />ngx.HTTP_UNAVAILABLE(503)<br />ngx.HTTP_GATEWAY_TIMEOUT(504) |
+| 日志常量       | ngx.STDERR<br />ngx.EMERG<br />ngx.ALERT<br />ngx.CRIT<br />ngx.ERR<br />ngx.WARN<br />ngx.NOTICE<br />ngx.INFO<br />ngx.DEBUG |
+
+### 2.4.4 Ngixn Lua的内置方法
+
+| 内置方法                           | 说明                                                         |
+| ---------------------------------- | ------------------------------------------------------------ |
+| ngx.log(log_level,...)             | 按照log_level设定的等级输出到error.log日志文件               |
+| Print(...)                         | 输出到error.log文件，等价于ngx.log(ngx.NOTICE,...)           |
+| ngx.print(...)                     | 输出相应到客户端                                             |
+| ngx.say(...)                       | 输出相应到客户端，自动添加`\n`换行                           |
+| ngx.exit(status)                   | 如果status>=200,此方法会结束当前请求，并且返回status状态到客户端，如果status=0，此方法就会结束请求处理的当前阶段，进入下一个请求处理阶段 |
+| ngx.send_header()                  | 显示的发送响应头。当调用ngx.say()/ngx.print()时，ngx_lua模块会自动发送响应头，可以通过ngx.headers_send内置变量判断是否发送了响应头 |
+| ngx.exec(uri,args?)                | 内部跳转到uri地址                                            |
+| ngx.redirect(uri,options?)         | 外部跳转到URI地址                                            |
+| ngx.location.capture(uri,options?) | 发起一个子请求                                               |
+| ngx.location.capture_multi(uris)   | 发起多个子请求。参数uris是一个table，格式为<br />`{{uri,options?},...}` |
+| ngx.is_subrequest()                | 当前请求是否是子请求                                         |
+| ngx.sleep(seconds)                 | 无阻塞的休眠秒数（使用定时器实现）                           |
+| ngx.get_phase()                    | 获取当前Lua脚本的执行阶段名称。                              |
+| ngx.req.start_time()               | 请求的开始时间                                               |
+| ngx.req.http_version()             | 请求的HTTP版本号                                             |
+| ngx.req.raw_header()               | 获取原始的请求头（包括请求行）                               |
+| ngx.req.get_method()               | 获取请求方法                                                 |
+| ngx.req.set_method(method)         | 覆盖当前请求的方法                                           |
+| ngx.req.get_uri_args()             | 获取请求参数                                                 |
+| ngx.req.get_post_args()            | 获取post请求内容体，其用法和ngx.req.get_headers()类似，调用此方法之前必须调用ngx.req.read_body()来读取body体。 |
+| ngx.req.get_headers()              | 获取请求头，默认只获取前100个；如果当前请求有多个header头，则返回的是table；如果想获取全部请求头，可以调用ngx.req.get_headers(0) |
+| ngx.resp.get_headers()             | 获取响应头，跟ngx.req.get_headers()类似                      |
+| ngx.req.read_body()                | 读取当前请求的请求体                                         |
+| ngx.req.set_header(name,value)     | 为当前请求设置一个请求头，如果请求头已存在则覆盖             |
+| ngx.req.clear_header(name)         | 为当前请求删除名称为name的请求头                             |
+| ngx.req.set_body_data(data)        | 设置当前请求的请求体为data                                   |
+| ngx.req.init_body(buffer_size?)    | 为当前请求创建一个空的请求体。如果buffer_size参数不为空，那么新请求体的大小为buffer_size。如果buffer_size参数为空，那么新请求体的大小为client_body_buffer_size指令设置的请求体大小。如果未进行指定，默认的请求体大小为8KB(32位)或16KB(64位) |
+| ngx.escape_uri(str)                | 对uri字符串进行编码                                          |
+| ngx.unescape_uri(str)              | 对uri字符串进行解码                                          |
+| ngx.encode_args(table)             | 将Lua table 编码成一个参数字符串                             |
+| ngx.decode_args(str)               | 将参数字符串解码成Lua table                                  |
+| ngx.encode_base64(str)             | 将字符串编码成base64                                         |
+| ngx.decode_base64(str)             | 将base64解码成字符串                                         |
+| ngx.hmac_sha1(secret,str)          | 将字符串编码成二进制的hmac_sha1哈希串，并使用secret进行加密。并且可以使用ngx.encode_base64(str)将二进制格式进一步编码成字符串 |
+| ngx.md5(str)                       | 将字符串编码成十六进制的MD5                                  |
+| ngd.md5_bin(str)                   | 将字符串编码成二进制的MD5                                    |
+| ngx.quote_sql_str(str)             | SQL语句转义，按照MySql格式转义                               |
+| ngx.today()                        | 获取当前日期                                                 |
+| ngx.time()                         | 获取UNIX时间戳                                               |
+| ngx.now()                          | 获取当前时间                                                 |
+| ngx.update_time()                  | 刷新时间后在返回                                             |
+| ngx.localtime()                    | 获取yyyy-mm-dd hh:mm:ss格式的本地时间                        |
+| ngx.cookie_time()                  | 获取可用于cookie值的时间                                     |
+| ngx.http_time()                    | 获取可用于HTTP头的时间                                       |
+| ngx.parse_http_time()              | 解析HTTP头的时间                                             |
+| ngx.config.nginx_version()         | 获取nginx版本号                                              |
+| ngx.config.nginx_lua_version()     | 获取lua模块版本号                                            |
+| ngx.worker.pid()                   | 获取当前Worker进程的pid                                      |
 
 ## 2.5 Nginx Lua编程示例
+
+### 2.5.1 Lua脚本获取URL中的参数
+
+我们在上面建的LuaDemo项目中修改配置文件：
+
+~~~lua
+location /lua_get_args{
+    set_by_lua $sum '
+    local args = ngx.req.get_uri_args();
+    local var1 = args["var1"];
+    local var2 = args["var2"];
+    return var1 +var2;
+    ';
+    echo "$arg_var1 + $arg_var2 = $sum ";
+}
+#或者用nginx的内置变量
+location /lua_get_args{
+    set_by_lua $sum '
+    local var1 = tonumber(ngx.arg[1]);
+    local var2 = tonumber(ngx.arg[2]);
+    return var1 +var2;
+    '$var1 $var2;
+    echo "$arg_var1 + $arg_var2 = $sum ";
+}
+~~~
+
+运行结果如下：
+
+![image-20220627163929460](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220627163929460.png)
+
+### 2.5.3 通过ngx.header设置HTTP响应头
+
+```lua
+location /test_header{
+  content_by_lua_block {
+      ngx.header["11"]="val11";
+      ngx.header.header2=2;
+      ngx.header.set_cookie = {
+          'name=11;sex=male','age=18;'
+      }
+      ngx.say("test_header");
+  }
+}
+```
+
+访问路径后结果如下：
+
+![image-20220627165721139](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220627165721139.png)
+
+Cookie 是通过请求的 set-cookie 响应头来保存的，HTTP 响应内容中可以包含多个 set-cookie 响应头，一个 set-cookie 响应头的值通常为一个字符串，该字符串大致包含以下内容：
+
+| 信息       | 说明                                                         |
+| ---------- | ------------------------------------------------------------ |
+| Cookie名称 | Cookie名称的组成字符只能使用可以用于URL中的字符，一般为字母和数字，不能包含特殊字符，若有特殊字符需要进行转码。Cookie名称为Cookie字符串中的第一组key-value中的key。 |
+| Cookie值   | Cookie的值的字符组成规则与Cookie相同。Cookie值为Cookie字符串中的第一组key-value中的value。 |
+| expires    | 过期时间，GMT格式，过了此时间后，浏览器就会删除此cookie，不设置过期时间在关掉浏览器后就会删除 |
+| path       | Cookie的访问路径，此属性设置指定路径下的页面才可以访问此Cookie，一般设置为'/'表示同一站点的所有页面都可以访问此Cookie |
+| domain     | 访问域名，此属性设置指定域名下的页面才可以访问此Cookie。     |
+| Secure     | 安全属性，设置Cookie是否只能通过HTTPS协议访问，一般Cookie使用HTTP即可。一般设置此属性没有值。 |
+| HttpOnly   | 如果设置了此属性，那么通过程序（JS脚本、Applet等）将无法读取Cookie信息，HttpOnly和secure一样没有值只有名称。 |
+
+
+
+### 2.5.4 Lua访问Nginx变量
+
+
+
+### 2.5.5 Lua访问请求上下文变量
 
 
 
