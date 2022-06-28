@@ -4,6 +4,7 @@
 
 > 参考资料：Spring Cloud、Nginx高并发核心编程尼恩编著、以及菜鸟教程等互联网资源
 >
+> **所有例子均是本人亲自上机后，将代码或结果复制回来的。**
 
 # 一、Nginx/OpenResty详解
 
@@ -1930,7 +1931,7 @@ ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 L
 
    用于设置`.lua`外部库的搜索路径，此指令的上下文为http配置块，它的默认值为LUA_PATH环境变量内容或者lua编译的默认值。
 
-   ~~~lua
+   ~~~nginx
    #设置lua扩展库的搜索路径(;;是默认路径)
    lua_package_path "./?.lua;C:/dev/refer/LuaDemoProject/src/?.lua;D:/openresty/openresty-1.21.4.1-win64/lualib/?.lua;;";
    ~~~
@@ -1941,7 +1942,7 @@ ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 L
 
    用于设置Lua的C语言模块外部库".so"(Linux)或".dll"(Windows)的搜索路径，此指令上下文为http配置块
 
-   ~~~lua
+   ~~~nginx
    lua_package_cpath "D:/openresty/openresty-1.21.4.1-win64/lualib/?.dll;;";
    ~~~
 
@@ -1949,7 +1950,7 @@ ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 L
 
 3. init_by_lua
 
-   ~~~lua
+   ~~~nginx
    init_by_lua_file luaScript/init/loading_config.lua;
    ~~~
 
@@ -1971,13 +1972,13 @@ ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 L
 
 5. set_by_lua
 
-   ~~~lua
+   ~~~nginx
    set_by_lua $destVar lua-script-str params
    ~~~
 
    功能类似于nginx中的set指令，将Lua脚本的返回结果设置在nginx的变量中。set_by_lua的上下文和执行阶段与nginx的set指令类似。例子：
 
-   ~~~lua
+   ~~~nginx
    location /test_set_lua {
        set $var1 1;
        set $var2 2;
@@ -1994,7 +1995,7 @@ ngx_lua 定义了一系列 Nginx 配置指令，用于配置何时运行用户 L
 
    此指令执行在access阶段，使用Lua脚本进行访问控制，access_by_lua指令运行于access阶段的末尾，虽然同属access阶段 但总是在allow和deny指令后运行。一般可以通过此指令进行复杂的验证操作。比如实时查询数据库或者其他后端服务。举个例子：
 
-   ~~~lua
+   ~~~nginx
    location /test_access {
        access_by_lua '
        ngx.log(ngx.DEBUG,"remote_addr=" .. ngx.var.remote_addr);
@@ -2097,7 +2098,7 @@ Nginx Lua的常用内置常量：
 
 我们在上面建的LuaDemo项目中修改配置文件：
 
-~~~lua
+~~~nginx
 location /lua_get_args{
     set_by_lua $sum '
     local args = ngx.req.get_uri_args();
@@ -2124,7 +2125,7 @@ location /lua_get_args{
 
 ### 2.5.3 通过ngx.header设置HTTP响应头
 
-```lua
+```nginx
 location /test_header{
   content_by_lua_block {
       ngx.header["11"]="val11";
@@ -2153,17 +2154,280 @@ Cookie 是通过请求的 set-cookie 响应头来保存的，HTTP 响应内容�
 | Secure     | 安全属性，设置Cookie是否只能通过HTTPS协议访问，一般Cookie使用HTTP即可。一般设置此属性没有值。 |
 | HttpOnly   | 如果设置了此属性，那么通过程序（JS脚本、Applet等）将无法读取Cookie信息，HttpOnly和secure一样没有值只有名称。 |
 
+- 关于HttpOnly和Secure属性：设置了HttpOnly，通过脚本就无法读取cookie的值，这样一般能防止XSS攻击。大部分场景下不需要前端脚本获取Cookie，Cookie信息只在后端Java容器中进行访问，此时就可以增加httponly属性。另外一旦设置了Secure属性，前后端就只能在通过Https协议通信时访问cookie。微信小程序就要求必须使用https协议。但是在内网内还是可以使用http协议，便于开发测试以及性能更高，然后通过Nginx外部网关完成外部HTTPS到HTTP协议的转换。
 
+为Cookie增加HttpOnly属性可以在Java容器中完成,比如：
+
+~~~java
+@WebFilter(filterName = "loginCheckFilter",urlPatterns = "/*")
+public class MyFilter implements Filter {
+
+    @Override
+    public void init(FilterConfig filterConfig) throws ServletException {
+        
+    }
+
+    @Override
+    public void doFilter(ServletRequest servletRequest,
+                         ServletResponse servletResponse,
+                         FilterChain filterChain)
+            throws IOException, ServletException {
+        HttpServletRequest request = (HttpServletRequest) servletRequest;
+        HttpServletResponse response = (HttpServletResponse) servletResponse;
+        final Cookie[] cookies = request.getCookies();
+        if (cookies!=null){
+            for (Cookie cookie : cookies) {
+                final String name = cookie.getName();
+                final String value = cookie.getValue();
+                StringBuilder stringBuilder = new StringBuilder();
+                stringBuilder.append(name+"="+value+";");
+                stringBuilder.append(";httpOnly");
+                response.setHeader("Set-Cookie",stringBuilder.toString());
+            }
+        }
+    }
+
+    @Override
+    public void destroy() {
+
+    }
+}
+~~~
+
+当然为Cookie增加HttpOnly属性（或者Secure）更好的方式是在Nginx中进行配置：
+
+~~~nginx
+#模拟上游服务
+location /test_upserver{
+    content_by_lua_block {
+        ngx.header["header1"]="value1";
+        ngx.header.header2="value2";
+        ngx.header.set_cookie = {
+            'username=111;path=/','age=222;path=/'
+        }
+        ngx.say("模拟上游服务，设置了一些cookie");
+    }
+}
+#模拟外部网关（反向代理）
+location /test_header_demo {
+    proxy_pass http://127.0.0.1/test_upserver;
+    header_filter_by_lua_block {
+        local cookies = ngx.header.set_cookie;
+        if cookies then
+            if type(cookies) == "table" then
+            	local cookie = {}
+        		for k, v in pairs(cookies) do
+            	cookie[k] = v .. ";Secure;httpOnly"; --cookie添加安全属性
+            	end
+            ngx.header.set_cookie = cookie;
+        	else
+            	ngx.header.set_cookie = cookies .. ";Secure;httpOnly";
+        	end
+        end
+    }
+}
+~~~
+
+结果如下：
+
+![image-20220628091618127](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220628091618127.png)
 
 ### 2.5.4 Lua访问Nginx变量
 
+Nginx中提供了很多内置变量，比如$arg_PARAMETER、$args等等，除了这些内置变量还可以通过set定义一些Nginx变量，其实无论是内部变量还是自定义变量，都可以在Lua代码中通过ngx.var进行访问。举例：
 
+```nginx
+location /test_lua_var {
+  set $hello helloworld;
+  content_by_lua_block {
+      local base = require("luaScript.module.base");
+      local vars = {}
+      vars.remote_addr = ngx.var.remote_addr;
+      vars.request_uri = ngx.var.request_uri;
+      vars.uri = ngx.var.uri;
+      vars.args = ngx.var.args;
+      ngx.say("测试：返回内置变量<br>");
+      local str = base.tableToStr(vars,"<br>");
+      ngx.say(str);
+      ngx.say("<br>返回普通变量<br>");
+      ngx.say("hello=" .. ngx.var.hello);
+  }
+}
+```
+
+> PS：上面base模块中的tableToStr方法代码如下：
+>
+> ```lua
+> local function toStringEx(value)
+>     if type(value)=='table' then
+>         return tableToStr(value)
+>     elseif type(value)=='string' then
+>         return "\'"..value.."\'"
+>     else
+>         return tostring(value)
+>     end
+> end
+> --  此方法用于将table转换为String类型
+> local function tableToStr(t, split)
+>     if t == nil then
+>         return ""
+>     end
+>     if split == nil then
+>         split = ",";
+>     end
+> 
+>     local retstr = "{"
+> 
+>     local i = 1
+>     for key, value in pairs(t) do
+> 
+>         if key == i then
+>             retstr = retstr  .. toStringEx(value) .. split
+>         else
+>             if type(key) == 'number' or type(key) == 'string' then
+>                 retstr = retstr .. '[' .. toStringEx(key) .. "]=" .. toStringEx(value) .. split
+>             else
+>                 if type(key) == 'userdata' then
+>                     retstr = retstr  .. "*s" .. tableToStr(getmetatable(key)) .. "*e" .. "=" .. toStringEx(value) .. split
+>                 else
+>                     retstr = retstr .. key .. "=" .. toStringEx(value) .. split
+>                 end
+>             end
+>         end
+> 
+>         i = i + 1
+>     end
+> 
+>     retstr = retstr .. "}"
+>     return retstr
+> end
+> ```
 
 ### 2.5.5 Lua访问请求上下文变量
 
+Nginx执行Lua脚本涉及到很多阶段，如init、init_worker、ssl_session_fetch、set、rewrite等等，每一个阶段都可以嵌入不同的lua脚本，不同阶段的lua脚本可以通过ngx.ctx进行上下文变量的共享。在 ngx_lua 模块中，每个请求（包括子请求）都有一份独立的 ngx.ctx 表。
 
+ngx.ctx本质上是一个Lua table，其生命周期与当前请求相同。
+
+```nginx
+location /test_ctx {
+  rewrite_by_lua_block {
+      ngx.ctx.var1 = 1;
+  }
+  access_by_lua_block {
+      ngx.ctx.var2 = 2;
+  }
+  content_by_lua_block {
+      ngx.ctx.var3 =3;
+      local result = ngx.ctx.var1 +ngx.ctx.var2 +ngx.ctx.var3;
+      ngx.say(result);
+      local base = require("luaScript.module.base");
+      local str = base.tableToStr(ngx.ctx);
+      ngx.say("<br>");
+      ngx.say(str);
+  }
+}
+```
 
 ## 2.6 重定向和内部子请求
+
+Nginx 的 rewrite 指令不仅可以在 Nginx 内部的 server、location 之间进行跳转，还可以进行外部链接的重定向。通过 ngx_lua 模块的 Lua 函数除了能实现 Nginx 的 rewrite 指令的功能之外，还能顺利完成内部子请求、并发子请求等复杂功能。
+
+### 2.6.1 Nginx Lua内部重定向
+
+ngx_lua模块可以实现类似nginx的rewrite指令的效果，该模块提供了两个API：
+
+1. ngx.exec(uri,args?)内部重定向
+2. ngx.redirect(uri,status?)外部重定向
+
+我们先来了解Nginx Lua的内部重定向，其实ngx.exec等价于下面的rewrite方法：
+
+~~~
+rewrite regrex replacement last;
+~~~
+
+ngx.exec的使用方式如下：
+
+~~~lua
+#不带参数重定向到/sum
+ngx.exec('/sum');
+
+#使用一个字符串作为追加参数的重定向.
+#重定向到/sum?a=1&b=2，并且追加参数c=3
+ngx.exec('/sum?a=1&b=2',"c=3");
+
+#使用Lua table作为追加参数
+ngx.exec('/sum',{a=1,b=2,c=3});
+~~~
+
+下面举个例子（结果略）：
+
+```nginx
+location /sum {
+    internal;#只允许内部调用
+    content_by_lua_block{
+        local arg_a = tonumber(ngx.var.arg_a);
+        local arg_b = tonumber(ngx.var.arg_b);
+        local arg_c = tonumber(ngx.var.arg_c);
+        local sum = arg_a+ arg_b+arg_c;
+        ngx.say(sum)
+    }
+}
+location /testsum {
+    content_by_lua_block{
+        #此方法使用时需要显式return
+        return ngx.exec('/sum',{a=1,b=2,c=3});
+    }
+}
+```
+
+使用此方法时可以使用字符串也能使用table但要注意写法：
+
+~~~lua
+ngx.exec('/sum',"a=1&b=2");
+
+ngx.exec('/sum',{a=1,b=2});
+~~~
+
+### 2.6.2 Nginx Lua外部重定向
+
+外部重定向方法是`ngx.redirect(uri,status?)`。外部重定向与内部重定向不同，将在客户端进行二次跳转，所以会有额外的网络流量。此方法与下面的rewrite等价：
+
+~~~nginx
+#如果你想试这个例子需要去掉/sum这个location中的internal指令，否则会报404
+location /test1 {
+    content_by_lua_block{
+        return ngx.redirect("/sum?a=1&b=2&c=3");
+    }
+}
+location /test2 {
+    rewrite ^/test2 "/sum?a=1&b=2&c=3" redirect;
+}
+~~~
+
+当然如果想实现rewrite的permanent参数的效果也是可以的，只需要使用nginx lua的内置常量即可：
+
+~~~nginx
+#如果你想试这个例子需要去掉/sum这个location中的internal指令，否则会报404
+location /test1 {
+    content_by_lua_block{
+        return ngx.redirect("/sum?a=1&b=2&c=3",ngx.HTTP_MOVED_PERMANENTLY);
+    }
+}
+location /test2 {
+    rewrite ^/test2 "/sum?a=1&b=2&c=3" permanent;
+}
+~~~
+
+下面给出外部重定向的例子：
+
+
+
+### 2.6.3 ngx.location.capture子请求
+
+
+
+### 2.6.4 ngx.location.capture_multi并发子请求
 
 
 
