@@ -2421,19 +2421,162 @@ location /test2 {
 
 下面给出外部重定向的例子：
 
+```nginx
+location ~*/testblog/(.*) {
+    content_by_lua_block {
+        ngx.redirect("https://www.cnblogs.com/" ..ngx.var[1]);
+    }
+}
+location ~*/testblog1/(.*) {
+    rewrite ^/testblog1/(.*) "https://www.cnblogs.com/$1"  redirect;
+}
+location ~*/testblog2/(.*) {
+    rewrite ^/testblog2/(.*)  $1  break;
+    content_by_lua_block {
+        ngx.redirect("https://www.cnblogs.com/" ..ngx.var[1]);
+    }
+}
+```
 
+然后我们输入`localhost/testblog/博客园个人博客地址`就可以跳转到自己的博客园首页，这段代码本质上就是将个人博客地址拼成正确的博客地址然后进行重定向，重定向到了我们给出的博客地址。结果：
+
+![image-20220628125707204](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220628125707204.png)
 
 ### 2.6.3 ngx.location.capture子请求
 
+Nginx子请求不是HTTP的标准实现，而是Nginx的特有设计，目的是为了提高内部对单个客户端的请求处理的并发能力。如果某个客户端的请求（或主请求）访问了多个内部资源，为了提高效率，可以为每一个内部资源访问建立单个子请求，同时进行提高效率。子请求不是客户端发起的，而是Nginx根据逻辑建立的所以不会与客户端交互。通常情况下，为了保护子请求会把接口设置为internal，防止外部访问。
 
+发起单个子请求格式如下：
+
+~~~lua
+ngx.location.capture (uri,options?);
+~~~
+
+其中options是一个table容器，用于设置子请求的相关选项：
+
+1. method：子请求方法，默认为ngx.HTTP_GET，**只接受NGINX Lua常量**
+2. body：传给子请求的请求体，仅限于string或nil
+3. args：传给子请求的参数，支持string或table
+4. vars：传给子请求的变量表，仅限于table，在通过 vars 向子请求中传递 Nginx 变量时，**变量需要提前进行定义，否则将报出变量未定义的错误**。
+5. ctx：父子请求共享的变量表table。父请求如果修改了 ctx 表中的成员，那么子请求可以通过 ngx.ctx 获取；反过来，子请求也可以修改ngx.ctx中的成员，父请求可以通过ctx表获取。通过ctx 属性值可以方便地让父请求和子请求进行上下文变量共享。
+6. copy_all_vars：复制所有变量给子请求
+7. share_all_vars：父子请求共享所有变量
+8. always_forward_body：用于设置是否转发请求体
+
+例子：
+
+```nginx
+location ~ /test/details/([0-9]+) {
+    #获取正则捕获组数据
+    set $detailsid  $1;
+    set $var1 "";
+    set $var2 "";
+    content_by_lua_block{
+        ngx.req.read_body();
+        local uri = "/internal/details/" ..ngx.var.detailsid;
+        --获取父请求的参数
+        local args = ngx.var.args;
+        local method = ngx.var.request_method;
+        local shareCtx = {cvar1= "c11",cvar2 = "c22"}
+        local response = ngx.location.capture(uri,{
+            method = ngx.HTTP_GET,
+            body = "test",
+            args = args,
+            vars = {var1 = "11",var2="22"},
+            always_forward_body = true,
+            ctx = shareCtx,});
+        ngx.say("status:" .. response.status);
+        ngx.say("body:" .. response.body);
+        ngx.say("cvar1:" .. shareCtx.cvar1);
+    }
+}
+location ~/internal/details/([0-9]+){
+    internal;
+    set $detailsid  $1;
+    content_by_lua_block {
+        ngx.say("<hr> internal  start");
+        --获取父请求的参数，两种方式均可
+        local args = ngx.req.get_uri_args();
+        ngx.say("<br>param1:" ..args.param1);
+        ngx.say("<br>body:" ..ngx.req.get_body_data());
+        ngx.say("<br>detailsid=",ngx.var.detailsid);
+        ngx.say("<br>var1:"..ngx.var.var1);
+        ngx.say("<br>cvar1:"..ngx.ctx.cvar1);
+        ngx.say("<hr> internal  end");
+        --修改共享上下文
+        ngx.ctx.cvar1 = "changed";
+    }
+}
+```
+
+结果：
+
+![image-20220628142320656](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220628142320656.png)
 
 ### 2.6.4 ngx.location.capture_multi并发子请求
 
+经过解耦后，微服务框架会提供大量的细粒度接口，一次客户端请求往往调用多个微服务接口才能获取到完整的页面内容。这种场景下可以通过网关进行上游接口合并。在OpenResty中ngx.location.capture_multi可以用于上游接口合并的场景，此方法可以进行多个子请求和并发访问，格式如下：
 
+~~~lua
+ngx.location.capture_multi({ {uri,options?},{uri,options?}...})
+~~~
+
+在所有子请求终止之前，ngx.location.capture_multi(...)函数不会返回。此函数的耗时是单个子请求的最长延迟，而不是所有子请求的耗时总和，因为所有子请求是并发执行的。
+
+这个方法中的每一个子请求的参数使用方式与capture方法相同。capture_multi可以将所有的子请求加入到一个table容器表中，作为调用参数传入；capture_multi返回后可以将其结果再用花括号{}包装成一个table，方便后面迭代。
+
+```nginx
+location /test_multi {
+    content_by_lua_block{
+        local postBody = ngx.encode_args({var1=123,var2="22222"});
+        local reqs = {};
+        table.insert(reqs,{"/internal/multi1",{args="a=1&b=2"}});
+        table.insert(reqs,{"/internal/multi2",{method = ngx.HTTP_POST,body=postBody}});
+        local responses = {ngx.location.capture_multi(reqs)};
+        for i,value in pairs(responses) do
+            ngx.say("status" .. value.status .."<br>" );
+            ngx.say("body" .. value.body .."<br>" );
+        end
+    }
+}
+#模拟上游接口
+location /internal/multi1 {
+    internal;
+    content_by_lua_block {
+        ngx.say("<hr> multi1 start<br>");
+        local args = ngx.req.get_uri_args();
+        for key ,val in pairs(args) do
+            ngx.say("[GET请求],parmas:" .. key .. ":" .. val .. "<br>");
+        end
+        ngx.say("<br>multi1 end<hr>")
+    }
+}
+#模拟上游接口
+location /internal/multi2 {
+    internal;
+    content_by_lua_block {
+         ngx.say("<hr> multi2 start<br>");
+         ngx.req.read_body();--获取请求体前必须先读
+         local data = ngx.req.get_post_args();
+         for key,val in pairs(data) do
+             ngx.say("[POST请求],parmas:" .. key .. ":" .. val .. "<br>");
+         end
+         ngx.say("<br>multi2 end<hr>")
+    }
+}
+```
+
+![image-20220628151857705](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220628151857705.png)
 
 ## 2.7 Nginx Lua操作Redis
 
+### 2.7.1 Redis的CRUD操作
 
+
+
+2.7.2 封装操作Redis的基础类
+
+2.7.3 在Lua中使用Redis连接池
 
 ## 2.8 Nginx Lua编程实战
 
