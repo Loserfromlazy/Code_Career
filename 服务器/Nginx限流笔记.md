@@ -24,6 +24,67 @@
 
    如上图，时间窗口划分的越细比如5s、10s，限流效果就会越精细，滑动效果就会越平滑。
 
+计数器限流简单实现（没写完，下面代码暂未完成）：
+
+```java
+@Slf4j
+public class CounterLimiting {
+
+    private long startTime = System.currentTimeMillis();
+    long maxTime = 1000L;
+    long maxPass = 2;
+    AtomicLong atomicLong = new AtomicLong(0);
+
+    public long tryPass(long id,int turn) {
+        long nowTime = System.currentTimeMillis();
+        if (nowTime - startTime < maxTime) {
+            long nowPass = atomicLong.incrementAndGet();
+            if (nowPass < maxPass) {
+                return nowPass;
+            }else {
+                return  -nowPass;
+            }
+        } else {
+            synchronized (CounterLimiting.class){
+                log.info("线程{},第{}轮，超过了时区，现在进行重置",id,turn);
+                if (nowTime - startTime < maxTime) {
+                    startTime = nowTime;
+                    atomicLong.set(0);
+                }
+            }
+            return 0L;
+        }
+    }
+
+    private final ExecutorService executors = Executors.newFixedThreadPool(2);
+
+    @Test
+    public void testLimit() throws InterruptedException {
+        AtomicInteger integer = new AtomicInteger(0);
+        CountDownLatch latch = new CountDownLatch(2);
+        for (int i = 0; i < 2; i++) {
+            executors.execute(()->{
+                for (int j = 0; j < 20; j++) {
+                    long l = tryPass(Thread.currentThread().getId(), j);
+                    if (l<0){
+                        integer.incrementAndGet();
+                    }
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                latch.countDown();
+            });
+        }
+        latch.await();
+        log.info("一共被限制了"+integer.get()+"次");
+
+    }
+}
+```
+
 ### 1.2 漏桶限流
 
 漏桶大小固定、处理速率固定，但请求进入的速度不固定。如果出现突发情况，可能会丢弃过多请求。
