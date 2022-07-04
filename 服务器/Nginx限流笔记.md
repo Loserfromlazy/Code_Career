@@ -24,30 +24,38 @@
 
    如上图，时间窗口划分的越细比如5s、10s，限流效果就会越精细，滑动效果就会越平滑。
 
-计数器限流简单实现（没写完，下面代码暂未完成）：
+计数器限流简单实现：
 
 ```java
 @Slf4j
 public class CounterLimiting {
 
-    private long startTime = System.currentTimeMillis();
-    long maxTime = 1000L;
+    //开始时间
+    private static long startTime = System.currentTimeMillis();
+    //限流时间，即固定时间窗口
+    long maxTime = 1000;
+    //允许通过的最大通过数
     long maxPass = 2;
+    //当前通过的次数
     AtomicLong atomicLong = new AtomicLong(0);
 
-    public long tryPass(long id,int turn) {
+    public long tryPass(long id, int turn) {
         long nowTime = System.currentTimeMillis();
-        if (nowTime - startTime < maxTime) {
+        if (nowTime - startTime < maxTime ) {
+            //没超过时间窗口，计数判断是否超过最大可通过次数
             long nowPass = atomicLong.incrementAndGet();
             if (nowPass < maxPass) {
                 return nowPass;
-            }else {
-                return  -nowPass;
+            } else {
+                //log.info("线程{},第{}轮，被拒绝", id, turn);
+                return -nowPass;
             }
         } else {
-            synchronized (CounterLimiting.class){
-                log.info("线程{},第{}轮，超过了时区，现在进行重置",id,turn);
-                if (nowTime - startTime < maxTime) {
+            //超过时间窗口，计数器清零，默认通过
+            synchronized (CounterLimiting.class) {
+                //log.info("线程{},第{}轮，超过了时区，现在进行重置", id, turn);
+                if (nowTime -startTime > maxTime) {
+                    //加锁，进行二次判断，防止多次修改
                     startTime = nowTime;
                     atomicLong.set(0);
                 }
@@ -55,19 +63,23 @@ public class CounterLimiting {
             return 0L;
         }
     }
+    //线程数
+    final int threadNum = 2;
+    private final ExecutorService executors = Executors.newFixedThreadPool(threadNum);
 
-    private final ExecutorService executors = Executors.newFixedThreadPool(2);
-
+    //测试用例
     @Test
     public void testLimit() throws InterruptedException {
+        long start = System.currentTimeMillis();
         AtomicInteger integer = new AtomicInteger(0);
-        CountDownLatch latch = new CountDownLatch(2);
-        for (int i = 0; i < 2; i++) {
-            executors.execute(()->{
+
+        CountDownLatch latch = new CountDownLatch(threadNum);
+        for (int i = 0; i < threadNum; i++) {
+            executors.submit(() -> {
                 for (int j = 0; j < 20; j++) {
                     long l = tryPass(Thread.currentThread().getId(), j);
-                    if (l<0){
-                        integer.incrementAndGet();
+                    if (l < 0) {
+                        integer.getAndIncrement();
                     }
                     try {
                         Thread.sleep(200);
@@ -79,11 +91,20 @@ public class CounterLimiting {
             });
         }
         latch.await();
-        log.info("一共被限制了"+integer.get()+"次");
+        final float time = (System.currentTimeMillis() - start) / 1000F;
+        log.info("一共被限制了" + integer.get() + "次");
+        log.info("比例为" + (float) integer.get() / (threadNum * 20));
+        log.info("用时" + time + "秒");
 
     }
 }
 ```
+
+运行结果：
+
+![image-20220704151528607](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220704151528607.png)
+
+> 运行结果可能是32次或更少，如果电脑稍微卡一点可能会比32次少，因为加锁等操作也会耗费一点时间，但整体来说比例会在0.8左右。
 
 ### 1.2 漏桶限流
 
@@ -91,7 +112,75 @@ public class CounterLimiting {
 
 这个算法其实很形象，它就类似一个限制出水的水桶，通过一个固定大小的FIFO队列+定时队列元素的方式实现，请求进入队列后会被匀速的取出来，当队列被占满后新的请求就会直接拒绝，就像水从水桶中漏出来一样。这个算法优缺点也很明显，优点是请求匀速发给后端，不会造成流量突刺，缺点是请求会在队列中排队，响应时间会很长。
 
+下面是简单的漏桶限流算法的实现（代码未完成）：
 
+```java
+@Slf4j
+public class LeakyBucketLimiting {
+
+
+    //开始时间
+    private static long startTime = System.currentTimeMillis();
+    //流动速率,每秒两滴水
+    private int rate = 2;
+    //漏桶剩余水量
+    private long water;
+
+    /**
+     * @return 是否通过
+     */
+    public boolean tryPass(long id, int turn) {
+        long nowTime = System.currentTimeMillis();
+        //当前流出水量等于经过时间乘速率
+        final long outWater = (nowTime - startTime) * rate / 1000;
+        water = water - outWater;
+        if (water < 0) {
+            water = 0;
+        }
+        if (water <= 1) {
+            startTime = nowTime;
+            water++;
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    //线程数
+    final int threadNum = 2;
+    private final ExecutorService executors = Executors.newFixedThreadPool(threadNum);
+
+    @Test
+    public void testLimit() throws InterruptedException {
+        long start = System.currentTimeMillis();
+        AtomicInteger integer = new AtomicInteger(0);
+
+        CountDownLatch latch = new CountDownLatch(threadNum);
+        for (int i = 0; i < threadNum; i++) {
+            executors.submit(() -> {
+                for (int j = 0; j < 20; j++) {
+                    boolean l = tryPass(Thread.currentThread().getId(), j);
+                    if (l) {
+                        integer.getAndIncrement();
+                    }
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                latch.countDown();
+            });
+        }
+        latch.await();
+        final float time = (System.currentTimeMillis() - start) / 1000F;
+        log.info("一共被限制了" + integer.get() + "次");
+        log.info("比例为" + (float) integer.get() / (threadNum * 20));
+        log.info("用时" + time + "秒");
+
+    }
+}
+```
 
 ### 1.3 令牌桶限流
 
