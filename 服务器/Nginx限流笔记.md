@@ -112,38 +112,47 @@ public class CounterLimiting {
 
 这个算法其实很形象，它就类似一个限制出水的水桶，通过一个固定大小的FIFO队列+定时队列元素的方式实现，请求进入队列后会被匀速的取出来，当队列被占满后新的请求就会直接拒绝，就像水从水桶中漏出来一样。这个算法优缺点也很明显，优点是请求匀速发给后端，不会造成流量突刺，缺点是请求会在队列中排队，响应时间会很长。
 
-下面是简单的漏桶限流算法的实现（代码未完成）：
+下面是简单的漏桶限流算法的实现：
 
 ```java
 @Slf4j
 public class LeakyBucketLimiting {
 
-
     //开始时间
     private static long startTime = System.currentTimeMillis();
     //流动速率,每秒两滴水
-    private int rate = 2;
+    private final int rate = 2;
+    //当前水桶大小
+    private final int bucketSize = 20;
     //漏桶剩余水量
-    private long water;
+    private final AtomicInteger water = new AtomicInteger(0);
 
     /**
-     * @return 是否通过
+     * @return 是否通过 true通过，false 被限流
      */
     public boolean tryPass(long id, int turn) {
         long nowTime = System.currentTimeMillis();
-        //当前流出水量等于经过时间乘速率
-        final long outWater = (nowTime - startTime) * rate / 1000;
-        water = water - outWater;
-        if (water < 0) {
-            water = 0;
-        }
-        if (water <= 1) {
+        //空桶直接放行
+        if (water.get()==0){
             startTime = nowTime;
-            water++;
+            water.incrementAndGet();
             return true;
-        } else {
+        }
+        //水随着时间流逝，不断流逝，流干就为0
+        //当前流出水量等于经过时间乘速率
+        int outWater = (int) ((nowTime - startTime) * rate / 1000);
+        //当前水桶剩余水量
+        int left = Math.max(0,water.get()-outWater);
+        water.set(left);
+
+        if (water.get()<bucketSize){
+            water.incrementAndGet();
+            startTime = nowTime;
+            return true;
+        }else {
             return false;
         }
+
     }
 
     //线程数
@@ -160,7 +169,7 @@ public class LeakyBucketLimiting {
             executors.submit(() -> {
                 for (int j = 0; j < 20; j++) {
                     boolean l = tryPass(Thread.currentThread().getId(), j);
-                    if (l) {
+                    if (!l) {
                         integer.getAndIncrement();
                     }
                     try {
@@ -174,13 +183,15 @@ public class LeakyBucketLimiting {
         }
         latch.await();
         final float time = (System.currentTimeMillis() - start) / 1000F;
-        log.info("一共被限制了" + integer.get() + "次");
+        log.info("一共被限制了" + integer.get() + "次,通过了"+((threadNum * 20)-integer.get()+"次"));
         log.info("比例为" + (float) integer.get() / (threadNum * 20));
         log.info("用时" + time + "秒");
 
     }
 }
 ```
+
+结果如下：![image-20220706095517734](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220706095517734.png)
 
 ### 1.3 令牌桶限流
 
@@ -189,6 +200,14 @@ public class LeakyBucketLimiting {
 令牌桶的优点是可以应对突发流量，当桶里有令牌时请求可以快速的响应，也不会产生漏桶队列中的等待时间, 缺点就是相对漏桶一定程度上减小了对下游服务的保护。
 
 ![image-20220701103914036](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220701103914036.png)
+
+下面是令牌桶的简单实现：
+
+
+
+结果如下：
+
+
 
 ## 二、分布式计数器限流
 
