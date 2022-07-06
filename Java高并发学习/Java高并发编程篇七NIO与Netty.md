@@ -2784,6 +2784,56 @@ AbstractChannel内部有一个pipeline属性，表示处理器的流水线，Net
 
 ## 13.5 Handler
 
+在Reactor反应器模型中，反应器在查询到IO事件后，分发到Handler业务处理器，由Handler完成IO操作和业务处理。整个IO处理环节包括从通道读取数据包、数据包解码、业务处理、目标数据编码、把数据包写到通道，然后由通道发送到对端。整个IO处理分为两个环节，其中从通道读数据包和由通道发送到对端是由Netty底层完成的，用户程序主要负责数据包解码、业务处理、目标数据编码、把数据包写到通道中。
+
+从开发人员角度，Netty分为入站和出战两种操作类型：
+
+- 入站：自底向上，Netty的内部到入站处理器。负责数据包解码、业务处理。
+- 出战，自顶向下,出站处理器到Netty的内部，负责编码和将数据包写入通道。
+
+### 13.5.1 ChannelInboundHandler
+
+入站处理器的核心方法如下：
+
+![image-20220706104148839](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220706104148839.png)
+
+1. channelRegistered：当通道注册完成后，Netty会调用fireChannelRegister方法，触发通道注册事件。从而在通道流水线注册过的入站处理器的channelRegistered方法会被调用。
+2. channelActive：当通道激活完成后，Netty会调用fireChannelActive方法，触发通道激活事件。从而在通道流水线注册过的入站处理器的channelActive方法会被调用。
+3. channelRead：当通道缓冲区可读后，Netty会调用fireChannelRead方法，触发通道可读事件。从而在通道流水线注册过的入站处理器的channelRead方法会被调用，以便完成数据的读取和处理。
+4. channelReadComplete：当通道缓冲区读完后，Netty会调用fireChannelReadComplete方法，触发通道读完事件。从而在通道流水线注册过的入站处理器的channelReadComplete方法会被调用。
+5. channelInactive：当连接断开或不可用后，Netty会调用fireChannelInactive方法，触发连接不可用事件。从而在通道流水线注册过的入站处理器的channelInactive方法会被调用。
+6. exceptionCaught：当通道处理过程中发生异常后，Netty会调用fireExceptionCaught方法，触发异常捕获事件。从而在通道流水线注册过的入站处理器的exceptionCaught方法会被调用。入站出战处理器接口都继承了该方法。
+
+上面仅对一些核心方法进行了介绍，在实际开发中只需要继承入站处理器的ChannelInboundHandlerAdapter默认实现，然后重写自己需要的回调方法即可。
+
+### 13.5.2 ChannelOutboundHandler
+
+出站处理器（Netty的出站处理方向是上层Netty通道操作底层Java NIO通道）的核心方法如下：
+
+![image-20220706110150223](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220706110150223.png)
+
+1. bind：监听地址绑定，完成Java 底层IO通道的IP地址绑定，如果使用TCP传输协议，这个方法用于服务器端。
+2. connect：连接服务端，完成底层Java IO通道的服务器端的连接操作，如果使用TCP协议，则适用于客户端。
+3. write：写数据到底层，完成Netty通道向底层JavaIO通道的数据写入操作，此方法只是触发写操作，并不是完成写入。
+4. flush：将底层缓存区的数据清空，立即写出到对端。
+5. read：从底层读数据，完成Netty通道从Java IO通道的数据读取。
+6. disConnect：断开服务器连接，断开底层Java IO通道的socket连接。如果使用TCP协议，此方法主要适用于客户端。
+7. close：主动关闭底层通道。
+
+上面仅对一些核心方法进行了介绍，在实际开发中只需要继承入站处理器的ChannelOutboundHandlerAdapter默认实现，然后重写自己需要的方法即可。
+
+### 13.5.3 ChannelInitializer
+
+Channel通道和Handler业务处理器的关系是：一条Netty的通道拥有一条Handler业务处理器流水线，负责装配自己的Handler业务处理器。装配Handler的工作，发生在通道开始工作之前。向流水线中装配业务处理器就需要通道的初始化处理器——ChannelInitializer。
+
+![image-20220706111418840](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220706111418840.png)
+
+在入门案例中我们装配Handler业务处理器时，使用childHandler设置了一个ChannelInitializer实例，这个也是通道初始化器，属于入站处理器类型，在入门代码中我们还使用了initChannel方法，这个方法是ChannelInitializer的抽象方法，此方法需要开发人员实现。一般来说，initChannel()方法的大致业务代码是：拿到新连接通道作为实际参数，往它的流水线中装配Handler业务处理器。
+
+在通道初始化时，会调用提前注册的初始化处理器的initChannel(…)方法，比如父通道接收到新连接并且要初始化其子通道时，会调用初始化器的initChannel(…)方法，并且会将新接收的通道作为参数，传递给此方法。
+
+### 13.5.4 ChannelInboundHandler的生命周期
+
 暂略，后续进行整理，此部分可以先看我的博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)中的第2.5节。
 
 ## 13.6 Pipeline
