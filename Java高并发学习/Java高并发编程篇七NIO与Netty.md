@@ -7,8 +7,6 @@
 
 由于之前学习过NIO和Netty，所以本文将结合自己的博文笔记（[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)）和Java高并发核心编程卷1进行查缺补漏和整理。
 
-**本文会慢慢进行整理，因为之前整理过自己的笔记，所以二次整理会慢慢来，也有可能会跳章节进行整理，但是最终会完成整理的。在整理完之前可以看我的个人博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)**
-
 # 十、IO底层原理
 
 ## 10.1 IO读写的基本原理
@@ -2834,11 +2832,277 @@ Channel通道和Handler业务处理器的关系是：一条Netty的通道拥有�
 
 ### 13.5.4 ChannelInboundHandler的生命周期
 
-暂略，后续进行整理，此部分可以先看我的博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)中的第2.5节。
+我们可以通过继承ChannelInboundHandlerAdapter编写自己的DemoHandler来体会入站处理器的生命周期。出站处理器其实而类似，这里略，可以自行实现。
+
+```java
+public class DemoHandler extends ChannelInboundHandlerAdapter {
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("handlerAdded被调用");
+        super.handlerAdded(ctx);
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("handlerRemoved被调用");
+        super.handlerRemoved(ctx);
+    }
+
+    @Override
+    public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("channelRegistered被调用");
+        super.channelRegistered(ctx);
+    }
+
+    @Override
+    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("channelUnregistered被调用");
+        super.channelUnregistered(ctx);
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("channelActive被调用");
+        super.channelActive(ctx);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("channelInactive被调用");
+        super.channelInactive(ctx);
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        System.out.println("channelRead被调用");
+        super.channelRead(ctx, msg);
+    }
+
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("channelReadComplete被调用");
+        super.channelReadComplete(ctx);
+    }
+}
+```
+
+然后我们编写测试用例：
+
+```java
+@Test
+public void testDemoHandler(){
+    DemoHandler demoHandler = new DemoHandler();
+    ChannelInitializer channelInitializer = new ChannelInitializer() {
+        @Override
+        protected void initChannel(Channel ch) throws Exception {
+            ch.pipeline().addLast(demoHandler);
+        }
+    };
+    EmbeddedChannel channel = new EmbeddedChannel(channelInitializer);
+    ByteBuf buffer = Unpooled.buffer();
+    buffer.writeInt(1);
+    channel.writeInbound(buffer);
+    channel.flush();
+    channel.writeInbound(buffer);
+    channel.flush();
+    channel.close();
+}
+```
+
+结果如下：
+
+~~~
+handlerAdded被调用
+channelRegistered被调用
+channelActive被调用
+channelRead被调用
+channelReadComplete被调用
+channelRead被调用
+channelReadComplete被调用
+channelInactive被调用
+channelUnregistered被调用
+handlerRemoved被调用
+~~~
+
+通过例子，我们可知处理器分为生命周期方法和数据入站回调方法，上面的几个方法中chanelRead、channelReadComplete是入站处理方法，其余的是生命周期方法，执行顺序可见结果。
+
+读数据的入站回调过程，会根据入站数据的数量被重复调用，每一次有ByteBuf数据包入站都会调用到
 
 ## 13.6 Pipeline
 
-暂略，后续进行整理，此部分可以先看我的博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)中的第2.5节。
+一条Netty通道需要很多的Handler业务处理器处理业务，每条通道内部都有一条流水线将Handler装配起来。Netty的这个业务流水线是基于责任链模式设计的，内部是一个双向链表结构，能支持动态的添加和删除Handler业务处理器。
+
+### 13.6.1 pipeline入站出站处理流程
+
+入站处理器的流动次序是：从前到后。加在前面的，执行也在前面。出站流水处理次序为从后向前，最后加入的出站处理器，反而执行在最前面下面举个例子（此例子来自于我的个人博客），我们简单模拟入站出站处理流程：
+
+~~~java
+@Slf4j
+public class Server {
+    public static void main(String[] args) {
+        new ServerBootstrap()
+                .group(new NioEventLoopGroup())
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    protected void initChannel(NioSocketChannel ch) {
+                        //添加处理器 head --> h1 -> h2 -> h3 ->h4 -> h5 -> h6 -->tail
+                        ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                log.debug("1");
+                                ByteBuf buf = (ByteBuf) msg;
+                                String name = buf.toString(Charset.defaultCharset());
+                                ctx.fireChannelRead(name); // 1
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                log.debug("2");
+                                Student student = new Student();
+                                student.setName(msg.toString());
+                                ctx.fireChannelRead(student); // 2
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                                log.debug("3,结果是{},class:{}",msg,msg.getClass());
+                                ctx.channel().writeAndFlush(ctx.alloc().buffer().writeBytes("server...".getBytes())); // 3
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg,
+                                              ChannelPromise promise) {
+                                log.debug("4");
+                                ctx.write(msg, promise); // 4
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg,
+                                              ChannelPromise promise) {
+                                log.debug("5");
+                                ctx.write(msg, promise); // 5
+                            }
+                        });
+                        ch.pipeline().addLast(new ChannelOutboundHandlerAdapter(){
+                            @Override
+                            public void write(ChannelHandlerContext ctx, Object msg,
+                                              ChannelPromise promise) {
+                                log.debug("6");
+                                ctx.write(msg, promise); // 6
+                            }
+                        });
+                    }
+                })
+                .bind(8080);
+    }
+}
+
+~~~
+
+启动客户端向上面服务端代码发送一条消息（我这里自定义了POJO发送的），结果如下：
+
+~~~
+11:28:59.053 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 1
+11:28:59.054 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 2
+11:28:59.054 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 3,结果是com.learn.handlerandpipeline.Student@3b0418ac,class:class com.learn.handlerandpipeline.Student
+11:28:59.055 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 6
+11:28:59.055 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 5
+11:28:59.055 [nioEventLoopGroup-2-2] DEBUG com.learn.handlerandpipeline.Server - 4
+~~~
+
+结果演示图（此图片来自于我的个人博客）：
+
+![img](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211013111316423.png)
+
+> 上面的代码有以下注意事项：
+>
+> - 入站处理器中，ctx.fireChannelRead(msg) 是调用下一个入站处理器
+>   - 如果注释掉 1 处代码，则仅会打印 1
+>   - 如果注释掉 2 处代码，则仅会打印 1 2
+> - 3 处的 ctx.channel().write(msg) 会从尾部开始触发后续出站处理器的执行如果注释掉 3 处代码，则仅会打印 1 2 3
+> - 类似的，出站处理器中，ctx.write(msg, promise) 的调用也会触发上一个出站处理器如果注释掉 6 处代码，则仅会打印 1 2 3 6
+> - ctx.channel().write(msg) 和 ctx.write(msg)都是触发出站处理器的执行
+>   - ctx.channel().write(msg) 从尾部开始查找出站处理器
+>   - ctx.write(msg) 是从当前节点找上一个出站处理器
+>   - 3 处的 ctx.channel().write(msg) 如果改为 ctx.write(msg) 仅会打印 1 2 3，因为节点3 之前没有其它出站处理器了
+>   - 6 处的 ctx.write(msg, promise) 如果改为 ctx.channel().write(msg) 会打印 1 2 3 6 6 6... 因为 ctx.channel().write() 是从尾部开始查找，结果又是节点6 自己
+
+### 13.6.3 核心类ChannelHandlerContext
+
+在Netty的设计中Handler是无状态的，不保存和Channel有关的信息。Handler的逻辑是通用的，可以给不同的Channel使用。但是Pipeline是有状态的，保存了Channel的关系。于是就需要一个中
+
+间角色ChannelHandlerContext把他们联系起来。
+
+我们的Handler处理器最终都会以双向链表的形式保存在流水线中，而每一个节点并不是Handler的业务处理器基类，而是ChannelHandlerContext这个包装类型，当handler被添加到流水线中，会为其专门创建一个通道处理器上下文ChannelHandlerContext实例，封装了ChannelHandler和ChannelPipeline之间的关联关系。所以流水线ChannelPipeline中的双向连接实质上是由ChannelHandlerContext组成的双向链表。而无状态的Handler作为Context成员，关联在ChannelHandlerContext中。
+
+![image-20220706135055473](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220706135055473.png)
+
+ChannelHandlerContext中的方法主要分为两类，其一是获取上下文关联的Netty组件实例，比如关联的通道、流水线等，其二就是入站和出站处理方法。
+
+如果通过Channel或ChannelPipeline的实例来调用这些出站和入站处理方法，它们就会在整条流水线中传播。然而，如果是通过ChannelHandlerContext上下文调用出站和入站处理方法，就只会从当前的节点开始，往同类型的下一站处理器传播，而不是在整条流水线从头至尾进行完整的传播。
+
+> Channel、Handler、ChannelHandlerContext三者的关系：
+>
+> Channel通道拥有一条ChannelPipeline通道流水线，每一个流水线节点为一个ChannelHandlerContext上下文对象，每一个上下文中包裹了一个ChannelHandler通道处理器。在ChannelHandler通道处理器的入站/出站处理方法中，Netty都会传递一个Context上下文实例作为实际参数。处理器中的回调代码，可以通过Context实参，在业务处理过程中去获取ChannelPipeline实例或者Channel实例。
+
+### 13.6.4 核心类HeadContext和Tailcontext
+
+实际上，通道流水线在没有加入任何处理器之前，装配了两个默认的处理器上下文；一个头部上下文叫HeadContext、一个尾部上下文叫TailContext，pipeline的创建、初始化除了保存一些必要的属性之外，核心就在于HeadContext头节点和TailContext尾节点的创建。每个pipeline中双向链表结构，从一开始就存在HeadContext和Tailcontext，在后面添加的上下文处理器节点，都在这两者之间。
+
+流水线尾部的TailContext是一个入站处理器，实现了所有的入站回调方法，这些回调的主要工作，基本上都是进行收尾的，比如释放缓冲区、完成异常处理等。TailContext是DefaultChannelPipeline的内部类，大概代码结构如下如：
+
+![image-20220706145159880](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220706145159880.png)
+
+流水线头部的HeadContext比TailContext复杂得多，它既是入站处理器，又是出站处理器，其内部还保存了一个unsafe实例，，也就是说HeadContext还需要负责最终的通道传输工作。
+
+HeadContext也是DefaultChannelPipeline的内部类。如下（具体更详细的源码请自行翻阅）：
+
+![image-20220706151941824](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220706151941824.png)
+
+### 13.6.5 pipeline入站和出站的双向链表操作
+
+pipeline入站和出战操作的源码如下，这里只选了一个入站和一个出站操作的代码：
+
+```java
+public class DefaultChannelPipeline implements ChannelPipeline {
+	//省略其余属性
+    final AbstractChannelHandlerContext head;
+    final AbstractChannelHandlerContext tail;
+    //省略其余方法
+    
+    //出站，流水线的出站写
+    @Override
+    public final ChannelFuture write(Object msg) {
+        return tail.write(msg);//从后向前传递
+    }
+    
+    //入站，流水线的入站读
+    @Override
+    public final ChannelPipeline fireChannelRead(Object msg) {
+        AbstractChannelHandlerContext.invokeChannelRead(head, msg);//从前向后传递
+        return this;
+    }
+    
+}
+```
+
+完整的出站入站处理流程，都是通过调用流水线pipeline实例的对应出入站方法开启的。
+
+比如入站的流程是从`fireXXX(...)方法`开始的（XXX代表具体的入站操作，入站读的操作是ChannelRead），在fireChannelRead方法中，pipeline的流水线从头节点head开始，将入站的msg数据沿着流水线的入站处理器逐个向后面传递，如果入站处理过程没有截断流水线的操作，那么入站数据msg将会一直传递到流水线的末尾TailContext处理器上。如下图：
+
+
+
+而出站流程则是从尾部节点tail开始，将出站的数据沿着流水线的出站处理器向前传递，在经过所有的出站处理器后，最终会传递到流水线的HeadContext处理器，并通过unsafe实例，将数据写入到底层通道完成整个处理过程。如下图：
+
+
+
+### 13.6.6 截断流水线的入站处理传播过程
+
+### 13.6.7 在流水线上热插拔Handler处理器
 
 ## 13.7 ByteBuf
 
