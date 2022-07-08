@@ -3100,7 +3100,15 @@ public class DefaultChannelPipeline implements ChannelPipeline {
 
 ![image-20220707131634623](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220707131634623.png)
 
-那么出入站的消息的传播过程具体是如何实现的呢？这里我们要关注一下AbstractChannelHandlerContext这个类，此类是TailContext和HeadContext的父类，在pipeline内部的双向链表的指针维护，以及节点前驱和后继的计算方法，都在这个类中实现。
+那么出入站的消息的传播过程具体是如何实现的呢？这里我们要关注一下AbstractChannelHandlerContext这个类，此类是TailContext和HeadContext的父类，在pipeline内部的双向链表的指针维护，以及节点前驱和后继的计算方法，都在这个类中实现。该类的主要属性如下：
+
+![image-20220708084725204](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220708084725204.png)
+
+我们下面以源码的一个方法为例，简单分析一下出入站（这里不深究源码，Netty源码将在以后进行学习）。
+
+![image-20220708100657655](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220708100657655.png)
+
+
 
 
 
