@@ -3114,7 +3114,26 @@ public class DefaultChannelPipeline implements ChannelPipeline {
 
 ### 13.6.6 截断流水线的入站处理传播过程
 
+在入站处理时，如果需要将Handler处理结果发送到下一站就需要调用以下两个方法：
+
+- super.channelXxx(ChannelHandlerContext)
+- ctx.fireChannelXxx()
+
+所以其实如果因为业务不满足想截断其它得入站处理的流水线操作，那么只要不调用上面两个方法即可。在13.6.1中有流水线的例子，该例子也可以当作截断流水线的例子。
+
+流水线的出站也是一样可以截断，只要不要用对应方法（13.6.1例子中的方法）即可。但是一般来说出站截断没有意义，如果业务条件不满足不出站即可，没必要进行截断。
+
 ### 13.6.7 在流水线上热插拔Handler处理器
+
+Netty的流水线本质是一个双向链表，在程序执行的过程中，可以动态进行业务处理器的热插拔，也就是动态的增加删除流水线上的业务处理器Handler。
+
+主要的热插拔的方法声明在ChannelPipeline接口中：
+
+![image-20220714150101582](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220714150101582.png)
+
+> ChannelInitializer为什么没有重复调用？
+>
+> ![image-20220714151916530](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220714151916530.png)
 
 ## 13.7 ByteBuf
 
