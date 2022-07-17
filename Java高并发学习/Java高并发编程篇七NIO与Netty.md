@@ -2744,7 +2744,45 @@ AbstractChannel内部有一个pipeline属性，表示处理器的流水线，Net
 
   此方法会将缓冲区的数据写出到对端。调用前面的write出站处理时，并不能将数据写出到对端，write操作大部分情况下是写入操作系统的缓冲区，操作系统根据缓冲区的情况决定什么时候把数据写到对端。而执行flush方法会立即将数据写到对端。
 
-### 13.4.2 EmbeddedChannel嵌入式通道
+### 13.4.2 Channel的容器属性
+
+Netty中的Channel还有类似Map的容器属性，可以通过键值对的形式来保存Java Object实例，一般来说可以用于存放一些与通道相关的属性。除了Channel通道Netty中的HandlerContext处理器上下文实例也有类似的功能。这两者的容器功能在Netty中并没有实现Map接口，而是定义了一个类似的接口叫AttributeMap，他只有一个方法：
+
+```java
+/**
+ * Get the {@link Attribute} for the given {@link AttributeKey}. This method will never return null, but may return
+ * an {@link Attribute} which does not have a value set yet.
+ */
+<T> Attribute<T> attr(AttributeKey<T> key);
+```
+
+此方法接受一个AttributeKey类型的Key，返回一个Attribute类型。当然这个AttributeKey不是原始的key而是属于包装类，在单个Netty应用中，此值必须唯一。同理这里的Attribute也不是原始的value而是包装类。原始的value值就存在这个包装实例中。
+
+AttributeMap是一个接口，在Netty中提供了默认的实现，同时AttributeMap接口也是线程安全的。我们可以通过通道的attr方法，根据AttributeKey获取Attribute实例，然后通过Attribute实例进行get和set。
+
+1. Attribute设置值
+
+   ~~~java
+   //定义key
+   static final AttributeKey<泛型> attributeKey = AttributeKey.valueOf("SESSION");
+   //设置值
+   channel.attr(attributeKey).set(值);
+   ~~~
+
+   AttributeKey常常需要用其静态方法AttributeKey.valueOf进行创建，其泛型是key-value中的value的实际类型。比如我想存入字符串，那么泛型就设置为String。
+
+   创建完AttributeKey就可以通过链式调用通过通道进行设置值和取值。
+
+2. Attribute取值
+
+   取值使用Attribute实例的取值方法。具体来说，首先通过通道的attr(AttributeKey)方法，取得键（key）所对应的Attribute包装实例。然后通过Attribute的get()方法。
+
+   ~~~java
+   //例子取出通道中存入的User类
+   User user =channel.attr(attributeKey).get();
+   ~~~
+
+### 13.4.3 EmbeddedChannel嵌入式通道
 
 在Netty的实际开发中，底层通信传输的基础工作Netty已经替大家完成。实际上，更多的工作是设计和开发ChannelHandler业务处理器。处理器开发完成后，需要投入单元测试。
 
