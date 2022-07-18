@@ -3192,13 +3192,76 @@ ByteBuf优势如下：
 
 ByteBuf是一个字节容器，内部是一个字节数组，从逻辑上可以分为四个部分：
 
-
+![image-20220718091329505](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220718091329505.png)
 
 第一部分就是已读字节，表示已经使用完的无效字节；第二部分是可读字节，即有效数据；第三部分是可写字节，写入ByteBuf的数据会在这一区域，第四部分是可扩容字节，表示该ByteBuf最多能扩容的大小。
 
+为了区分这四部分ByteBuf设置了三个重要的整形属性（属性在AbstractByteBuf抽象类中，在ByteBuf只有获取该属性的抽象方法），用于区分这四个区域，分别是：
+
+- readerIndex：表示读取的起始位置，每读取一个字符readerIndex就加1.一旦readerIndex和writerIndex相等就不可读了。
+- writerIndex：表示写入的起始位置，每写一个字节writerIndex就加1，一旦writerIndex和capacity()容量相等，就表示不可写了。capacity()是一个成员方法而不是属性，表示可以写入的容量。
+- maxCapacity：表示ByteBuf的可扩容的最大容量，当写数据时如果容量不足可以进行扩容，扩容的最大值由此值设定，超过就会报错。
+
+除了这些属性ByteBuf还提供了一些方法供开发者调用，这些方法大致分三类：容量类的方法，写入类方法和读取类方法。
+
+- capacity():表示ByteBuf的容量，值为已读、可读和可写之和。
+- maxCapacity()：表示最大可扩容的字节数。
+- isWritable()：表示ByteBuf是否可写，如果capacity()容量大于写指针位置则可写，否则返回false。但是如果此方法返回false并不代表不能再写入数据，因为会自动扩容。
+- writableBytes():可写入字节数，值等于capacity()容量减写指针大小
+- maxWritableBytes():最大可写入字节数，值等于maxCapacity()容量减写指针大小
+- writeBytes(byte[] src):把入参src字节数组数据全部写入ByteBuf
+- writeXXX(XXX value):写入基础类型数据，XXX表示不同的基础类型，比如writeByte()、writeLong等等。**此方法会改变writerIndex指针值**。
+- setXXX(XXX value):基础数据类型设置，**不改变writerIndex指针值**，XXX表示不同的基础类型，比如setByte()、setLong等等。
+- markWriterIndex():此方法将当前写指针属性值保存到markWriterIndex标记属性中
+- resetWriterIndex():此方法将当前markWriterIndex标记属性恢复到写指针中
+- isReadable()：是否可读，如果写指针大于读指针则可读。
+- readableBytes():返回ByteBuf当前可读取的字节数，值等于写指针值减去读指针的值。
+- readBytes(byte[] dst):将数据从ByteBuf中读取到dst中，dst数组大小一般情况下等于readableBytes()大小
+- readXXX():读取基础类型数据，XXX表示不同的基础类型，比如readByte()、readLong等等。**此方法会改变readerIndex指针值**。
+- getXXX():读取基础数据类型，**不改变readerIndex指针值**，XXX表示不同的基础类型，比如getByte()、getLong等等。
+- markReaderIndex():此方法将当前读指针属性值保存到markReaderIndex标记属性中
+- resetReaderIndex():此方法将当前markReaderIndex标记属性恢复到读指针中
+
+关于ByteBuf的使用可以见我的博客[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)这篇笔记的第2.6章
+
 ### 13.7.2 ByteBuf引用计数
 
+JVM中有一种引用计数算法来标记对象是否可达，然后对不可达的对象进行回收，在Netty中也使用了这种方法对ByteBuf的引用进行计数，所以ByteBuf的内存回收工作是通过引用计数的方式管理的。
+
+Netty使用引用计数来追踪ButeBuf的生命周期主要由两个原因，一是对Pooled ByteBuf的支持，二是能尽快地发现可回收的ByteBuf，提升ByteBuf的分配和销毁的效率。
+
+> 在通信程序的传输过程中，Buffer缓冲区实例会被频繁创建使用释放，这样会导致系统开销大性能低，为了提升性能、提高Buffer的使用率，所以从Netty4开始新增了ByteBuf的池化机制。
+
+ByteBuf引用计数的大概规则如下：在默认情况下，创建完ByteBuf引用为1，每次调用retain()方法，引用就加1，每次调用release()方法，引用就减1，如果引用为0，再次访问这个ByteBuf对象就会抛出异常；如果引用为0，表示没有进程引用这个ByteBuf，它的内存就需要回收。
+
+在Netty中，引用计数为0的缓冲区不能再继续使用。为了确保引用计数不会混乱，在Netty的业务处理器开发过程中，应该坚持一个原则：retain和release方法应该结对使用。对缓冲区调用了一次retain，就应该调用一次release。
+
+~~~java
+public void handlerA(ByteBuf buf){
+    buf.retain();
+    try{
+        handler(buf);
+    }finally{
+        buf.release();
+    }
+}
+~~~
+
+Netty在缓冲区使用完成后，会调用一次release，就是释放一次。例如在Netty流水线上，中间所有的Handler业务处理器处理完ByteBuf之后直接传递给下一个，由最后一个Handler负责调用其release方法来释放缓冲区的内存空间。
+
+除了ByteBuf成员方法retain和release管理引用计数外，还可以使用通用静态方法：
+
+- ReferenceCountUtil.retain(Object);
+- ReferenceCountUtil.release(Object);
+
+当ByteBuf引用计数为0，Netty会进行ByteBuf的回收，分为两种情况：
+
+1. 池化的ByteBuf内存，将其放入重新分配的ButeBuf池，等待下一次分配
+2. 未池化的ByteBuf缓冲区，需要细分两种情况：如果是堆结构缓冲，会被JVM垃圾回收机制回收；如果是Direct直接内存的类型，则会调用本地方法释放外部内存。
+
 ### 13.7.3 ByteBuf的Allocator分配器
+
+
 
 ### 13.7.4 ByteBuf缓冲区类型
 
@@ -3209,8 +3272,6 @@ ByteBuf是一个字节容器，内部是一个字节数组，从逻辑上可以�
 ### 13.7.7 Netty的零拷贝
 
 
-
-暂略，后续进行整理，此部分可以先看我的博文[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)中的第2.6节。
 
 ## 13.8 Netty编码解码
 
