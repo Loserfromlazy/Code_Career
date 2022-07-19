@@ -3261,15 +3261,216 @@ Netty在缓冲区使用完成后，会调用一次release，就是释放一次�
 
 ### 13.7.3 ByteBuf的Allocator分配器
 
+Netty通过ByteBufAllocator分配器来创建缓冲区并分配内存空间，Netty提供了两种分配器的实现：UnpooledByteBufAllocator和PooledByteBufAllocator。
 
+其中PooledByteBufAllocator是池化分配器，将ByteBuf放入池中，提高了性能，并减少内存碎片，池化分配器采用了jemalloc高效内存分配策略，这个策略被好几种现代操作系统采用。而UnpooledByteBufAllocator是非池化普通ByteBuf分配器，它每次调用都返回一个新ByteBuf实例，使用完后堆内存就由JVM垃圾回收，直接内存就直接释放。
+
+Netty默认的分配器为ByteBufAllocator.DEFAULT，该默认的分配器可以通过系统参数（System Property）选项io.netty.allocator.type进行配置，配置时使用字符串值："unpooled"，"pooled"。在Netty4.0中，默认使用的是非池化内存分配器，在Netty4.1中使用的是池化内存分配器。以下代码是ByteBufUtil的静态代码块的源码（Netty版本4.1.23）：
+
+```java
+static {
+    //默认使用池化分配器，只有安卓系统使用非池化分配器
+    String allocType = SystemPropertyUtil.get(
+            "io.netty.allocator.type", PlatformDependent.isAndroid() ? "unpooled" : "pooled");
+    allocType = allocType.toLowerCase(Locale.US).trim();
+
+    ByteBufAllocator alloc;
+    if ("unpooled".equals(allocType)) {
+        alloc = UnpooledByteBufAllocator.DEFAULT;
+        logger.debug("-Dio.netty.allocator.type: {}", allocType);
+    } else if ("pooled".equals(allocType)) {
+        alloc = PooledByteBufAllocator.DEFAULT;
+        logger.debug("-Dio.netty.allocator.type: {}", allocType);
+    } else {
+        alloc = PooledByteBufAllocator.DEFAULT;
+        logger.debug("-Dio.netty.allocator.type: pooled (unknown: {})", allocType);
+    }
+
+    DEFAULT_ALLOCATOR = alloc;
+
+    THREAD_LOCAL_BUFFER_SIZE = SystemPropertyUtil.getInt("io.netty.threadLocalDirectBufferSize", 0);
+    logger.debug("-Dio.netty.threadLocalDirectBufferSize: {}", THREAD_LOCAL_BUFFER_SIZE);
+
+    MAX_CHAR_BUFFER_SIZE = SystemPropertyUtil.getInt("io.netty.maxThreadLocalCharBufferSize", 16 * 1024);
+    logger.debug("-Dio.netty.maxThreadLocalCharBufferSize: {}", MAX_CHAR_BUFFER_SIZE);
+}
+```
+
+当然，我们也可以在用Bootstrap装配时，指定默认分配器：
+
+~~~java
+ServerBootstrap bootstrap = new ServerBootstrap();
+bootstrap.option(ChannelOption.SO_KEEPALIVE,true)
+    .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+    .childOption(ChannelOption.ALLOCATOR,PooledByteBufAllocator.DEFAULT);
+~~~
+
+下面对这些分配器的用法提供一个例子：
+
+```java
+@Test
+public void testAllocator(){
+    ByteBuf byteBuf = null;
+    //1. 默认分配器分配：初始容量10最大容量100的缓冲区
+    byteBuf = ByteBufAllocator.DEFAULT.buffer(10,100);
+    //2. 默认分配器分配：初始容量256最大容量Integer.MAX_VALUE的缓冲区
+    byteBuf = ByteBufAllocator.DEFAULT.buffer();
+    //3. 非池化分配器，分配Java堆内存缓冲区
+    byteBuf = UnpooledByteBufAllocator.DEFAULT.heapBuffer();
+    //4.池化分配器，分配操作系统管理的直接内存
+    byteBuf = PooledByteBufAllocator.DEFAULT.directBuffer();
+}
+```
 
 ### 13.7.4 ByteBuf缓冲区类型
 
+根据内存管理方式，Netty缓冲区分为堆缓冲区（HeapByteBuf）和直接缓冲区（DirectByteBuf），除此之外还提供了一种组合缓冲区。
+
+| 类型            | 说明                                                         | 优点                                                        | 缺点                                                         |
+| --------------- | ------------------------------------------------------------ | ----------------------------------------------------------- | ------------------------------------------------------------ |
+| HeapByteBuf     | 内部数据为Java数组，存储在JVM的堆空间中，可以通过hasArray方法来判断是不是堆缓冲区 | 未使用池化时，能提供快速的分配和释放                        | 写入底层传输通道前会复制到直接缓冲区                         |
+| DirectButeBuf   | 内部数据存在操作系统的物理内存中                             | 能获取超过JVM堆限制大小的内存空间，写入传输通道比堆缓冲区快 | 释放和分配空间昂贵（使用操作系统的方法），在Java中读取数据时需要复制一次到堆上 |
+| CompositeBuffer | 多个缓冲区的组合表示                                         | 方便一次操作多个缓冲区实例                                  |                                                              |
+
+这三种缓冲区类型，无论哪一种都可以通过池化、非池化两种分配器来创建和分配内存空间。
+
+- Direct Memory并不属于Java堆内存，所分配的内存其实是调用操作系统malloc()函数来获得的，由Netty本地堆内存Native堆进行管理
+- Direct Memory容量可通过-XX:MaxDirectMemorySize来指定，如果不指定默认与Java堆内存的最大值（-Xmx）一样。（有的JVM默认Direct Memory 与 -Xmx无关）
+- 直接内存避免了Java堆和Native堆之间来回复制数据，在某些场景中提高了性能。
+- 在需要频繁创建缓冲区的场合，由于创建和销毁Direct Buffer的代价高昂，因此不宜使用Direct Buffer。也就是说Direct Buffer 尽量在池化分配器中分配和回收，Direct Buffer进行复用的话，在读写频繁的情况下，能大幅度改善性能。
+- 虽然Direct Buffer的读写比HeapBuffer快，但他的创建和销毁比普通的Heap Buffer慢。
+- 在Java垃圾回收机制回收Java堆时，Netty框架也不会释放不再使用的直接内存缓冲区，因为它属于堆外内存，所以清理的工作不会为Java虚拟机带来压力。
+
+> 以下内容来自于深入理解Java虚拟机第二版
+>
+> Direct Memory直接内存并不是虚拟机运行时数据区的一部分，也不是Java虚拟机规范中定义的内存区域。但是这部分内存也被频繁使用，而且也可能导致OOM异常。
+>
+> 在JDK 1.4 中新加人了 NIO (New Input/Output）类，引人了一种基于通道 (Channel)与缓冲区（Buffer）的VO方式，它可以使用 Native 函数库直接分配堆外内存，然后通过一个存储在Java堆中的DirectByteBuffer对象作为这块内存的引用进行操作。这样能在一些场景中显著提高性能，因为避免了在 Java 堆和 Native 堆中来回复制数据。
+>
+> 显然，本机直接内存的分配不会受到 Java 堆大小的限制，但是，既然是内存，肯定还是会受到本机总内存（包括 RAM 以及 SWAP 区或者分页文件）大小以及处理器寻址空间的限制。服务器管理员在配置虚拟机参数时，会根据实际内存设置 -Xmx 等参数信息，但经常忽略直接内存，使得各个内存区域总和大于物理内存限制（包括物理的和操作系统级的限制），从而导致动态扩展时出现OutOfMemoryError 异常。
+
 ### 13.7.5 ByteBuf的自动创建与释放
+
+**在入站处理时，Netty是何时自动创建入站的ByteBuf缓冲区呢？**
+
+我们可以通过源码来了解，我们可以在NioEventLoop中看到，当可读和连接事件就绪后会调用AbstractNioByteChannel的NioByteUnsafe的read方法。
+
+![image-20220719125120340](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220719125120340.png)
+
+然后我们来看一下read方法的源码：
+
+```java
+@Override
+public final void read() {
+    //channel的config信息
+    final ChannelConfig config = config();
+    //channel的流水线
+    final ChannelPipeline pipeline = pipeline();
+    //获取通道的缓冲区分配器
+    final ByteBufAllocator allocator = config.getAllocator();
+    //缓冲区分配时的大小推测与计算组件
+    final RecvByteBufAllocator.Handle allocHandle = recvBufAllocHandle();
+    allocHandle.reset(config);
+
+    ByteBuf byteBuf = null;
+    boolean close = false;
+    try {
+        do {
+            //使用缓冲区分配器和大小计算组件，根据计算出的大小由分配器分配一个缓冲区
+            byteBuf = allocHandle.allocate(allocator);
+            allocHandle.lastBytesRead(doReadBytes(byteBuf));
+            if (allocHandle.lastBytesRead() <= 0) {
+                // nothing was read. release the buffer.
+                byteBuf.release();
+                byteBuf = null;
+                close = allocHandle.lastBytesRead() < 0;
+                if (close) {
+                    // There is nothing left to read as we received an EOF.
+                    readPending = false;
+                }
+                break;
+            }
+
+            allocHandle.incMessagesRead(1);
+            readPending = false;
+            //将数据发送到流水线，进行入站处理
+            pipeline.fireChannelRead(byteBuf);
+            byteBuf = null;
+        } while (allocHandle.continueReading());
+
+        allocHandle.readComplete();
+        pipeline.fireChannelReadComplete();
+
+        if (close) {
+            closeOnRead(pipeline);
+        }
+    } catch (Throwable t) {
+        handleReadException(pipeline, byteBuf, t, close, allocHandle);
+    } finally {
+        // Check if there is a readPending which was not processed yet.
+        // This could be for two reasons:
+        // * The user called Channel.read() or ChannelHandlerContext.read() in channelRead(...) method
+        // * The user called Channel.read() or ChannelHandlerContext.read() in channelReadComplete(...) method
+        //
+        // See https://github.com/netty/netty/issues/2254
+        if (!readPending && !config.isAutoRead()) {
+            removeReadOp();
+        }
+    }
+}
+```
+
+分配缓冲区时，从通道读取时是不知道数据大小的，申请的缓冲区过大就会浪费，因此Netty设计了一个RecvByteBufAllocator大小推测接口和一系列的大小推测实现类，帮助进行缓冲区大小的计算和推测。默认的缓冲区大小推测实现类为AdaptiveRecvByteBufAllocator，其特点是能根据上一次接收数据的大小来自动调整下一次缓冲区建立时分配的空间大小，避免帮助内存的浪费。
+
+既然了解了自动创建，那么入站处理完成后如何自动释放？ByteBuf的自动释放主要有三部分可以做到：
+
+1. TailContext自动释放
+
+   Netty默认会在ChannelPipeline通道流水线的最后添加一个TailContext尾部上下文（入站处理器），它实现了默认的入站处理方法，在这些方法中会帮助完成ByteBuf内存释放的工作，也就是说只要ByteBuf一路向下传递，进入到流水线的末端，那么TailContext处理器就会自动释放掉入站的ByteBuf实例，源码如下（TailContext是DefaultChannelPipeline的内部类）：
+
+   ```java
+   final class TailContext extends AbstractChannelHandlerContext implements ChannelInboundHandler {
+       //。。。其他代码略
+       
+       @Override
+       public void channelRead(ChannelHandlerContext ctx, Object msg) {
+           onUnhandledInboundMessage(ctx, msg);
+       }
+   }
+   ```
+
+   ```java
+   protected void onUnhandledInboundMessage(Object msg) {
+       try {
+           logger.debug(
+                   "Discarded inbound message {} that reached at the tail of the pipeline. " +
+                           "Please check your pipeline configuration.", msg);
+       } finally {
+           //释放缓冲区
+           ReferenceCountUtil.release(msg);
+       }
+   }
+   ```
+
+   当然，如果没有调用父类的入站处理方法将ByteBuf缓存区向后传递，则需要手动进行释放。
+
+   如果Handler业务处理器需要截断流水线的处理流程，不将ByteBuf数据包送入流水线末端的TailContext入站处理器，并且，也不愿意手动释放ByteBuf缓冲区实例，那就可以继承SimpleChannelInboundHandler，利用它的自动释放功能。
+
+2. SimpleChannelInboundHandler自动释放
+
+   以入站数据为例，Handler业务处理器可以继承自SimpleChannelInboundHandler基类，
+
+3. 出站处理的自动释放
+
+   
 
 ### 13.7.6 ByteBuf浅层复制
 
+
+
 ### 13.7.7 Netty的零拷贝
+
+
 
 
 
