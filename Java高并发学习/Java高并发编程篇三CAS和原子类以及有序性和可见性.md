@@ -1358,7 +1358,7 @@ TestVolatile并发运行之后，控制台所输出的x值可能是0或8。为�
 
 ~~~java
 public class TestVolatile {
-    private int x = 0;
+    private volatile int x = 0;
     private Boolean flag = false;
 
     public void update() {
