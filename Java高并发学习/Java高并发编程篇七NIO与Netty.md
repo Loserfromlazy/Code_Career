@@ -3458,21 +3458,151 @@ public final void read() {
 
 2. SimpleChannelInboundHandler自动释放
 
-   以入站数据为例，Handler业务处理器可以继承自SimpleChannelInboundHandler基类，
+   以入站数据为例，Handler业务处理器可以继承自SimpleChannelInboundHandler基类，然后将业务代码移到channelRead0中，然后就会帮我们自动释放ByteBuf。原理就是这个入站处理器得源码中会帮我们释放ByteBuf，源码如下：
+
+   ```java
+   @Override
+   public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+       boolean release = true;
+       try {
+           if (acceptInboundMessage(msg)) {
+               @SuppressWarnings("unchecked")
+               I imsg = (I) msg;
+               //调用子类的业务方法
+               channelRead0(ctx, imsg);
+           } else {
+               release = false;
+               ctx.fireChannelRead(msg);
+           }
+       } finally {
+           if (autoRelease && release) {
+               //释放一次ByteBuf，如果计数为0则释放
+               ReferenceCountUtil.release(msg);
+           }
+       }
+   }
+   
+   protected abstract void channelRead0(ChannelHandlerContext ctx, I msg) throws Exception;
+   ```
+
+   看完上面源码，我们就能明白为什么SimpleChannelInboundHandler入站处理器为什么不在channelRead中写自己的业务代码，而是在channelRead0中，因为它会帮我们进行一些额外的处理比如释放ByteBuf。
 
 3. 出站处理的自动释放
 
-   
+   在出站处理时，Netty也会释放出站的ByteBuf，出站缓冲区是在HeadContext自动释放的，出站处理用到的ByteBuf缓冲区，一般是要发送的消息，通常由Handler业务处理器申请分配的。例如在写入到流水线时，通过ctx.writeAndFlush(ByteBuf msg)此方法,ByteBuf缓冲区进入到流水线的出站处理流程，在每一个出站Handler处理完成后，最后数据包会来到出战处理的最后一环HeadContext，在完成数据输出通道之后，ByteBuf会被释放一次，如果计数器为0，将被彻底释放掉。
 
 ### 13.7.6 ByteBuf浅层复制
 
+浅层复制可以很大程度避免内存复制，这对于大规模消息通信是非常重要的，ByteBuf浅层复制分为切片（slice）浅层复制和整体（duplicate）浅层复制。
 
+**切片复制**
+
+ByteBuf的slice方法可以获取到ByteBuf的一个切片，一个ByteBuf可以多次切片浅层复制，多次切片后ByteBuf共享同一个内存区域，切片后的 ByteBuf 维护独立的 read，write 指针。slice方法有两个重载：
+
+- 无参数slice方法的返回值是ByteBuf实例中可读部分的切片
+- 带参数的slice(int index, int length) 方法，可以通过灵活地设置不同起始位置和长度，来获取到ByteBuf不同区域的切片
+
+切片不会复制源ByteBuf的底层数据，二者底层是同一数组，同时切片复制也不会改变源ByteBuf的引用计数
+
+切片复制如下图所示，（此图片来自我的博客）
+
+![img](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211014090002945.png)
+
+使用示例：
+
+~~~java
+public class TestSlice {
+    public static void main(String[] args) {
+        ByteBuf buf = ByteBufAllocator.DEFAULT.buffer(10);
+        buf.writeBytes(new byte[]{1,2,3,4});
+        System.out.println("buf");
+        //ByteBufUtil是netty自带的分析工具
+        System.out.println(ByteBufUtil.prettyHexDump(buf));
+        System.out.println("slice");
+        ByteBuf slice = buf.slice();
+        System.out.println(ByteBufUtil.prettyHexDump(slice));
+        //slice.writeByte(5); //如果执行，会报 IndexOutOfBoundsException 异常
+        buf.readByte();
+        System.out.println("buf读一个字节对slice没有改变");
+        System.out.println(ByteBufUtil.prettyHexDump(buf));
+        System.out.println(ByteBufUtil.prettyHexDump(slice));
+        System.out.println("slice的内容发生了改变则原始Bytebuf也会受影响");
+        slice.setByte(1,8);
+        System.out.println(ByteBufUtil.prettyHexDump(buf));
+        System.out.println(ByteBufUtil.prettyHexDump(slice));
+    }
+}
+~~~
+
+输出结果：
+
+~~~
+buf
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+slice
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+buf读一个字节对slice没有改变
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 02 03 04                                        |...             |
++--------+-------------------------------------------------+----------------+
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 02 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+slice的内容发生了改变则原始Bytebuf也会受影响
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 08 03 04                                        |...             |
++--------+-------------------------------------------------+----------------+
+         +-------------------------------------------------+
+         |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
++--------+-------------------------------------------------+----------------+
+|00000000| 01 08 03 04                                     |....            |
++--------+-------------------------------------------------+----------------+
+~~~
+
+**注意，切片后不能追加write，因为max capacity被固定到这个区间的大小**
+
+
+
+**整体复制**
+
+整体复制就好比截取了原始 ByteBuf 所有内容，并且没有 max capacity 的限制，也是与原始 ByteBuf 使用同一块底层内存，只是读写指针是独立的，如下图（图片来自我的博客）：
+
+![img](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211014091003339.png)
+
+duplicate同样不会复制源ByteBuf的底层数据，二者底层是同一数组，同时也不会改变源ByteBuf的引用计数
+
+> 因为浅层复制在底层是同一引用因此，如果源ByteBuf引用计数为0，那么浅层复制出来的ByteBuf也不能进行读写，否则会报错。
+>
+> 因此在调用浅层复制的ByteBuf时，可以调用一次retain增加一次引用，然后使用完之后，在调用一次release将引用计数减一，这样也不会影响Netty内部的ByteBuf的内存释放。
 
 ### 13.7.7 Netty的零拷贝
 
+大部分场景下，Netty接收和发送ByteBuf的过程中，一般来说会使用直接内存进行Socket读写，使用JVM堆内存进行业务处理，这就涉及到直接内存、堆内存之间的数据复制，但是内存复制的效率很低，因此Netty提供了一些方法，减少内存的复制。
 
+Netty零拷贝体现在以下几个方面：
 
+1. Netty提供CompositeByteBuf组合缓冲区类, 可以将多个ByteBuf合并为一个逻辑上的ByteBuf, 避免了各个ByteBuf之间的拷贝。
+2. Netty提供了ByteBuf的浅层复制操作（slice、duplicate），可以将ByteBuf分解为多个共享同一个存储区域的ByteBuf, 避免内存的拷贝
+3. 在使用Netty进行文件传输时，可以调用FileRegion包装的transferTo方法，直接将文件缓冲区的数据发送到目标Channel，避免普通的循环读取文件数据和写入通道所导致的内存拷贝问题。
+4. 在将一个byte数组转换为一个ByteBuf对象的场景，Netty提供了一系列的包装类，避免了转换过程中的内存拷贝。
+5. 如果Channel接收和发送ByteBuf都使用direct直接内存进行Socket读写，不需要进行缓冲区的二次拷贝。但是，如果使用JVM的堆内存进行Socket读写，JVM会将堆内存Buffer拷贝一份到直接内存中，然后才写入Socket中，相比于使用直接内存，这种情况在发送过程中会多出一次缓冲区的内存拷贝。所以，在发送ByteBuffer到Socket时，尽量使用直接内存而不是JVM堆内存。
 
+> Netty的零拷贝是基于Java层面的，是基于用户空间的，而不是操作系统层面的优化。
+>
 
 ## 13.8 Netty编码解码
 
