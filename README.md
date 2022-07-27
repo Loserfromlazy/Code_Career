@@ -1,4 +1,4 @@
-# Code_Caree
+# Code_Career
 
 我个人在计算机方面学习过的所有技术的学习笔记（md文件）
 
@@ -6,4 +6,3 @@
 Gitee每周五从Github上进行同步
 
 博客地址：https://www.cnblogs.com/yhr520/
-
