@@ -3293,9 +3293,133 @@ Netty的流水线本质是一个双向链表，在程序执行的过程中，可
 
 ### 13.6.8 流水线上的异常传播
 
+**本小节建议自己debug加深体会**
 
+我们下面来分析一下入站和出站时的异常传播，首先我们编写一个demo：
 
+```java
+@SpringBootTest
+@Slf4j
+public class TestExceptionCaught {
+	//入站模拟处理器
+    static class MockInboundExceptionHandler extends ChannelInboundHandlerAdapter{
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
 
+            throw new Exception("throw error!!!");
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+            super.exceptionCaught(ctx, cause);
+        }
+    }
+	//出站处理模拟器
+    static class MockOutboundExceptionHandler extends MessageToByteEncoder<String> {
+        @Override
+        protected void encode(ChannelHandlerContext channelHandlerContext, String s, ByteBuf byteBuf) throws Exception {
+            throw new Exception("throw error!!!");
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+            super.exceptionCaught(ctx, cause);
+        }
+    }
+	//异常处理器
+    static class MyExceptionHandler extends ChannelInboundHandlerAdapter{
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+            log.error(cause.getMessage());
+            ctx.close();
+        }
+    }
+	//消息发送处理器
+    static class SendHandler extends ChannelInboundHandlerAdapter{
+
+        @Override
+        public void channelActive(ChannelHandlerContext ctx) throws Exception {
+            //这两种是从尾部开始查找出站处理器
+            ChannelFuture channelFuture = ctx.channel().writeAndFlush("something");
+            //ctx.pipeline().writeAndFlush("something");
+            //这一种是从当前节点查找上一个出站处理器
+            //ctx.writeAndFlush("something");
+            channelFuture.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture future) throws Exception {
+                    if (future.isSuccess()){
+                        log.info("执行成功");
+                    }else if (future.isCancelled()){
+                        log.info("执行失败");
+                    }else if (future.cause()!=null){
+                        log.info("执行出错，错误信息{}",future.cause().getMessage());
+                    }
+                }
+            });
+
+        }
+    }
+	//测试入站处理流程
+    @Test
+    public void testInBoundExceptionCaught(){
+        ChannelInitializer channelInitializer = new ChannelInitializer() {
+            @Override
+            protected void initChannel(Channel channel) throws Exception {
+                channel.pipeline().addLast(new MockInboundExceptionHandler());
+                channel.pipeline().addLast(new MyExceptionHandler());
+            }
+        };
+        EmbeddedChannel channel = new EmbeddedChannel(channelInitializer);
+        channel.writeInbound("something");
+        channel.flush();
+    }
+	//测试出站处理流程
+    @Test
+    public void testOutBoundExceptionCaught(){
+        ChannelInitializer channelInitializer = new ChannelInitializer() {
+            @Override
+            protected void initChannel(Channel channel) throws Exception {
+                channel.pipeline().addLast(new SendHandler());
+                channel.pipeline().addLast(new MockOutboundExceptionHandler());
+                channel.pipeline().addLast(new MyExceptionHandler());
+            }
+        };
+        EmbeddedChannel channel = new EmbeddedChannel(channelInitializer);
+    }
+}
+```
+
+上面的demo包含了入站和出站两部分，我们分开来分析，首先看一下入站处理流程，我们在MockInboundExceptionHandler和MyExceptionHandler的exceptionCaught方法上打上断点。
+
+![image-20220728220516624](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220728220516624.png)
+
+然后debug启动testInBoundExceptionCaught方法我们观察IDEA的调用栈：
+
+我们先看写入入站消息到第一个断点都调用了哪些方法，如下图（如果看不清可以进行放大）：
+
+![image-20220728215931696](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220728215931696.png)
+
+上图描述了入站处理的过程，首先我们在测试方法中将消息写入流水线，然后经过头部处理器，到了MockInboundExceptionHandler处理器中，在这里抛出了一个异常，于是就在被执行的过程中被捕获了，之后调用exceptionCaught方法，这里也是我们打断点的地方，然后我们放过去进入到第二个断点：
+
+![image-20220728220824945](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220728220824945.png)
+
+我们会看到异常会像消息在流水线中传递的那样，不断地进行传递，最终会走到我们的最后一个专门用作异常处理器的入站处理器中，进入到exceptionCaught。
+
+**因此，对于入站的异常，我们通常会在流水线的末尾的入站处理器进行异常处理，通过重写exceptionCaught方法的方式。**
+
+那么出站处理过程中的异常我们又该如何处理呢？我们debug运行上面的出站处理的方法（断点如下图）。
+
+![image-20220728222630581](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220728222630581.png)
+
+下面我们观察idea的堆栈，来分析出站的异常传递：
+
+![image-20220728223432615](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220728223432615.png)
+
+我们断点会先停在抛出异常的地方，然后我们观察调用栈，发现此时异常并不是通过消息传递的方式进行的，而是直接走的异步消息。然后我们放过去就会发现，断点会在我们设置的监听器中停下。
+
+![image-20220728223626766](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220728223626766.png)
+
+从上面的整个流程中我们可以看到，断点根本没有停在exceptionCaught方法中，也就是说出站流程中的异常exceptionCaught是捕获不到的，**因此对于出站的异常，我们可以在发送消息时通过添加监听器的方式处理出站的异常**。可以看到我们断点最后直接停在了监听器的方法中。
 
 ## 13.7 ByteBuf
 
