@@ -5,7 +5,7 @@
 > 参考资料：Java高并发核心编程卷1尼恩编著、以及个人博客和道格李的Reactor论文
 >
 
-由于之前学习过NIO和Netty，所以本文将结合自己的博文笔记（[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)）和Java高并发核心编程卷1进行查缺补漏和整理。
+由于之前学习过NIO和Netty，所以本文将结合自己的博文笔记（[NIO与Netty](https://www.cnblogs.com/yhr520/p/15384520.html)）和Java高并发核心编程卷1进行查缺补漏和重新整理。
 
 # 十、IO底层原理
 
@@ -2693,6 +2693,124 @@ ServerBootstrap bootstrap = new ServerBootstrap();
 7. SO_BROADCAST
 
    此为TCP传输选项，表示设置为广播模式
+
+### 13.3.4 EvevtLoopGroup
+
+**事件循环对象**
+
+EventLoop 本质是一个**单线程执行器**（同时**维护了一个 Selector**），里面有 run 方法处理一个或多个 Channel 上源源不断的 io 事件
+
+> 它的继承关系如下
+>
+> - 继承自 j.u.c.ScheduledExecutorService 因此包含了线程池中所有的方法
+> - 继承自 netty 自己的 OrderedEventExecutor
+>   - 提供了 boolean inEventLoop(Thread thread) 方法判断一个线程是否属于此 EventLoop
+>   - 提供了 EventLoopGroup parent() 方法来看看自己属于哪个 EventLoopGroup
+
+**事件循环组**
+
+EventLoopGroup 是一组 EventLoop，Channel 一般会调用 EventLoopGroup 的 register 方法来绑定其中一个 EventLoop，后续这个 Channel 上的 io 事件都由此 EventLoop 来处理（保证了 io 事件处理时的线程安全）
+
+> - 继承自 netty 自己的 EventExecutorGroup
+>   - 实现了 Iterable 接口提供遍历 EventLoop 的能力
+>   - 另有 next 方法获取集合中下一个 EventLoop
+
+**处理普通任务和定时任务**
+
+```java
+public class TestEventLoop {
+    public static void main(String[] args) {
+        // 创建拥有两个EventLoop的NioEventLoopGroup，对应两个线程
+        EventLoopGroup group = new NioEventLoopGroup(2);
+        // 通过next方法可以获得下一个 EventLoop
+        System.out.println(group.next());
+        System.out.println(group.next());
+
+        // 通过EventLoop执行普通任务
+        group.next().execute(()->{
+            System.out.println(Thread.currentThread().getName() + " hello");
+        });
+
+        // 通过EventLoop执行定时任务
+        //Runnable initialDelay初始延迟时间 period间隔时间 
+        group.next().scheduleAtFixedRate(()->{
+            System.out.println(Thread.currentThread().getName() + " hello2");
+        }, 0, 1, TimeUnit.SECONDS);
+        
+        // 优雅地关闭
+        //group.shutdownGracefully();
+    }
+}
+```
+
+执行结果：
+
+> io.netty.channel.nio.NioEventLoop@75a1cd57
+> io.netty.channel.nio.NioEventLoop@3d012ddd
+> nioEventLoopGroup-2-1 hello
+> nioEventLoopGroup-2-2 hello123
+> nioEventLoopGroup-2-2 hello123
+> nioEventLoopGroup-2-2 hello123
+>
+> 。。。每秒执行一次
+
+**处理IO任务**
+
+我们正常使用事件循环组其实就是让其处理IO任务，例子如下：
+
+```java
+public class MyServer {
+    public static void main(String[] args) {
+        new ServerBootstrap()
+                .group(new NioEventLoopGroup())
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) throws Exception {
+                        ChannelPipeline pipeline = ch.pipeline();
+                        pipeline.addLast(new StringEncoder());
+                        pipeline.addLast(new ChannelInboundHandlerAdapter(){
+                            @Override
+                            public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                                ByteBuf buf = (ByteBuf) msg;
+                                System.out.println(Thread.currentThread().getName() + " " + buf.toString(StandardCharsets.UTF_8));
+                            }
+                        });
+                    }
+                })
+                .bind(8080);
+    }
+}
+```
+
+```java
+public class MyClient {
+    public static void main(String[] args) throws IOException, InterruptedException {
+        new Bootstrap()
+                .group(new NioEventLoopGroup())
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel socketChannel) throws Exception {
+                        socketChannel.pipeline().addLast(new StringEncoder());
+                    }
+                })
+                .connect(new InetSocketAddress("localhost", 8080))
+                .sync()
+                .channel();
+        // 此处打断点调试，调用 channel.writeAndFlush(...);
+        System.in.read();
+    }
+}
+```
+
+打断点方法如下：只暂停channel的线程，让其他线程继续运行（此图片来源我自己的博客文章）
+
+[![img](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211012101426673.png)](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211012101426673.png)
+
+调试方法如下：选择channel的执行方法，执行writeAndFlush（此图片来源我自己的博客文章）
+
+[![img](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211012104148253.png)](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211012104148253.png)
 
 ## 13.4 Channel和Future
 
