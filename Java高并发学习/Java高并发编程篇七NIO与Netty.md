@@ -3291,6 +3291,12 @@ Netty的流水线本质是一个双向链表，在程序执行的过程中，可
 >
 > ![image-20220714151916530](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220714151916530.png)
 
+### 13.6.8 流水线上的异常传播
+
+
+
+
+
 ## 13.7 ByteBuf
 
 Netty中提供了ByteBuf缓冲区组件来代替Java NIO的ByteBuffer缓冲区组件，以便更加快捷和高效的操纵内存缓冲区。
