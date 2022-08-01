@@ -3182,7 +3182,7 @@ public class Server {
 > - 3 处的 ctx.channel().write(msg) 会从尾部开始触发后续出站处理器的执行如果注释掉 3 处代码，则仅会打印 1 2 3
 > - 类似的，出站处理器中，ctx.write(msg, promise) 的调用也会触发上一个出站处理器如果注释掉 6 处代码，则仅会打印 1 2 3 6
 > - ctx.channel().write(msg) 和 ctx.write(msg)都是触发出站处理器的执行
->   - ctx.channel().write(msg) 从尾部开始查找出站处理器
+>   - ctx.channel().write(msg) 和ctx.pipeline().write();从尾部开始查找出站处理器
 >   - ctx.write(msg) 是从当前节点找上一个出站处理器
 >   - 3 处的 ctx.channel().write(msg) 如果改为 ctx.write(msg) 仅会打印 1 2 3，因为节点3 之前没有其它出站处理器了
 >   - 6 处的 ctx.write(msg, promise) 如果改为 ctx.channel().write(msg) 会打印 1 2 3 6 6 6... 因为 ctx.channel().write() 是从尾部开始查找，结果又是节点6 自己
