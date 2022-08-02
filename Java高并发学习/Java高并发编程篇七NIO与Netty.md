@@ -3082,7 +3082,18 @@ handlerRemoved被调用
 
 通过例子，我们可知处理器分为生命周期方法和数据入站回调方法，上面的几个方法中chanelRead、channelReadComplete是入站处理方法，其余的是生命周期方法，执行顺序可见结果。
 
-读数据的入站回调过程，会根据入站数据的数量被重复调用，每一次有ByteBuf数据包入站都会调用到
+Handler生命周期：
+
+1. handlerAdded: 新建立的连接会按照初始化策略，把handler添加到该channel的pipeline里面，也就是channel.pipeline.addLast(new LifeCycleInBoundHandler)执行完成后的回调；
+2. channelRegistered: 当该连接分配到具体的worker线程后，该回调会被调用。
+3. channelActive：channel的准备工作已经完成，所有的pipeline添加完成，并分配到具体的线上上，说明该channel准备就绪，可以使用了。
+4. channelRead：客户端向服务端发来数据，每次都会回调此方法，表示有数据可读；
+5. channelReadComplete：服务端每次读完一次完整的数据之后，回调该方法，表示数据读取完毕；
+6. channelInactive：当连接断开时，该回调会被调用，说明这时候底层的TCP连接已经被断开了。
+7. channelUnREgistered: 对应channelRegistered，当连接关闭后，释放绑定的workder线程；
+8. handlerRemoved： 对应handlerAdded，将handler从该channel的pipeline移除后的回调方法。
+
+读数据的入站回调过程，会根据入站数据的数量被重复调用，每一次有ByteBuf数据包入站都会调用到。
 
 ## 13.6 Pipeline
 
