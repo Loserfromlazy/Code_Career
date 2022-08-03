@@ -411,13 +411,6 @@ public class MongoDemo{
 }
 ~~~
 
-## 3.2 springDataMongoDB
-
-springdatamonggodb有两种方式
-
-1. 实现MongoRepository类
-2. 导入MongoDBTemplate
-
 
 
 
