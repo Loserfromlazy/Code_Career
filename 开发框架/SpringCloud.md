@@ -163,7 +163,7 @@ Spring Cloud 只是利⽤了Spring Boot 的特点，让我们能够快速的实�
 
 我们在这部分模拟一个微服务之间的调用，在之后会一步一步使用SpringCloud组件对案例进行改造。
 
-> 项目地址：[GitHub](),[Gitee]()
+> 项目地址：[GitHub](https://github.com/Loserfromlazy/LearnSpringCloud),[Gitee](https://gitee.com/yhr520/LearnSpringCloud)
 >
 > 后续变动都会在此基础上进行修改
 
