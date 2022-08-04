@@ -1,4 +1,4 @@
-# Java虚拟机学习笔记
+# Java虚拟机篇一自动内存管理
 
 > 参考资料：深入理解Java虚拟机周志明第三版以及互联网资源具体引用会在文中标注
 
@@ -233,66 +233,65 @@ CASE(_new): {
 > 	</tr>
 >     </tbody>
 > </table>
->
-> 64位Mark Word结构如下：
->
-> <table>
->     <thead>
+>64位Mark Word结构如下：
+> 
+><table>
+>  <thead>
 >         <tr>
-> 	    <th rowspan="2">内置锁状态</th>
+>    	    <th rowspan="2">内置锁状态</th>
 > 	    <th rowspan="2" colspan="3" >57bit</th>
 > 	    <th rowspan="2">4bit</th> 
->         <th>1bit</th>
+>      <th>1bit</th>
 >         <th>2bit</th>
-> 	</tr>
+>    	</tr>
 > 	<tr>
->         <th>biased</th>
+>      <th>biased</th>
 >         <th>lock</th>
-> 	</tr>
->     </thead>
-> 	<tbody>
->     	<tr>
-> 	    <td>无锁</td>
->         <td >unused(25bit)</td>
+>    	</tr>
+>  </thead>
+>    	<tbody>
+>  	<tr>
+>    	    <td>无锁</td>
+>      <td >unused(25bit)</td>
 >         <td >对象的hashCode(31bit)</td>
 >         <td >unused(1bit)</td>
 >         <td >分代年龄</td>
 >         <td >0</td>
 >         <td >01</td>
-> 	</tr>
->     <tr>
-> 	    <td>偏向锁</td>
->         <td>线程ID(54bit)</td>
+>    	</tr>
+>  <tr>
+>    	    <td>偏向锁</td>
+>      <td>线程ID(54bit)</td>
 >         <td>epoch(2bit)</td>
 >         <td >unused(1bit)</td>
 >         <td >分代年龄</td>
 >         <td >1</td>
 >         <td >01</td>
-> 	</tr>
->     <tr>
-> 	    <td>轻量级锁</td>
->         <td colspan="5" >ptr_to_lock_record方法栈帧中的锁记录指针(62bit)</td>
+>    	</tr>
+>  <tr>
+>    	    <td>轻量级锁</td>
+>      <td colspan="5" >ptr_to_lock_record方法栈帧中的锁记录指针(62bit)</td>
 >         <td >00</td>
-> 	</tr>
->     <tr>
-> 	    <td>重量级锁</td>
->         <td colspan="5" >ptr_to_heavyweight_monitor指向重量级锁监视器的指针(62bit)</td>
+>    	</tr>
+>  <tr>
+>    	    <td>重量级锁</td>
+>      <td colspan="5" >ptr_to_heavyweight_monitor指向重量级锁监视器的指针(62bit)</td>
 >         <td >10</td>
-> 	</tr>
->     <tr>
-> 	    <td>GC标志</td>
->         <td colspan="5" >空(62bit)</td>
+>    	</tr>
+>  <tr>
+>    	    <td>GC标志</td>
+>      <td colspan="5" >空(62bit)</td>
 >         <td >11</td>
-> 	</tr>
->     </tbody>
-> </table>
+>    	</tr>
+>  </tbody>
+>    </table>
+> 
 >
->
-> 在64位的Mark Word中
->
-> - lock：锁状态标记位，占两个二进制位，由于希望用尽可能少的二进制位表示尽可能多的信息，因此设置了lock标记。该标记的值不同，整个Mark Word表示的含义就不同。
+>在64位的Mark Word中
+> 
+>- lock：锁状态标记位，占两个二进制位，由于希望用尽可能少的二进制位表示尽可能多的信息，因此设置了lock标记。该标记的值不同，整个Mark Word表示的含义就不同。
 > - biased：表示当前对象无锁还是偏向锁
-> - age：分代年龄，在GC中，对象在Survivor区复制一次，年龄就增加1，当对象达到设定的阈值就会晋升老年代，默认并行GC的年龄阈值为15，并发GC的年龄阈值是6.因为只有4为所以最大是15.
+> - age：分代年龄，在GC中，对象在Survivor区复制一次，年龄就增加1，当对象达到设定的阈值就会晋升老年代，默认并行GC的年龄阈值为15，并发GC的年龄阈值是6.因为只有4位所以最大是15.
 > - identity_hashcode:对象的hashCode，31位对象标识哈希码采用延迟加载，只有调用`Object.hashCode()`方法或者`System.identityHashCode()`方法计算对象的HashCode后，其结果将被写到该对象头中。当对象被锁定时，该值会移动到Monitor（监视器）中.
 > - epoch:偏向时间戳
 > - thread：线程ID，54位是持有偏向锁的线程ID
@@ -463,6 +462,117 @@ public class JavaVMStackSOF {
 
 ### 1.3.3 方法区和运行时常量池溢出
 
+由于运行时常量池也是方法区的一部分，所以两者测试可以放到一起。
 
+这里由于深入理解Java虚拟机中使用了jdk6、7、8等jdk进行测试，这里安装比较麻烦因此暂时不进行实验。
 
 ### 1.3.4 本机直接内存溢出
+
+直接内存的大小可以通过-XX:MaxDirectMemorySize=10M来指定，如果不指定则与Java堆的最大值一致。
+
+直接内存溢出例子如下：
+
+```java
+/**
+ * -Xmx20M指定Java 最大堆
+ * -XX:MaxDirectMemorySize=10M 指定直接内存大小
+ */
+public class DirectOOM {
+    private static final int _1MB = 1024*1024;
+
+    public static void main(String[] args) throws NoSuchFieldException, IllegalAccessException {
+        final Field declaredField = Unsafe.class.getDeclaredFields()[0];
+        declaredField.setAccessible(true);
+        Unsafe unsafe = (Unsafe) declaredField.get(null);
+        while (true){
+            unsafe.allocateMemory(_1MB);
+        }
+    }
+}
+```
+
+运行结果：
+
+![image-20220804093047300](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220804093047300.png)
+
+我在实验深入理解Java虚拟机一书中的这个例子时加上了-XX:+HeapDumpOnOutOfMemoryError来打印dump日志，但是却发现并没有打印出日志来，于是我加了计数器发现计数器刷了很多轮如下图（一直在刷，这是截取的一部分）：
+
+![image-20220804095744268](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220804095744268.png)
+
+理论上我设置了10M最大堆外内存应该很快就跑完了，于是通过万能的互联网发现（主要是通过这篇博客进行了了解[[JVM]了断局: 堆外内存无法 [ -XX:MaxDirectMemorySize ] 限制](https://blog.csdn.net/zhanglong_4444/article/details/116701143)）**反射获取的unsafe实例不受JVM最大堆内存参数控制而是受操作系统的内存限制**。只有Java自带的`ByteBuffer.allocateDirect`或者`new DirectByteBuffer`这种方式获取的直接内存才受参数-XX:MaxDirectMemorySize限制。我们来测试一下，代码如下：
+
+```java
+/**
+ * -Xmx20M指定Java 最大堆
+ * -XX:MaxDirectMemorySize=10M 指定直接内存大小
+ * -XX:+HeapDumpOnOutOfMemoryError 转储快照
+ */
+public class DirectOOM {
+    private static final int _1MB = 1024*1024;
+    private static int num=0;
+
+    public static void main(String[] args) throws NoSuchFieldException, IllegalAccessException {
+//        final Field declaredField = Unsafe.class.getDeclaredFields()[0];
+//        declaredField.setAccessible(true);
+//        Unsafe unsafe = (Unsafe) declaredField.get(null);
+        List<ByteBuffer> list = new ArrayList<>();
+        while (true){
+            num++;
+            System.out.println(num);
+            //unsafe.allocateMemory(_1MB);
+            ByteBuffer buffer = ByteBuffer.allocateDirect(_1MB);
+            list.add(buffer);
+        }
+    }
+}
+```
+
+运行结果：
+
+![image-20220804100547514](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220804100547514.png)
+
+# 二、垃圾收集器与内存分配策略
+
+Java运行时内存区域的各个部分，其中程序计数器、虚拟机栈、本地方法栈这三个区域随线程生，随线程死，栈中的栈帧随着方法的进入和推测，进行出栈和入栈操作，每一个栈帧分配多少内存基本上是在类结构确定下来时就已知的，所以这几个区域不用过多考虑如何回收内存，因为当方法结束或线程结束时，内存基本上就跟着回收了。
+
+而Java堆和方法区有着不确定性，一个接口的多个实现类的内存可能不一样，一个方法所执行的不同条件分支所需要的内存也不一样，只有处于运行期间才知道程序究竟会创建多少对象，这些内存的分配是动态的。垃圾回收器所关注的正是这部分内存该如何管理。
+
+## 2.1 判断对象是否存活
+
+在堆里面存放着Java中几乎所有的对象实例，垃圾回收器回收前首先要做的就是确定对象是否存活
+
+### 2.1.1 引用计数算法
+
+在对象中添加一个引用计数器，每当有一个地方引用它时，计数器加一；当引用失效时，计数器减一；任何时刻计数器为0的对象就是不可在被使用的。虽然引用计数算法占用了一些额外的内存空间来计数，但是原理简单判定效率高。但是这个看似简单的算法需要很多例外情况要考虑，必须配合额外大量处理才能正确工作，譬如单纯的应用计数就很难解决对象之间的互相循环引用问题。在主流的Java虚拟机中都没有选择引用计数法管理内存。
+
+我们看下面的例子：
+
+```java
+/**
+ * -verbose:gc 在控制台输出GC情况
+ * -XX:+PrintGCDetails 打印输出详细的GC收集日志的信息.
+ */
+public class ReferenceCount {
+    public Object instance = null;
+    private static final int _1MB = 1024*1024;
+    private byte[] size = new byte[2*_1MB];
+
+    public static void testGC(){
+        ReferenceCount a = new ReferenceCount();
+        ReferenceCount b = new ReferenceCount();
+        a.instance = b.instance;
+        b.instance = a.instance;
+
+        System.gc();
+    }
+
+    public static void main(String[] args) {
+        testGC();
+    }
+}
+```
+
+
+
+### 2.1.2 可达性分析算法
+
