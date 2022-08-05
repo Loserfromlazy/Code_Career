@@ -589,4 +589,117 @@ public class ReferenceCount {
 
 在Java技术体系中以下几种可以固定作为GC Roots：
 
-- 在虚拟机栈中引用的dui'xiang
+- 在虚拟机栈（栈帧中的本地变量表）中引用的对象，比如各个线程被调用的方法堆栈中使用到的参数、局部变量、临时变量等。
+- 在方法区中类静态属性引用的对象，比如Java类的引用类型静态变量。
+- 在方法区中常量引用的对象，比如字符串常量池中的引用。
+- 在本地方法栈中的JNI引用的对象
+- Java虚拟机栈内部的引用，如基本数据类型对应的Class对象，一些常驻的异常对象（OutOfMemoryError等），还有系统类加载器
+- 所有被同步锁（synchronized）持有的对象。
+- 反映Java虚拟机内部情况的JMXBean、JVMTI中注册的回调，本地代码缓存等
+
+除了这些固定的GC Roots集合以外，根据用户所选用的垃圾收集器以及当前回收的内存区域不同，还可以有其他对象临时性的加入，共同构建完整的GC Roots集合。比如分代垃圾收集和局部回收，如果只针对Java堆中的某一块内存区域发器垃圾收集时，必须考虑到内存区域是虚拟机自己的实现，不是独立封闭的，**所以某个内存区域的对象完全有可能被堆内的其他区域对象所引用，这时就需要将关联区域的对象也加入到GC Roots中，才能保证可达性分析的正确**。
+
+### 2.1.3 Java中的引用
+
+在jdk1.2之前，Java中的引用是很传统的定义，只要reference类型的数据中存储的数值代表的是另外一块内存的起始地址，就称该reference数据是代表某块内存、某个对象的引用。在jdk1.2,Java对引用的概念进行了扩充，将引用分为强引用、软引用、弱引用和虚引用。强度一次递减。
+
+- 强引用是最传统的引用的定义，是指在程序代码中普遍存在的引用赋值，即Object obj=new Object()这种引用关系，无论在什么情况下，只要强引用关系还存在，垃圾收集器就永远不会收掉被引用的对象。
+
+- 软引用是用来描述一些还有用，但非必须的对象，只要被软引用关联着的对象，在系统即将要发生内存溢出前，会把这些对象列为回收范围进行第二次回收，如果这次回收还没有足够的内存才会抛出内存溢出异常。在JDK1.2后提供了SoftReference类来实现软引用。
+
+- 弱引用。这也是用来描述那些非必需对象的，但它比软引用还要弱一些，只要到下一次垃圾收集，无论内存是否足够，都会回收掉只被弱引用关联的对象。在jdk1.2后提供了WeakReference来实现弱引用。
+
+  在ThreadLocalMap中的key就是通过弱引用进行包裹的。具体可见我的[Java高并发笔记一多线程](https://github.com/Loserfromlazy/Code_Career/blob/master/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E5%AD%A6%E4%B9%A0/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B%E7%AF%87%E4%B8%80%E5%A4%9A%E7%BA%BF%E7%A8%8B.md#173-threadlocal%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90)
+
+- 虚引用，又称为幽灵或幻影引用，它是最弱的一种引用，一个对象是否有虚引用存在，完全不对其生存空间有影响，也无法通过虚引用来取得一个对象实例，为一个对象设置虚引用的唯一目的是为了在这个对象被收集器回收前收到一个系统通知。在jdk1.2后提供PhantomReference来实现虚引用。
+
+### 2.1.4 可达性分析的缓刑
+
+在可达性分析算法标定为不可达的对象，不会立即被释放，而是处于“缓刑阶段”，**一个对象“死亡”，需要被标记两次**即如果对象在进行可达性分析后发现没 有与GC Roots相连接的引用链，那它将会被第一次标记，随后进行一次筛选，筛选的条件是此对象是 否有必要执行finalize()方法。假如对象没有覆盖finalize()方法，或者finalize()方法已经被虚拟机调用 过，那么虚拟机将这两种情况都视为“没有必要执行”。
+
+如果这个对象被判定为确有必要执行finalize()方法，那么该对象将会被放置在一个名为F-Queue的 队列之中，并在稍后由一条由虚拟机自动建立的、低调度优先级的Finalizer线程去执行它们的finalize() 方法。这里所说的“执行”是指虚拟机会触发这个方法开始运行，但并不承诺一定会等待它运行结束。这样做的原因是，如果某个对象的finalize()方法执行缓慢，或者更极端地发生了死循环，将很可能导致F-Queue队列中的其他对象永久处于等待，甚至导致整个内存回收子系统的崩溃。finalize()方法是对象逃脱死亡命运的最后一次机会，稍后收集器将对F-Queue中的对象进行第二次小规模的标记，如果对象要在finalize()中成功拯救自己——只要重新与引用链上的任何一个对象建立关联即可，譬如把自己this关键字赋值给某个类变量或者对象的成员变量，那在第二次标记时它将被移出“即将回收”的集 合；如果对象这时候还没有逃脱，那基本上它就真的要被回收了。
+
+![image-20220805095427272](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220805095427272.png)
+
+```java
+public class FinalizeGC {
+
+    public static FinalizeGC SAVE_HOOK = null;
+
+    public void isAlive(){
+        System.out.println("i am alive");
+    }
+
+    @Override
+    protected void finalize() throws Throwable {
+        super.finalize();
+        System.out.println("finalize is executed");
+        FinalizeGC.SAVE_HOOK = this;
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        SAVE_HOOK = new FinalizeGC();
+        SAVE_HOOK = null;
+        System.gc();
+        //finalize优先级低，暂停0.5秒进行等待
+        Thread.sleep(500);
+        if (SAVE_HOOK != null){
+            SAVE_HOOK.isAlive();
+        }else {
+            System.out.println("i am dead");
+        }
+
+        SAVE_HOOK = null;
+        System.gc();
+        Thread.sleep(500);
+        if (SAVE_HOOK != null){
+            SAVE_HOOK.isAlive();
+        }else {
+            System.out.println("i am dead");
+        }
+    }
+}
+```
+
+运行结果：
+
+~~~
+finalize is executed
+i am alive
+i am dead
+~~~
+
+这是因为任何一个对象的finalize()方法都只会被系统自动调用一次，如果对象面临下一次回收，它的finalize()方法不会被再次执行，因此第二段代码的自救行动失败了。
+
+> finalize() 如今已被官方明确声明为不推荐使用的语法。finalize()能做的所有工作，使用try-finally或者其他方式都可以做得更好、更及时，所以建议完全可以忘掉Java语言里面的这个方法。
+
+### 2.1.5 回收方法区
+
+在Java虚拟机规范中可以不对方法区进行垃圾收集，因为方法区垃圾收集的性价比较低，在堆中尤其是新生代，一次回收可回收70%-90%的空间，而方法区却收效甚微。
+
+方法区主要回收两部分：废弃的常量和不再使用的类型。回收废弃常量与Java堆中的对象类似，比如一个字符串进入常量池中，但是没有任何字符串对象引用，且虚拟机中也没有其他地方引用，那么这时这个对象可以被清理出常量池。常量池中的其他类、方法也类似。
+
+判断一个常量是否废弃很简单，但是判定一个类型是否属于不在被使用的类，这个条件就很苛刻，需要满足三个条件：
+
+- 该类的所有的实例都已经被回收，也就是堆中不存在该类及任何派生子类的实例
+- 加载该类的类加载器已经被回收（这个条件除非是经过精心设计的可替换类加载器的场景，如OSGi、JSP的重加载等，否则通常是很难达成的）
+- 该队对应的java.lang.Class对象没有在任何地方被引用，无法在任何地方通过反射访问该类的方法。
+
+> Java虚拟机被允许对满足上述三个条件的无用类进行回收，这里说的仅仅是“被允许”，而并不是和对象一样，没有引用了就必然会回收。关于是否要对类型进行回收，HotSpot虚拟机提供了`-Xnoclassgc`参数进行控制，还可以使用`-verbose:class`以及`-XX: +TraceClass-Loading`、`-XX: +TraceClassUnLoading`查看类加载和卸载信息，其中`-verbose:class`和`-XX:+TraceClassLoading`可以在Product版的虚拟机中使用，`-XX:+TraceClassUnLoading`参数需要FastDebug版的虚拟机支持。 
+>
+> 在大量使用反射、动态代理、CGLib等字节码框架，动态生成JSP以及OSGi这类频繁自定义类加载器的场景中，通常都需要Java虚拟机具备类型卸载的能力，以保证不会对方法区造成过大的内存压力。
+
+## 2.2 垃圾收集算法
+
+### 2.2.1 分代收集算法
+
+
+
+### 2.2.2 标记清除算法
+
+### 2.2.3 标记复制算法
+
+### 2.2.4 标记整理算法
+
+
+
