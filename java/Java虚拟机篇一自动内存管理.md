@@ -495,7 +495,7 @@ public class DirectOOM {
 
 ![image-20220804093047300](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220804093047300.png)
 
-我在实验深入理解Java虚拟机一书中的这个例子时加上了-XX:+HeapDumpOnOutOfMemoryError来打印dump日志，但是却发现并没有打印出日志来，于是我加了计数器发现计数器刷了很多轮如下图（一直在刷，这是截取的一部分）：
+我在实验深入理解Java虚拟机一书中的这个例子时加上了-XX:+HeapDumpOnOutOfMemoryError来打印dump日志，但是却发现并没有打印出日志来（这里猜测是将操作系统内存打满，无法在打印dump日志），于是我加了计数器发现计数器刷了很多轮如下图（一直在刷，这是截取的一部分）：
 
 ![image-20220804095744268](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220804095744268.png)
 
