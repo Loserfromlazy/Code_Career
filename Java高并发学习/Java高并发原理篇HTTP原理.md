@@ -12,7 +12,13 @@
 
 我们先来看10w级别的Web应用架构：
 
+![image-20220805105906938](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220805105906938.png)
 
+
+
+百万级别的Web应用架构：
+
+![image-20220805110518046](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220805110518046.png)
 
 1.2 HTTP应用层协议
 
