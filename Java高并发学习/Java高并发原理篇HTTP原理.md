@@ -283,9 +283,81 @@ HTTP1.1之前，由于无状态等特点，每次请求都需要通过TCP三次�
 | HTTP/1.1 | 1997     | 持久连接（长连接）、节约带宽、HOST域、管道机制、分块传输协议 | 2015年前广泛使用 |
 | HTTP/2.0 | 2015     | 多路复用、服务器推送、头信息压缩、二进制协议等等             | 逐渐覆盖市场     |
 
+### HTTP 1.0
+
+HTTP一共有三个版本的演进，第一个版本为0.9但仅支持GET请求，且不支持协议头，因此也支持纯文本。
+
+第二个版本是HTTP1.0。增加了以下特性：
+
+1. 请求和响应头
+2. 响应对象以一个响应状态行开始
+3. 响应对象不只限于超文本
+4. 支持GET、HEAD、POST
+5. 支持长连接（以扩展的方式支持）、缓存及身份认证
+6. 请求行必须在尾部添加协议版本，且必须包含头消息
+
+HTTP 1.0版本使用Content-Type字段来表示客户端请求服务端的数据是什么格式，服务端使用Content-Type来表示具体的响应体中的媒体类型信息，比如`Content-Type: text/html`。媒体类型（MediaType），全称为互联网媒体类型（Internet Media Type），也叫做MIME（多用途互联网邮件扩展）类型。具体的常用类型请自行查阅相关资料。MIME（多用途互联网邮件扩展）类型，每个值包括一级类型和二级类型，之间用斜杠分隔。除了预定义的类型，厂商也可以自定义类型：`application/vnd.debian.binary-package`。MIME还可以在尾部使用分号，添加参数，比如：`Content-Type: text/html;charset=utf-8`
+
+HTTP1.0工作方式是每次发送一个请求就需要一个TCP连接，当服务器响应后就会关闭这次连接，下一次请求再次建立TCP连接，这点和HTTP0.9相同。但是这样传输性能比较差为了解决这个问题，有些浏览器在请求时，对HTTP 1.0版本进行了扩展，增加了一个非标准的Connection头部字段，如果要对传输层的HTTP连接进行复用，Connection头部的值如下：`Connection: keep-alive`这个头部字段要求服务器不要关闭TCP连接，以便其他HTTP请求复用，同样服务器需要回应这个字段`Connection: keep-alive`如果连接的两端都有“Connection: keep-alive”头部，则一个可以复用的TCP连接就建立了，直到客户端或服务器主动关闭连接。但是，Connection不是标准字段，不同服务端实现的行为可能不一致，因此并不是提高传输性能的最终解决办法。
+
+### HTTP 1.1
+
+Http1.1版本引入了很多关键技术，主要包括：持久连接、管道机制、分块传输编码、字节范围（Range）请求等等。
+
+1.1版本的最大变化就是引入了持久连接（长连接），即下层的TCP连接默认不关闭，可以被多个请求复用，而且报文不用声明Connection: keep-alive头部值。在连接建立后，客户端和服务器端都可以进行通信检测，如果发现对方在一段时间没有活动，就可以主动关闭TCP连接。不过，相对规范的做法是，客户端在最后一个请求时，发送带Connection:close请求头的HTTP报文。对于同一个域名（带端口），大多数浏览器允许同时建立6个持久连接，这些持久连接在降低了传输延迟的同时，也提高了带宽的利用率。
+
+HTTP 1.1版本加入了管道机制，在同一个TCP连接里，允许多个请求同时发送，增加了并发性，进一步改善了HTTP协议的效率；举例来说，客户端需要请求两个资源。以前的做法是，在同一个TCP连接里面，先发送A请求，然后等待服务器做出回应，收到后再发出B请求。管道机制则是允许浏览器同时发出A请求和B请求，但是服务器还是按照顺序，先回应A请求，完成后再回应B请求。
+
 
 
 ## 1.4 基于Netty实现简单的Web服务器
+
+Netty天生是异步事件驱动的架构，在性能和可靠性上都十分优异，非常适合作为WEB服务器使用，相比于传统的Tomcat的Web容器，基于Netty的Web服务器更小巧灵活且定制性更强。我们这里基于Netty实现的Web服务器非常简单就是将HTTP请求的请求头，请求体等内容回显出来。
+
+此简单web服务器的Netty流水线如下图：
+
+![image-20220811124935470](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220811124935470.png)
+
+### 1.4.1 Netty处理HTTP请求
+
+通常HTTP协议通信过程中，客户端和服务器的交互过程如下：
+
+1. 客户端向服务器端发送HTTP请求
+2. 服务端对HTTP请求进行解析
+3. 服务端发送HTTP响应报文
+4. 客户端解析HTTP响应的应用层协议内容
+
+在Netty中已经内置了这些编解码的处理器，大致如下：
+
+- HttpRequestDecoder：HTTP请求编码器，这是一个入站处理器，间接的继承了ByteToMessageDecoder，将ByteBuf缓冲区解码成HttpRequest和HttpContent实例。并且解码时会处理好分块类型和固定长度类型的HTTP请求报文。
+
+- HttpResponseEncoder：响应编码器，是一个出站处理器，把代表响应HttpResponse和HttpContent内容实例编码成ByteBuf。
+
+- HttpServerCodec：编解码器。
+
+- HttpObjectAggregator：HttpObject实例聚合器，这是入站处理器，通过此类，可以把HttpMessage头部实例和一个或多个HttpContent内容实例最终聚合成FullHttpRequest。
+
+  ![image-20220811140542612](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220811140542612.png)
+
+  > HttpRequest、HttpContent、FullHttpRequest等都是HttpObject的子类。
+
+  在请求请Request Body处理过程中，会涉及到Content-Length和Trunked两种类型的请求体，但是其处理差异被HttpRequestDecoder协议解码器所屏蔽，它们的最终出站对象是一致的，当HttpObjectAggregator发现有入站包为LastHttpContent实例入站时，代表HTTP请求数据协议解析完成，此时，会将所收到的全部HttpObject实例，封装一个FullHttpRequest整体请求实例。通过聚合器HttpObjectAggregator处理之后，输出的都是FullHttpRequest实例。然后可以通过该FullHttpRequest实例获取到所有与HTTP请求的所有内容。
+
+- QueryStringDecoder：把HTTP请求URI分成Path路径和Key-Value参数键值对，同一次请求该解码器仅能使用一次。
+
+1. 
+
+### 1.4.2 Netty的报文解码
+
+通过内置处理器HttpRequestDecoder和HttpObjectAggregator对HTTP请求报文进行解码后，会将HTTP请求封装成一个FullHttpRequest实例，然后发送给下一站。
+
+
+
+### 1.4.3 Netty的HTTP响应
+
+### 1.4.4 回显业务处理器
+
+### 1.4.5 测试
 
 # 二、高并发HTTP的核心原理
 

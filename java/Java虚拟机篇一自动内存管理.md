@@ -940,29 +940,72 @@ Wilson在1994年证明了当且仅当以下两个条件满足时，会产生对�
 
 ## 2.4 经典垃圾收集器
 
+> 本小节2.4节的图片均来自深入理解Java虚拟机第三版
+
 ### 2.4.1 Serial收集器
 
 Serial收集器是最基础历史最悠久的收集器，在JDK1.3.1之前是HotSpot新生代收集器的唯一选择。这个收集器在工作时只使用一个处理器或一个线程完成垃圾收集工作，且在进行垃圾收集时必须暂停其他所有的工作线程，直到收集结束。由于Stop the World的恶劣体验，HotSpot虚拟机开发团队一直在为消除戳降低用户线程的停顿进行着努力。Serial/Serial Old收集器运行如下图：
 
+![image-20220811084803410](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220811084803410.png)
+
+虽然Serialy有很多缺点，但是其也有优点，那就是简单高效，在客户端模式下的虚拟机是一个很好的选择。
+
+使用方式：`-XX:+UseSerialGC `
+
+### 2.4.2 ParNew收集器
+
+ParNew收集器实质上是Serial收集器的多线程并行版本，除了同时使用多条线程进行垃圾收集之外，其余的行为包括Serial收集器可用的所有控制参数 、 收集算法、 Stop The World、 对象分配规则、 回收策略等都与Serial收集器完全一致，在实现上这两种收集器也共用了相当多的代码。工作过程如下：
+
+![image-20220811085350191](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220811085350191.png)
+
+ParNew收集器除了支持多线程并行收集之外，其他与Serial收集器相比并没有太多创新之处，但它却是不少运行在服务端模式下的HotSpot虚拟机，尤其是JDK 7之前的遗留系统中首选的新生代收集器，其中有一个与功能、性能无关但其实很重要的原因是：除了Serial收集器外，目前只有它能与CMS收集器配合工作。也可以理解为，ParNew合并入CMS，成为它专门处理新生代的组成部分。ParNew收集器在单CPU服务器上的垃圾收集效率绝对不会比Serial收集器高；但是在多CPU服务器上，效果会明显比Serial好。
+
+> 并行与并发：并行（Parallel）指多条垃圾收集线程之间的关系，说明同一时间有多条这样的线程在协同工作，通常默认此时用户线程处于等待状态。并发（Concurrent）是指同一时间垃圾收集线程与用户线程都在运行，但是程序的吞吐量会受到一定影响。
+
+使用方式：`-XX:+UseParNewGC`
+
+设置线程数: `XX:ParllGCThreads`
+
+### 2.4.3 Parallel Scavenge收集器
+
+这也是一个新生代收集器，也是基于标记复制算法实现的收集器，同时也是多线程并行收集器。它的特点是它的关注点与其他收集器不同，CMS等收集器是尽可能短的收集用户线程的停顿时间，而Parallel Scavenge收集器的目标则是达到一个可控制的吞吐量。吞吐量就是用户代码运行时间比上处理器总消耗时间（用户代码运行时间+垃圾运行收集时间）的比值。
+
+Parallel Scavenge收集器提供了两个参数用于精确控制吞吐量：
+
+- 控制最大垃圾收集停顿时间的-XX:MaxGCPauseMillis参数。此参数尽力保证内存回收时间不超过用户设定值。当然垃圾收集停顿时间以牺牲新生代大小和吞吐量的代价换取的。
+- 直接设置吞吐量大小的-XX:GCTimeRatio参数。 此参数在(0-100)，开区间且为整数，如果设置为9%，那么最大垃圾收集时间就占总时间的10%（1/(1+9)），默认值为99。
+
+还提供了一个垃圾收集的自适应的调节策略数-XX: +UseAdaptiveSizePolicy这是一个开关参数，当这个参数被激活之后，就不需要人工指定新生代的大小、Eden与Survivor区的比例、晋升老年代对象大小等细节参数了，虚拟机会根据当前系统的运行情况收集性能监控信息，动态调整这些参数以提供最合适的停顿时间或者最大的吞吐量。
+
+> Parallel Scavenge收集器架构中本身有PS MarkSweep收集器来进行老年代收集，并非直接调用Serial Old收集器，但是这个PS MarkSweep收集器与Serial Old的实现几乎是一样的
+
+### 2.4.4 Serial Old收集器
+
+Serial Old是Serial收集器的老年代版本，它同样是一个单线程收集器，使用标记-整理算法。这个收集器的主要意义也是供客户端模式下的HotSpot虚拟机使用。如果在服务端模式下，它也可能有两种用途：一种是在JDK 5以及之前的版本中与Parallel Scavenge收集器搭配使用，另外一种就是作为CMS收集器发生失败时的后备预案，在并发收集发生Concurrent Mode Failure时使用。Serial Old收集器的工作过程如图所示：
+
+![image-20220811084803410](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220811084803410.png)
+
+### 2.4.5 Parallel Old收集器
+
+Parallel Old是Parallel Scavenge收集器的老年代版本，支持多线程并发收集，基于标记-整理算法实现。这个收集器是直到JDK 6时才开始提供的，在此之前，新生代的Parallel Scavenge收集器一直处于相当尴尬的状态，原因是如果新生代选择了Parallel Scavenge收集器，老年代除了Serial Old（PS MarkSweep）收集器以外别无选择，其他表现良好的老年代收集器，如CMS无法与它配合工作。同样，由于单线程的老年代收集中无法充分利用服务器多处理器的并行处理能力，在老年代内存空间很大而且硬件规格比较高级的运行环境中，这种组合的总吞吐量甚至不一定比ParNew加CMS的组合来得优秀。直到Parallel Old收集器出现后，“吞吐量优先”收集器终于有了比较名副其实的搭配组合，在注重吞吐量或者处理器资源较为稀缺的场合，都可以优先考虑Parallel Scavenge加Parallel Old收集器这个组合。Parallel Old收集器的工作过程如图所示：
+
+![image-20220811093118832](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220811093118832.png)
+
+### 2.4.6 CMS收集器
+
+CMS（Concurrent Mark Sweep）收集器是一种以获取最短回收停顿时间为目标的收集器。目前很大一部分的Java应用集中在互联网网站或者基于浏览器的B/S系统的服务端上，这类应用通常都会较为关注服务的响应速度，希望系统停顿时间尽可能短，以给用户带来良好的交互体验。
+
+这个垃圾收集器是基于标记清除算法实现的。
+
+### 2.4.7 Garbage First收集器
 
 
-2.4.2 ParNew收集器
-
-2.4.3 Parallel Scavenge收集器
-
-2.4.4 Serial Old收集器
-
-2.4.5 Parallel Old收集器
-
-2.4.6 CMS收集器
-
-2.4.7 Garbage First收集器
 
 ## 2.5 低延迟垃圾收集器
 
-2.5.1 Shenandoah收集器
+### 2.5.1 Shenandoah收集器
 
-2.5.2 ZGC收集器
+### 2.5.2 ZGC收集器
 
 
 
