@@ -382,13 +382,20 @@ Netty天生是异步事件驱动的架构，在性能和可靠性上都十分优
 
 - QueryStringDecoder：把HTTP请求URI分成Path路径和Key-Value参数键值对，同一次请求该解码器仅能使用一次。
 
-
+综上，整体来说，如果相对HTTP请求报文进行读取，只要在流水线上配置好两个内置处理器HttpRequestDecoder和HttpObjectAggregator即可。
 
 ### 1.4.2 Netty的报文解码
 
 通过内置处理器HttpRequestDecoder和HttpObjectAggregator对HTTP请求报文进行解码后，会将HTTP请求封装成一个FullHttpRequest实例，然后发送给下一站。
 
+Netty内置的HTTP请求报文对应的类主要有以下几个：
 
+1. FullHttpRequest：包含整个HTP请求的信息，包含对HttpRequest首部和HttpContent请求体的组合
+2. HttpRequest：请求首部，主要包含对HTTP请求行和请求头Header的封装
+3. HttpContent：是对Http请求体的封装，本质上就是一个ByteBuf缓冲区实例。如果ByteBuf长度固定而请求体又太长的话那么就会产生多个HttpContent对象，解码时最后一个返回LastHttpContent，表示对请求体的解码已经完成。
+4. HttpMethod：对HTTP请求方法的封装
+5. HttpVersion：对HTTP版本的封装，该类定义了HTTP/1.0和HTTP/1.1两个协议版本
+6. HttpHeaders：包含对HTTP报文请求头Header的封装和相关操作。
 
 ### 1.4.3 Netty的HTTP响应
 
