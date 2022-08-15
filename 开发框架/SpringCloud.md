@@ -2997,9 +2997,71 @@ public class UserController {
 			 validateID      validateID
 ~~~
 
-如上图：有两条调用链路都调用了validateID这一个资源，在Sentinel中允许只根据调用入口的统计信息对资源限流。比如链路模式下设置资源为register1，这样的话表示只有从register1的调用才会记录到validateID的限流统计中，而不关心register2到来的调用，如下图： 
+如上图：有两条调用链路都调用了validateID这一个资源，在Sentinel中允许只根据调用入口的统计信息对资源限流。比如链路模式下设置资源为register1，这样的话表示只有从register1的调用才会记录到validateID的限流统计中，而不关心register2到来的调用。
 
-![image-20211227094536433](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211227094536433.png)
+> 注意：测试链路模式时需要将web-context-unify设为false，这样会关闭context，就可以让controller里的方法单独成为一个链路；不关闭context的话，controller里的方法都会默认进去sentinel默认的根链路里，这样就只有一条链路，无法流控链路模式。配置文件如下
+>
+> ```yaml
+> sentinel:
+>   transport:
+>     dashboard: localhost:9090     # sentinel注册地址
+>     port: 8721
+>   #关闭context，就可以让controller里的方法单独成为一个链路；
+>   #不关闭context的话，controller里的方法都会默认进去sentinel默认的根链路里，这样就只有一条链路，无法流控链路模式
+>   web-context-unify: false
+> ```
+>
+> 此配置效果如下：
+>
+> 开启后效果如下：
+>
+> ![image-20220815152156773](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220815152156773.png)
+>
+> 关闭后效果如下：
+>
+> ![image-20220815152255906](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220815152255906.png)
+
+我们编写两个接口，和一个公共链路，首先在UserController中编写两个接口，代码如下:
+
+```java
+@Autowired
+UserService userService;
+
+@GetMapping("/register1")
+public String register1(){
+    System.out.println(new Date()+"注册成功1");
+    userService.validateID();
+    return "注册成功1";
+}
+
+@GetMapping("/register2")
+public String register2(){
+    System.out.println(new Date()+"注册成功2");
+    userService.validateID();
+    return "注册成功2";
+}
+```
+
+然后在UserService中编写一个公共链路（注意：Sentinel默认只标记Controller中的方法为资源，如果要标记其它方法，需要利用**@SentinelResource**注解）：
+
+```java
+@Service
+public class UserService {
+    @SentinelResource("valid")
+    public String validateID(){
+        System.out.println("验证身份成功");
+        return "验证身份成功";
+    }
+}
+```
+
+然后我们编写链路限流：
+
+![image-20220815152824936](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220815152824936.png)
+
+然后我们反复请求`/user/register1`和`/user/register2`两个接口，之后我们可以看到register2接口不会限流，而register1接口会被限流，如下图：
+
+![image-20220815152957596](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220815152957596.png)
 
 #### 流控效果应用：快速失败、Warm UP和排队等待
 
@@ -3051,7 +3113,7 @@ Sentinel中对降级有三种策略：
 
   选择以慢调用比例作为阈值，需要设置允许的慢调用 RT（即最大的响应时间），请求的响应时间大于该值则统计为慢调用。当单位统计时长（`statIntervalMs`）内请求数目大于设置的最小请求数目，并且慢调用的比例大于阈值，则接下来的熔断时长内请求会自动被熔断。经过熔断时长后熔断器会进入探测恢复状态（HALF-OPEN 状态），若接下来的一个请求响应时间小于设置的慢调用 RT 则结束熔断，若大于设置的慢调用 RT 则会再次被熔断。
 
-  > Sentineld额默认的RT上限是4900ms超出时间都会算作4900ms，可以配置启动项 `- Dcsp.sentinel.statistic.,ax.rt=xxx`
+  > Sentineld额默认的RT上限是4900ms超出时间都会算作4900ms，可以配置启动项 `- Dcsp.sentinel.statistic.max.rt=xxx`
 
   下面我们进行实验：首先在findOpenStatusByUid方法中，加入休眠一秒：
 
@@ -3169,6 +3231,10 @@ public class SentinelFallback {
 然后写一个1/0的异常，再次测试：
 
 ![image-20211227162127224](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211227162127224.png)
+
+> 如果想在FeignClient指定fallback，需要将hystrix改成Sentinel
+>
+> ![image-20220815154348777](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220815154348777.png)
 
 ### 5.2.7 基于nacos的Sentinel规则持久化
 
@@ -4771,6 +4837,18 @@ public class DegradeController {
     }
 }
 ```
+
+## 5.4 Nacos源码 1.3.2版本
+
+### 5.4.1 工程搭建
+
+Github上下载源码，解压后导入IDEA，IDEA会自动下载Maven的相关依赖（下载过程可能会很久，视网络情况而定），下载完成后，我们需要对源码工程进行编译，如下图：
+
+![image-20220815144215873](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220815144215873.png)
+
+编译完成后各模块如下：
+
+![image-20220815154726247](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220815154726247.png)
 
 
 
