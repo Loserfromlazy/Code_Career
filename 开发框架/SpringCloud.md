@@ -4850,5 +4850,14 @@ Github上下载源码，解压后导入IDEA，IDEA会自动下载Maven的相关�
 
 ![image-20220815154726247](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220815154726247.png)
 
-
+- address模块：主要查询nacos集群中节点的个数以及IP的列表
+- api模块：主要给客户端调用的api接口的抽象
+- common模块：主要是通用的工具包和字符串常量的定义
+- client模块：主要是对依赖api模块和common模块接口的实现，给nacos客户端使用
+- cmdb模块：操作的数据存储在内存中，该模块提供一个查询数据标签的接口
+- config模块：主要是服务配置的管理，即配置中心，提供api给客户端拉取配置信息，以及提供更新配置的api，客户端通过长轮询更新配置信息
+- naming模块：作为服务注册中心的实现模块，具有服务注册和发现的功能。
+- console模块：实现控制台的功能，具有权限校验，服务状态，健康检查等功能
+- core模块：实现Spring的PropertySource的后置处理器，用于属性加载、初始化、监听器相关操作
+- distribution模块：主要是打包nacos-server的操作，使用maven-assembly-plugin进行自定义打包。
 
