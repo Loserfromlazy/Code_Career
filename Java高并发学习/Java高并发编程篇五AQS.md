@@ -134,11 +134,11 @@ static final class Node {
      * waitStatus value to indicate the next acquireShared should
      * unconditionally propagate
      */
-    static final int CONDITION = -3;
+    static final int PROPAGATE = -3;
 
     /**
      *（文档略）
-     * 节点状态，值为：SIGNAL、CANCELLED、CONDITION、CONDITION、0
+     * 节点状态，值为：SIGNAL、CANCELLED、CONDITION、PROPAGATE、0
      * 普通节点初始值为0，条件等待节点初始值为CONDITION（-2）
      */
     volatile int waitStatus;
