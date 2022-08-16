@@ -3492,7 +3492,7 @@ public class OrderController {
 
 我们对上面的代码进行解释，部分解释来自源码，注意实际开发不会这么写，目前是为了分析源码：
 
-1. Entry，这时Sentinel的重点，对于`SphU#entry`方法,作用是记录统计信息并对给定资源进行规则检查，它有很多重载，我们这里介绍上面代码中的两个参数
+1. Entry，这是Sentinel的重点，对于`SphU#entry`方法,作用是记录统计信息并对给定资源进行规则检查，它有很多重载，我们这里介绍上面代码中的两个参数
 
    - 第一个参数是标识资源，通常就是我们的接口标识，对于数据统计、规则控制等，我们一般都是在这个粒度上进行的，**根据这个字符串来唯一标识**，我们跟源码进入会发现，它最后会被包装成ResourceWrapper 实例，ResourceWrapper 的hashCode和equals源码如下，可以证实**资源是根据这个字符串来唯一标识**
 
@@ -4861,3 +4861,71 @@ Github上下载源码，解压后导入IDEA，IDEA会自动下载Maven的相关�
 - core模块：实现Spring的PropertySource的后置处理器，用于属性加载、初始化、监听器相关操作
 - distribution模块：主要是打包nacos-server的操作，使用maven-assembly-plugin进行自定义打包。
 
+工程编译完了之后我们可以在console模块启动主启动类，如下图：
+
+![image-20220816102508757](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220816102508757.png)
+
+当然nacos默认是集群启动的，所以需要在启动类上配置上单机启动参数`-Dnacos.standalone=true`，IDEA在VM参数中配置即可，不然启动会报错。然后在浏览器输入`localhost:8848/nacos`登录即可。
+
+### 5.4.2 服务注册与发现
+
+我们在使用服务发现客户端时都会使用`@EnableDiscoveryClient`注解，那我们就由此入手，来了解Nacos的服务注册与发现。我们查看源码：
+
+```java
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+@Documented
+@Inherited
+@Import(EnableDiscoveryClientImportSelector.class)
+public @interface EnableDiscoveryClient {
+    //
+   boolean autoRegister() default true;
+}
+```
+
+我们发现此注解通过注入EnableDiscoveryClientImportSelector来实现功能，我们查看此类源码，此类继承了ImportSelector，所以我们应该重点查看selectImports方法，源码如下：
+
+> @Import是spring框架的底层注解，作用是给容器导入某个组件类
+>
+> 而且实现ImportSelector接口的类，需要返回String[]，通过@Import()注解，将数组中的对象名将作为对象生成为bean
+
+```java
+@Order(Ordered.LOWEST_PRECEDENCE - 100)
+public class EnableDiscoveryClientImportSelector
+      extends SpringFactoryImportSelector<EnableDiscoveryClient> {
+
+   @Override
+   public String[] selectImports(AnnotationMetadata metadata) {
+      String[] imports = super.selectImports(metadata);
+		
+       //获取z
+      AnnotationAttributes attributes = AnnotationAttributes.fromMap(
+            metadata.getAnnotationAttributes(getAnnotationClass().getName(), true));
+
+      boolean autoRegister = attributes.getBoolean("autoRegister");
+
+      if (autoRegister) {
+         List<String> importsList = new ArrayList<>(Arrays.asList(imports));
+         importsList.add(
+               "org.springframework.cloud.client.serviceregistry.AutoServiceRegistrationConfiguration");
+         imports = importsList.toArray(new String[0]);
+      }
+      else {
+         Environment env = getEnvironment();
+         if (ConfigurableEnvironment.class.isInstance(env)) {
+            ConfigurableEnvironment configEnv = (ConfigurableEnvironment) env;
+            LinkedHashMap<String, Object> map = new LinkedHashMap<>();
+            map.put("spring.cloud.service-registry.auto-registration.enabled", false);
+            MapPropertySource propertySource = new MapPropertySource(
+                  "springCloudDiscoveryClient", map);
+            configEnv.getPropertySources().addLast(propertySource);
+         }
+
+      }
+
+      return imports;
+   }
+    
+    //略。。。
+}
+```
