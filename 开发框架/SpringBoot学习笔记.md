@@ -253,51 +253,21 @@ spring-boot-starter-web就是将web开发要使用的spring-web、spring-webmvc�
 
 ## 2.2 自动配置原理分析
 
+> 这里用的是2.7.2版本的springboot，不同版本的源码可能会有不同，但大致原理是相同的
+
 查看@SpringBootApplication注解的源码，源码如下：
 
 ~~~java
-//
-// Source code recreated from a .class file by IntelliJ IDEA
-// (powered by Fernflower decompiler)
-//
-@Target({ElementType.TYPE})
+@Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
-//一个注解等于三个注解功能
 @SpringBootConfiguration
 @EnableAutoConfiguration
-@ComponentScan(//组件扫描
-    excludeFilters = {@Filter(
-    type = FilterType.CUSTOM,
-    classes = {TypeExcludeFilter.class}
-), @Filter(
-    type = FilterType.CUSTOM,
-    classes = {AutoConfigurationExcludeFilter.class}
-)}
-)
+@ComponentScan(excludeFilters = { @Filter(type = FilterType.CUSTOM, classes = TypeExcludeFilter.class),
+		@Filter(type = FilterType.CUSTOM, classes = AutoConfigurationExcludeFilter.class) })
 public @interface SpringBootApplication {
-    @AliasFor(
-        annotation = EnableAutoConfiguration.class
-    )
-    Class<?>[] exclude() default {};
-
-    @AliasFor(
-        annotation = EnableAutoConfiguration.class
-    )
-    String[] excludeName() default {};
-
-    @AliasFor(
-        annotation = ComponentScan.class,
-        attribute = "basePackages"
-    )
-    String[] scanBasePackages() default {};
-
-    @AliasFor(
-        annotation = ComponentScan.class,
-        attribute = "basePackageClasses"
-    )
-    Class<?>[] scanBasePackageClasses() default {};
+    //略。。。
 }
 ~~~
 
@@ -313,8 +283,8 @@ public @interface SpringBootApplication {
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
-@AutoConfigurationPackage
-@Import({AutoConfigurationImportSelector.class})
+@AutoConfigurationPackage//自动配置包：将@SpringBootApplication注解所在的类的包及其子包的组件添加到容器中
+@Import({AutoConfigurationImportSelector.class})//上一个注解将所有组件导入到了容器中，这个注解就是将需要自动装配的类以全类名的方式返回
 public @interface EnableAutoConfiguration {
     String ENABLED_OVERRIDE_PROPERTY = "spring.boot.enableautoconfiguration";
 
@@ -324,120 +294,162 @@ public @interface EnableAutoConfiguration {
 }
 ~~~
 
-其中@Import({AutoConfigurationImportSelector.class})导入了AutoConfigurationImportSelector类，点击查看AutoConfigurationImportSelector的源码：部分源码如下：
+### 2.2.1 @AutoConfigurationPackage
+
+我们先来看`@AutoConfigurationPackage`注解的源码：
+
+```java
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+@Documented
+@Inherited
+//@Import是spring框架的底层注解，作用是给容器导入某个组件类
+@Import(AutoConfigurationPackages.Registrar.class)
+public @interface AutoConfigurationPackage {
+   String[] basePackages() default {};
+
+   Class<?>[] basePackageClasses() default {};
+
+}
+```
+
+我们可以看到此注解的功能是由@Import注解导入了AutoConfigurationPackages.Registrar类实现的，我们跟进去看一下这个类：
+
+```java
+static class Registrar implements ImportBeanDefinitionRegistrar, DeterminableImports {
+   @Override
+   public void registerBeanDefinitions(AnnotationMetadata metadata, BeanDefinitionRegistry registry) {
+       //metadata：注解标注的元数据信息，可以debug自行查看其内容
+       //获取包名，传入register方法，如下图，获取的是@SpringBootApplication注解所在的启动类的包名
+      register(registry, new PackageImports(metadata).getPackageNames().toArray(new String[0]));
+   }
+
+   @Override
+   public Set<Object> determineImports(AnnotationMetadata metadata) {
+      return Collections.singleton(new PackageImports(metadata));
+   }
+}
+```
+
+![image-20220816135313303](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220816135313303.png)
+
+```java
+//将包及子包下的组件扫描到容器中
+public static void register(BeanDefinitionRegistry registry, String... packageNames) {
+   if (registry.containsBeanDefinition(BEAN)) {
+      BeanDefinition beanDefinition = registry.getBeanDefinition(BEAN);
+      ConstructorArgumentValues constructorArguments = beanDefinition.getConstructorArgumentValues();
+      constructorArguments.addIndexedArgumentValue(0, addBasePackages(constructorArguments, packageNames));
+   }
+   else {
+      GenericBeanDefinition beanDefinition = new GenericBeanDefinition();
+      beanDefinition.setBeanClass(BasePackages.class);
+      beanDefinition.getConstructorArgumentValues().addIndexedArgumentValue(0, packageNames);
+      beanDefinition.setRole(BeanDefinition.ROLE_INFRASTRUCTURE);
+      registry.registerBeanDefinition(BEAN, beanDefinition);
+   }
+}
+```
+
+也就是说这个注解`@AutoConfigurationPackage`的作用是将主配置类（@SpringBootApplication标注的类）所在包以及子包里面的所有组件扫描并加载到spring的容器中，这也就是为什么我们在利用springboot进行开发的时候，无论是Controller还是Service的路径都是与主配置类同级或者次级的原因
+
+### 2.2.2 @EnableAutoConfiguration
+
+再来看`@EnableAutoConfiguration`的源码中，@Import({AutoConfigurationImportSelector.class})导入了AutoConfigurationImportSelector类。
+
+> 我们需要先了解了解@Import注解，@Import是spring框架的底层注解，作用是给容器导入某个组件类
+>
+> 而且实现ImportSelector接口的类，需要返回String[]，通过@Import()注解，将数组中的对象名将作为对象生成为bean
+
+查看AutoConfigurationImportSelector的源码，主要关注selectImports方法（原因见上面），主要源码如下：
 
 ~~~java
+public class AutoConfigurationImportSelector implements DeferredImportSelector, BeanClassLoaderAware,
+        ResourceLoaderAware, BeanFactoryAware, EnvironmentAware, Ordered {
 
-public String[] selectImports(AnnotationMetadata annotationMetadata) {
-    if (!this.isEnabled(annotationMetadata)) {
-        return NO_IMPORTS;
-    } else {
-        AutoConfigurationMetadata autoConfigurationMetadata = AutoConfigurationMetadataLoader.loadMetadata(this.beanClassLoader);
-        AnnotationAttributes attributes = this.getAttributes(annotationMetadata);
-        //获取配置
-        List<String> configurations = this.getCandidateConfigurations(annotationMetadata, attributes);
-        configurations = this.removeDuplicates(configurations);
-        Set<String> exclusions = this.getExclusions(annotationMetadata, attributes);
-        this.checkExcludedClasses(configurations, exclusions);
-        configurations.removeAll(exclusions);
-        configurations = this.filter(configurations, autoConfigurationMetadata);
-        this.fireAutoConfigurationImportEvents(configurations, exclusions);
-        return StringUtils.toStringArray(configurations);
+    private static final String[] NO_IMPORTS = {};
+
+    @Override
+    public String[] selectImports(AnnotationMetadata annotationMetadata) {
+        //检测是否开启了SpringBoot自动装配，默认都是开启的
+        if (!isEnabled(annotationMetadata)) {
+            //没开启就返回空字符串数组
+            return NO_IMPORTS;
+        }
+        AutoConfigurationEntry autoConfigurationEntry = getAutoConfigurationEntry(annotationMetadata);
+        return StringUtils.toStringArray(autoConfigurationEntry.getConfigurations());
     }
+
+    protected AutoConfigurationEntry getAutoConfigurationEntry(AnnotationMetadata annotationMetadata) {
+        if (!isEnabled(annotationMetadata)) {
+            return EMPTY_ENTRY;
+        }
+        //获取注解的属性信息
+        AnnotationAttributes attributes = getAttributes(annotationMetadata);
+        //获取候选配置信息加载的是，当前项目的classpath目录下的、所有的 spring.factories 文件中的key为 org.springframework.boot.autoconfigure.EnableAutoConfiguration的信息
+        List<String> configurations = getCandidateConfigurations(annotationMetadata, attributes);
+        configurations = removeDuplicates(configurations);
+        Set<String> exclusions = getExclusions(annotationMetadata, attributes);
+        checkExcludedClasses(configurations, exclusions);
+        configurations.removeAll(exclusions);
+        configurations = getConfigurationClassFilter().filter(configurations);
+        fireAutoConfigurationImportEvents(configurations, exclusions);
+        return new AutoConfigurationEntry(configurations, exclusions);
+    }
+
 }
-protected List<String> getCandidateConfigurations(AnnotationMetadata metadata, AnnotationAttributes attributes) {
-    List<String> configurations = SpringFactoriesLoader.loadFactoryNames(this.getSpringFactoriesLoaderFactoryClass(), this.getBeanClassLoader());
-    Assert.notEmpty(configurations, "No auto configuration classes found in META-INF/spring.factories. If you are using a custom packaging, make sure that file is correct.");
-    return configurations;
-}
 ~~~
 
-其中SpringFactoriesLoader.loadFactoryNames方法的作用就是从META-INF/spring.factories文件中读取指定类对应的类名称列表。
+我们让断点停到`getCandidateConfigurations`，如下图：
 
-spring.factories有关源码：
+![image-20220816141820905](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220816141820905.png)
 
-~~~
-....
-org.springframework.boot.autoconfigure.web.servlet.DispatcherServletAutoConfiguration,\
-org.springframework.boot.autoconfigure.web.servlet.ServletWebServerFactoryAutoConfiguration,\
-org.springframework.boot.autoconfigure.web.servlet.error.ErrorMvcAutoConfiguration,\
-org.springframework.boot.autoconfigure.web.servlet.HttpEncodingAutoConfiguration,\
-org.springframework.boot.autoconfigure.web.servlet.MultipartAutoConfiguration,\
-org.springframework.boot.autoconfigure.web.servlet.WebMvcAutoConfiguration,\
-org.springframework.boot.autoconfigure.websocket.reactive.WebSocketReactiveAutoConfiguration,\
-org.springframework.boot.autoconfigure.websocket.servlet.WebSocketServletAutoConfiguration,\
-org.springframework.boot.autoconfigure.websocket.servlet.WebSocketMessagingAutoConfiguration,\
-.....
-~~~
+我们可以看到getCandidateConfigurations方法加载了很多的配置类全路径，他们是从哪来的呢？我们进入此方法可以看到（见上图）这些配置配来自META-INF/spring.factories文件中。
 
-上面配置文件存在大量的以Conﬁguration为结尾的类名称，这些类就是存有自动配置信息的类，而SpringApplication在获取这些类名后再加载。
+> 除了上面断言以外，其实一路跟代码也能找到此路径。
+>
+> ![image-20220816144331323](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220816144331323.png)
 
-我们以其中ServletWebServerFactoryAutoConfiguration为例，其部分源码如下：
+然后我们继续看此方法：
 
 ~~~java
-@Configuration
-@AutoConfigureOrder(-2147483648)
-@ConditionalOnClass({ServletRequest.class})
-@ConditionalOnWebApplication(
-    type = Type.SERVLET
-)
-@EnableConfigurationProperties({ServerProperties.class})
-@Import({ServletWebServerFactoryAutoConfiguration.BeanPostProcessorsRegistrar.class, EmbeddedTomcat.class, EmbeddedJetty.class, EmbeddedUndertow.class})
-public class ServletWebServerFactoryAutoConfiguration {
+protected AutoConfigurationEntry getAutoConfigurationEntry(AnnotationMetadata annotationMetadata) {
+        if (!isEnabled(annotationMetadata)) {
+            return EMPTY_ENTRY;
+        }
+        //获取注解的属性信息
+        AnnotationAttributes attributes = getAttributes(annotationMetadata);
+        //获取候选配置信息加载的是，当前项目的classpath目录下的、所有的 spring.factories 文件中的key为 org.springframework.boot.autoconfigure.EnableAutoConfiguration的信息
+        List<String> configurations = getCandidateConfigurations(annotationMetadata, attributes);
+        //去除重复的配置这里用了LinkedHashSet进行去重，因为会加载多个spring.factories文件，有可能存在同名的配置
+        configurations = removeDuplicates(configurations);
+    	//获取配置的exclude信息,比如：
+    	//@SpringBootApplication(exclude = {DataSourceAutoConfiguration.class, DruidDataSourceAutoConfigure.class})
+        Set<String> exclusions = getExclusions(annotationMetadata, attributes);
+        checkExcludedClasses(configurations, exclusions);
+        configurations.removeAll(exclusions);
+    	//过滤掉不需要的配置类
+        configurations = getConfigurationClassFilter().filter(configurations);
+        fireAutoConfigurationImportEvents(configurations, exclusions);
+        return new AutoConfigurationEntry(configurations, exclusions);
+    }
 ~~~
 
-@EnableConﬁgurationProperties(ServerProperties.class) 代表加载ServerProperties服务器配置属性类
+此方法中剩下比较重要的就是过滤不需要的配置类，我们可以debug查看，当过滤完后会减少很多的配置类，如下图：
 
-ServerProperties源码：
+![image-20220816145327649](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220816145327649.png)
 
-~~~java
-@ConfigurationProperties(
-    prefix = "server",
-    ignoreUnknownFields = true
-)
-public class ServerProperties {
-    private Integer port;
-    private InetAddress address;
-    @NestedConfigurationProperty
-    private final ErrorProperties error = new ErrorProperties();
-    private Boolean useForwardHeaders;
-    private String serverHeader;
-    private int maxHttpHeaderSize = 0;
-    。。。。。。
-~~~
+我们可以跟进filter方法，会发现filter方法中会根据自动配置的元信息进行匹配过滤，这个元信息是在构造函数中创建的，我们一路向下跟最后会发新元信息是从`META-INF/spring-autoconfigure-metadata.properties`文件中拿到的，代码和流程如下图：
 
-preﬁx = "server" 表示SpringBoot配置文件中的前缀，SpringBoot会将配置文件中以server开始的属性映射到该类
-的字段中。
+![image-20220816150153202](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220816150153202.png)
 
-例如在spring-configuration-metadata.json文件中某段以server前缀加上属性server.port配置了默认值：
+我们看一下此文件，此文件的内容是由配置类全路径、配置类被加载的条件和条件值组成。我们以mongodb的实例来演示：
 
-~~~json
-{
-    "sourceType": "org.springframework.boot.autoconfigure.web.ServerProperties",
-    "defaultValue": 8080,
-    "name": "server.port",
-    "description": "Server HTTP port.",
-    "type": "java.lang.Integer"
-},
-~~~
+![image-20220816150724369](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220816150724369.png)
 
-以上为默认值，且可以覆盖，如果在yml文件中设置配置即可修改配置。
+因此过滤完后就没有此配置类了：
 
-在spring-boot-starter-parent的pom.xml中如下
-
-~~~xml
-<resource>
-    <filtering>true</filtering>
-    <directory>${basedir}/src/main/resources</directory>
-    <includes>
-        <include>**/application*.yml</include>
-        <include>**/application*.yaml</include>
-        <include>**/application*.properties</include>
-    </includes>
-</resource>
-~~~
-
-以上代表在resources中如果设置了配置文件即可覆盖默认配置。
+![image-20220816150816123](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220816150816123.png)
 
 # 三、SpringBoot的配置文件
 
@@ -521,7 +533,7 @@ student:
 
 ### 3.1.3 SpringBoot配置信息的查询
 
-[SpringBoot配置信息查询]: https://docs.spring.io/spring-boot/docs/2.0.1.RELEASE/reference/htmlsingle/#common-application-properties
+[SpringBoot配置信息查询](https://docs.spring.io/spring-boot/docs/2.0.1.RELEASE/reference/htmlsingle/#common-application-properties)
 
 可以通过修改application.properties或者application.yml来修改springboot的默认配置，例如：
 
