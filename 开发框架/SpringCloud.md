@@ -4840,6 +4840,8 @@ public class DegradeController {
 
 ## 5.4 Nacos源码 1.3.2版本
 
+> 我这里用的springcloud版本是Hoxton.RELEASE；spring-cloud-alibaba版本2.2.2
+
 ### 5.4.1 工程搭建
 
 Github上下载源码，解压后导入IDEA，IDEA会自动下载Maven的相关依赖（下载过程可能会很久，视网络情况而定），下载完成后，我们需要对源码工程进行编译，如下图：
@@ -4867,9 +4869,147 @@ Github上下载源码，解压后导入IDEA，IDEA会自动下载Maven的相关�
 
 当然nacos默认是集群启动的，所以需要在启动类上配置上单机启动参数`-Dnacos.standalone=true`，IDEA在VM参数中配置即可，不然启动会报错。然后在浏览器输入`localhost:8848/nacos`登录即可。
 
-### 5.4.2 服务注册与发现
+### 5.4.2 Nacos客户端启动及自动装配
 
-我们在使用服务发现客户端时都会使用`@EnableDiscoveryClient`注解，那我们就由此入手，来了解Nacos的服务注册与发现。我们查看源码：
+在Dalston.SR4版本之前，nacos客户端的启动，需要在spring-cloud主函数上添加@EnableDiscoveryClient注解，在此版本之后也就是从Spring Cloud Edgware开始，@EnableDiscoveryClient 可省略。官方文档如下：
+
+![image-20220817095920552](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817095920552.png)
+
+nacos客户端是基于SpringBoot是自动装配（关于自动装配可以看我的[SpringBoot笔记#2.2自动装配原理](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringBoot%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0.md#22-%E8%87%AA%E5%8A%A8%E9%85%8D%E7%BD%AE%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90)）的，因此我们可以在我们引入的nacos客户端的jar包中找到自动装配文件spring.factories。
+
+![image-20220817085328345](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817085328345.png)
+
+我们查看spring.factories文件，发现最后有一个BootstrapConfiguration，我们进入此类：
+
+![image-20220817125602659](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817125602659.png)
+
+> 使用BootstrapConfiguration加载，等同于bootstrap.yml中的配置
+
+~~~java
+@ImportAutoConfiguration({ 
+      NacosDiscoveryAutoConfiguration.class,//注入NacosServiceDiscovery这个Bean
+      NacosDiscoveryClientConfiguration.class,//注入NacosDiscoveryClient这个Bean
+      NacosReactiveDiscoveryClientConfiguration.class//注入NacosReactiveDiscoveryClient，用于响应式
+          })
+public class NacosDiscoveryClientConfigServiceBootstrapConfiguration {
+
+}
+~~~
+
+发现此类导入了三个配置类，我们先看一下NacosDiscoveryAutoConfiguration
+
+```java
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnDiscoveryEnabled
+@ConditionalOnBlockingDiscoveryEnabled
+@ConditionalOnNacosDiscoveryEnabled//确保spring.cloud.nacos.discovery.enable为true
+@AutoConfigureBefore({ SimpleDiscoveryClientAutoConfiguration.class,
+      CommonsClientAutoConfiguration.class })
+@AutoConfigureAfter(NacosDiscoveryAutoConfiguration.class)
+public class NacosDiscoveryClientConfiguration {
+
+    //注入了NacosDiscoverClient，此类实现了Spring Cloud的接口DiscoveryClient
+   @Bean
+   public DiscoveryClient nacosDiscoveryClient(
+         NacosServiceDiscovery nacosServiceDiscovery) {
+      return new NacosDiscoveryClient(nacosServiceDiscovery);
+   }
+//略。。。
+}
+```
+
+这个配置类中注入了NacosDiscoverClient，此类实现了Spring Cloud的接口DiscoveryClient。
+
+> 我们先来了解一下Spring Cloud的相关接口：
+>
+> - DiscoveryClient，服务发现的接口，有两个核心方法：`List<ServiceInstance> getInstances(String serviceId);`和`List<String> getServices()`，当我们进行服务调用时，会先通过调用服务的名称，调用getInstances方法，到对应的服务中心获取到服务的IP等信息的列表，最后通过负载均衡算法调用具体的ip地址。
+> - ReactiveDiscoveryClient 接口中定义的方法和DiscoveryClient 中定义的方法完全一样，不同的是将返回值为`List`改为`Flux`,主要用于支持响应式服务发现，在`Spring WebFlux`就会使用该接口的实现
+> - ServiceRegistry 服务注册的接口，该接口有 `register(Registration)` 、 `deregister(Registration)`等方法,可以让你提供自定义的服务注册方法进行服务注册。
+
+我们进入NacosDiscoverClient（源码很简单，这里略不贴出源码）发现此类的方法全部委托给了NacosServiceDiscovery，而NacosServiceDiscovery正是NacosDiscoveryAutoConfiguration注入的。
+
+> NacosDiscoveryAutoConfiguration源码如下：
+>
+> ```java
+> @Configuration(proxyBeanMethods = false)
+> @ConditionalOnDiscoveryEnabled
+> @ConditionalOnNacosDiscoveryEnabled//确保spring.cloud.nacos.discovery.enable为true
+> public class NacosDiscoveryAutoConfiguration {
+> 
+>    @Bean
+>    @ConditionalOnMissingBean
+>    public NacosServiceDiscovery nacosServiceDiscovery(
+>          NacosDiscoveryProperties discoveryProperties,
+>          NacosServiceManager nacosServiceManager) {
+>       return new NacosServiceDiscovery(discoveryProperties, nacosServiceManager);
+>    }
+>    //略。。。
+> }
+> ```
+
+也就是说这个BootstrapConfiguration实际上是将服务发现的相关组件进行了注入。
+
+然后我们看spring.factories中的EnableAutoConfiguration的相关配置，其中有一个NacosServiceRegistryAutoConfiguration配置，我们进去看一下这个配置类中导入了NacosServiceRegistry继承了ServiceRegistry说明此类会将服务注册的相关组件导入，源码如下：
+
+```java
+@Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties
+@ConditionalOnNacosDiscoveryEnabled//确保spring.cloud.nacos.discovery.enable为true
+//默认为true，当@EnableDiscoveryClient注解配置为false时，此属性为false
+@ConditionalOnProperty(value = "spring.cloud.service-registry.auto-registration.enabled",
+//matchIfMissing，也就是在自动配置的bean中如果miss了，就去properties或者yml文件中去找
+		matchIfMissing = true)
+@AutoConfigureAfter({ AutoServiceRegistrationConfiguration.class,
+		AutoServiceRegistrationAutoConfiguration.class,
+		NacosDiscoveryAutoConfiguration.class })
+public class NacosServiceRegistryAutoConfiguration {
+
+    //注入了NacosServiceRegistry
+	@Bean
+	public NacosServiceRegistry nacosServiceRegistry(
+			NacosDiscoveryProperties nacosDiscoveryProperties,
+			NacosServiceManager nacosServiceManager) {
+		return new NacosServiceRegistry(nacosDiscoveryProperties, nacosServiceManager);
+	}
+
+	@Bean
+	@ConditionalOnBean(AutoServiceRegistrationProperties.class)
+	public NacosRegistration nacosRegistration(
+			ObjectProvider<List<NacosRegistrationCustomizer>> registrationCustomizers,
+			NacosDiscoveryProperties nacosDiscoveryProperties,
+			ApplicationContext context) {
+		return new NacosRegistration(registrationCustomizers.getIfAvailable(),
+				nacosDiscoveryProperties, context);
+	}
+
+	@Bean
+	@ConditionalOnBean(AutoServiceRegistrationProperties.class)
+	public NacosAutoServiceRegistration nacosAutoServiceRegistration(
+			NacosServiceRegistry registry,
+			AutoServiceRegistrationProperties autoServiceRegistrationProperties,
+			NacosRegistration registration) {
+		return new NacosAutoServiceRegistration(registry,
+				autoServiceRegistrationProperties, registration);
+	}
+
+}
+```
+
+这里我们注意，除了@ConditionalOnNacosDiscoveryEnabled，服务注册配置类还有一个@ConditionalOnProperty注解，用于检测@EnableDiscoveryClient的配置，也就是说当我们把@EnableDiscoveryClient注解配置为false时仅仅是不能进行服务注册了，但是服务发现等相关组件还可以使用。同时这也是不再需要在启动类加上@EnableDiscoveryClient注解的原因，因为所有组件都检测`spring.cloud.nacos.discovery.enable`。这也是开头不在需要@EnableDiscoveryClient注解的原因。
+
+> 我们可以对此进行测试验证，用我们的demo即可验证，编写一个获取nacos服务端的接口
+>
+> ```java
+> @GetMapping("/test")
+> public String testEnable(){
+> 	//getInstances("服务名称")
+>     return discoveryClient.getInstances("user1").toString();
+> }
+> ```
+>
+> 然后在一个微服务中设置`spring.cloud.nacos.discovery.enable`和`@EnableDiscoveryClient`这两个的值，然后通过此接口查看是否能获取nacos服务端信息；另一个微服务直接连nacos即可。 
+
+我们可以查看@EnableDiscoveryClient的源码进行验证：
 
 ```java
 @Target(ElementType.TYPE)
@@ -4878,7 +5018,6 @@ Github上下载源码，解压后导入IDEA，IDEA会自动下载Maven的相关�
 @Inherited
 @Import(EnableDiscoveryClientImportSelector.class)
 public @interface EnableDiscoveryClient {
-    //
    boolean autoRegister() default true;
 }
 ```
@@ -4898,12 +5037,12 @@ public class EnableDiscoveryClientImportSelector
    public String[] selectImports(AnnotationMetadata metadata) {
       String[] imports = super.selectImports(metadata);
 		
-       //获取z
+       //获取注解属性
       AnnotationAttributes attributes = AnnotationAttributes.fromMap(
             metadata.getAnnotationAttributes(getAnnotationClass().getName(), true));
-
+	  //获取是否自动注册
       boolean autoRegister = attributes.getBoolean("autoRegister");
-
+	
       if (autoRegister) {
          List<String> importsList = new ArrayList<>(Arrays.asList(imports));
          importsList.add(
@@ -4911,6 +5050,7 @@ public class EnableDiscoveryClientImportSelector
          imports = importsList.toArray(new String[0]);
       }
       else {
+          //如果不开启就将spring.cloud.service-registry.auto-registration.enabled设为false，表示不开启自动注册
          Environment env = getEnvironment();
          if (ConfigurableEnvironment.class.isInstance(env)) {
             ConfigurableEnvironment configEnv = (ConfigurableEnvironment) env;
@@ -4928,4 +5068,208 @@ public class EnableDiscoveryClientImportSelector
     
     //略。。。
 }
+
+@Configuration(proxyBeanMethods = false)
+//启用配置类，spring.cloud.service-registry.auto-registration.enabled默认为true
+@EnableConfigurationProperties(AutoServiceRegistrationProperties.class)
+@ConditionalOnProperty(value = "spring.cloud.service-registry.auto-registration.enabled",
+		matchIfMissing = true)
+public class AutoServiceRegistrationConfiguration {
+
+}
 ```
+
+可以看到@EnableDiscoveryClient注解主要是将spring.cloud.service-registry.auto-registration.enabled设置为true，而此值默认就是true，因此不加此注释也可以进行服务注册。
+
+### 5.4.3 客户端服务注册流程
+
+在上一小节，服务注册的自动装配配置类如下，这个配置类一共导入了三个Bean，分别有不同的作用，代码如下：
+
+```java
+@Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties
+@ConditionalOnNacosDiscoveryEnabled
+@ConditionalOnProperty(value = "spring.cloud.service-registry.auto-registration.enabled",
+      matchIfMissing = true)
+@AutoConfigureAfter({ AutoServiceRegistrationConfiguration.class,
+      AutoServiceRegistrationAutoConfiguration.class,
+      NacosDiscoveryAutoConfiguration.class })
+public class NacosServiceRegistryAutoConfiguration {
+	//向注册中心注册服务
+   @Bean
+   public NacosServiceRegistry nacosServiceRegistry(
+         NacosDiscoveryProperties nacosDiscoveryProperties,
+         NacosServiceManager nacosServiceManager) {
+      return new NacosServiceRegistry(nacosDiscoveryProperties, nacosServiceManager);
+   }
+	//存储nacos服务的信息
+   @Bean
+   @ConditionalOnBean(AutoServiceRegistrationProperties.class)
+   public NacosRegistration nacosRegistration(
+         ObjectProvider<List<NacosRegistrationCustomizer>> registrationCustomizers,
+         NacosDiscoveryProperties nacosDiscoveryProperties,
+         ApplicationContext context) {
+      return new NacosRegistration(registrationCustomizers.getIfAvailable(),
+            nacosDiscoveryProperties, context);
+   }
+	//向nacos服务完成自动注册
+   @Bean
+   @ConditionalOnBean(AutoServiceRegistrationProperties.class)
+   public NacosAutoServiceRegistration nacosAutoServiceRegistration(
+         NacosServiceRegistry registry,
+         AutoServiceRegistrationProperties autoServiceRegistrationProperties,
+         NacosRegistration registration) {
+      return new NacosAutoServiceRegistration(registry,
+            autoServiceRegistrationProperties, registration);
+   }
+
+}
+```
+
+那我们就从自动注册NacosAutoServiceRegistration这里开始看起，我们可以在这里打一个断点，可以看到这里注入的就是我们上面注入的两个Bean，如下图：
+
+![image-20220817161200094](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817161200094.png)
+
+然后我们进入这个类：
+
+```java
+public class NacosAutoServiceRegistration
+      extends AbstractAutoServiceRegistration<Registration> {
+
+   public NacosAutoServiceRegistration(ServiceRegistry<Registration> serviceRegistry,
+         AutoServiceRegistrationProperties autoServiceRegistrationProperties,
+         NacosRegistration registration) {
+       //执行了父类的构造方法
+      super(serviceRegistry, autoServiceRegistrationProperties);
+      this.registration = registration;
+   }
+    //略。。
+}
+```
+
+我们查看父类源码，发现其继承了`ApplicationListener<WebServerInitializedEvent>`
+
+![image-20220817162150275](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817162150275.png)
+
+继承后在容器启动时会执行onApplicationEvent方法，于是我们查看此方法，会从onApplicationEvent一路到register()方法，源码如下：
+
+```java
+/**AbstractAutoServiceRegistration.java**/
+@Override
+@SuppressWarnings("deprecation")
+public void onApplicationEvent(WebServerInitializedEvent event) {
+    //调用bind方法
+   bind(event);
+}
+
+@Deprecated
+public void bind(WebServerInitializedEvent event) {
+   ApplicationContext context = event.getApplicationContext();
+   if (context instanceof ConfigurableWebServerApplicationContext) {
+      if ("management".equals(((ConfigurableWebServerApplicationContext) context)
+            .getServerNamespace())) {
+         return;
+      }
+   }
+   this.port.compareAndSet(0, event.getWebServer().getPort());
+    //调用start方法
+   this.start();
+}
+
+public void start() {
+    if (!isEnabled()) {
+        if (logger.isDebugEnabled()) {
+            logger.debug("Discovery Lifecycle disabled. Not starting");
+        }
+        return;
+    }
+
+    // only initialize if nonSecurePort is greater than 0 and it isn't already running
+    // because of containerPortInitializer below
+    if (!this.running.get()) {
+        this.context.publishEvent(
+            new InstancePreRegisteredEvent(this, getRegistration()));
+        //执行服务注册
+        register();
+        if (shouldRegisterManagement()) {
+            registerManagement();
+        }
+        this.context.publishEvent(
+            new InstanceRegisteredEvent<>(this, getConfiguration()));
+        this.running.compareAndSet(false, true);
+    }
+
+}
+```
+
+我们进入register()方法，会跳转到NacosAutoServiceRegistration的register方法:
+
+![image-20220817163112420](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817163112420.png)
+
+然后又会调用父类的register()方法，父类的此方法又会委托给实现子类：
+
+![image-20220817163402918](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817163402918.png)
+
+最终会走到NacosServiceRegistry#register方法：
+
+```java
+@Override
+public void register(Registration registration) {
+
+   if (StringUtils.isEmpty(registration.getServiceId())) {
+      log.warn("No service to register for nacos client...");
+      return;
+   }
+
+   NamingService namingService = namingService();
+   String serviceId = registration.getServiceId();
+   String group = nacosDiscoveryProperties.getGroup();
+
+   Instance instance = getNacosInstanceFromRegistration(registration);
+
+   try {
+       //通过NamingService完成注册
+      namingService.registerInstance(serviceId, group, instance);
+      log.info("nacos registry, {} {} {}:{} register finished", group, serviceId,
+            instance.getIp(), instance.getPort());
+   }
+   catch (Exception e) {
+      log.error("nacos registry, {} register failed...{},", serviceId,
+            registration.toString(), e);
+      // rethrow a RuntimeException if the registration is failed.
+      // issue : https://github.com/alibaba/spring-cloud-alibaba/issues/1132
+      rethrowRuntimeException(e);
+   }
+}
+```
+
+这个方法会通过NamingService服务完成注册，我们进入到namingService.registerInstance方法：
+
+![image-20220817163652607](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817163652607.png)
+
+在这里就会分别发送心跳和完成注册。我们先看发送心跳的部分：
+
+```java
+public void addBeatInfo(String serviceName, BeatInfo beatInfo) {
+    NAMING_LOGGER.info("[BEAT] adding beat: {} to beat map.", beatInfo);
+    String key = buildKey(serviceName, beatInfo.getIp(), beatInfo.getPort());
+    BeatInfo existBeat = null;
+    //fix #1733
+    if ((existBeat = dom2Beat.remove(key)) != null) {
+        existBeat.setStopped(true);
+    }
+    dom2Beat.put(key, beatInfo);
+    executorService.schedule(new BeatTask(beatInfo), beatInfo.getPeriod(), TimeUnit.MILLISECONDS);
+    MetricsMonitor.getDom2BeatSizeMonitor().set(dom2Beat.size());
+}
+```
+
+
+
+然后我们再看服务注册的部分：
+
+
+
+### 5.4.4 服务端服务注册流程
+
+### 5.4.5 服务发现
