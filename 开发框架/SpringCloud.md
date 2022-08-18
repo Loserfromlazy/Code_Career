@@ -4840,7 +4840,7 @@ public class DegradeController {
 
 ## 5.4 Nacos源码 1.3.2版本
 
-> 我这里用的springcloud版本是Hoxton.RELEASE；spring-cloud-alibaba版本2.2.2
+> **我这里用的springcloud版本是Hoxton.RELEASE；spring-cloud-alibaba版本2.2.2**
 
 ### 5.4.1 工程搭建
 
@@ -5007,7 +5007,7 @@ public class NacosServiceRegistryAutoConfiguration {
 > }
 > ```
 >
-> 然后在一个微服务中设置`spring.cloud.nacos.discovery.enable`和`@EnableDiscoveryClient`这两个的值，然后通过此接口查看是否能获取nacos服务端信息；另一个微服务直接连nacos即可。 
+> 然后在一个微服务中设置`spring.cloud.nacos.discovery.enable`和`@EnableDiscoveryClient`这两个的值，然后通过此接口查看是否能获取nacos服务端信息，获取另一个微服务的相关信息；另一个微服务直接连nacos即可。 
 
 我们可以查看@EnableDiscoveryClient的源码进行验证：
 
@@ -5247,29 +5247,66 @@ public void register(Registration registration) {
 
 ![image-20220817163652607](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220817163652607.png)
 
-在这里就会分别发送心跳和完成注册。我们先看发送心跳的部分：
+在这里就会分别发送心跳和完成注册。**我们先看发送心跳的部分：**
 
 ```java
 public void addBeatInfo(String serviceName, BeatInfo beatInfo) {
     NAMING_LOGGER.info("[BEAT] adding beat: {} to beat map.", beatInfo);
     String key = buildKey(serviceName, beatInfo.getIp(), beatInfo.getPort());
     BeatInfo existBeat = null;
-    //fix #1733
+    //fix #1733 
     if ((existBeat = dom2Beat.remove(key)) != null) {
         existBeat.setStopped(true);
     }
     dom2Beat.put(key, beatInfo);
+    //通过线程池进行异步心跳发送
     executorService.schedule(new BeatTask(beatInfo), beatInfo.getPeriod(), TimeUnit.MILLISECONDS);
     MetricsMonitor.getDom2BeatSizeMonitor().set(dom2Beat.size());
 }
 ```
 
+可以看到，心跳是通过线程池异步发送的，我们进入BeatTask，找到run方法，一路向下跟代码，流程如下图:
 
+![image-20220818113417482](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220818113417482.png)
 
-然后我们再看服务注册的部分：
+最后会发现会发送一个HTTP请求，将心跳信息发送到服务端。这个reqApi是nacos封装的方法，底层是封装了一个HttpClient发送了一个HTTP请求(这部分源码略，感兴趣可以自己debug去跟一下)。
 
+> nacos的NacosRestTemplate的最底层是使用jdk的进行的封装：
+>
+> ![image-20220818124813750](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220818124813750.png)
+>
+> ![image-20220818124525541](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220818124525541.png)
 
+**然后我们再看服务注册的部分：**
+
+我们跟进`serverProxy.registerService(groupedServiceName, groupName, instance);`方法，会发现注册也是通过HTTP请求将相关信息发送给服务端进行注册(接口地址`/nacos/v1/ns/instance`)。
+
+```java
+public void registerService(String serviceName, String groupName, Instance instance) throws NacosException {
+    
+    NAMING_LOGGER.info("[REGISTER-SERVICE] {} registering service {} with instance: {}", namespaceId, serviceName,
+            instance);
+    
+    final Map<String, String> params = new HashMap<String, String>(16);
+    params.put(CommonParams.NAMESPACE_ID, namespaceId);
+    params.put(CommonParams.SERVICE_NAME, serviceName);
+    params.put(CommonParams.GROUP_NAME, groupName);
+    params.put(CommonParams.CLUSTER_NAME, instance.getClusterName());
+    params.put("ip", instance.getIp());
+    params.put("port", String.valueOf(instance.getPort()));
+    params.put("weight", String.valueOf(instance.getWeight()));
+    params.put("enable", String.valueOf(instance.isEnabled()));
+    params.put("healthy", String.valueOf(instance.isHealthy()));
+    params.put("ephemeral", String.valueOf(instance.isEphemeral()));
+    params.put("metadata", JacksonUtils.toJson(instance.getMetadata()));
+    //通过POST请求，进行注册
+    reqApi(UtilAndComs.nacosUrlInstance, params, HttpMethod.POST);
+    
+}
+```
 
 ### 5.4.4 服务端服务注册流程
+
+
 
 ### 5.4.5 服务发现
