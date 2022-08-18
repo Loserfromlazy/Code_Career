@@ -3608,6 +3608,59 @@ public void testAllocator(){
 >
 > 显然，本机直接内存的分配不会受到 Java 堆大小的限制，但是，既然是内存，肯定还是会受到本机总内存（包括 RAM 以及 SWAP 区或者分页文件）大小以及处理器寻址空间的限制。服务器管理员在配置虚拟机参数时，会根据实际内存设置 -Xmx 等参数信息，但经常忽略直接内存，使得各个内存区域总和大于物理内存限制（包括物理的和操作系统级的限制），从而导致动态扩展时出现OutOfMemoryError 异常。
 
+> 以下内容来自我自己的博客NIO与Netty，CompositeByteBuf 使用示例：
+>
+> CompositeByteBuf 是一个组合的 ByteBuf，它内部维护了一个 Component 数组，每个 Component 管理一个 ByteBuf，记录了这个 ByteBuf 相对于整体偏移量等信息，代表着整体中某一段的数据。
+>
+> - 优点，对外是一个虚拟视图，组合这些 ByteBuf 不会产生内存复制
+> - 缺点，复杂了很多，多次操作会带来性能的损耗
+>
+> 例子：
+>
+> ```java
+>public class TestCompositeByteBuf {
+>     public static void main(String[] args) {
+>         ByteBuf buf1 = ByteBufAllocator.DEFAULT.buffer(5);
+>         buf1.writeBytes(new byte[]{1, 2, 3, 4, 5});
+>         ByteBuf buf2 = ByteBufAllocator.DEFAULT.buffer(5);
+>         buf2.writeBytes(new byte[]{6, 7, 8, 9, 10});
+>         System.out.println(ByteBufUtil.prettyHexDump(buf1));
+>         System.out.println(ByteBufUtil.prettyHexDump(buf2));
+>         //方法一
+> //        ByteBuf buf3 = ByteBufAllocator.DEFAULT
+> //                .buffer(buf1.readableBytes()+buf2.readableBytes());
+> //        buf3.writeBytes(buf1);
+> //        buf3.writeBytes(buf2);
+> //        System.out.println(ByteBufUtil.prettyHexDump(buf3));
+>         //方法2
+>         CompositeByteBuf buf4 = ByteBufAllocator.DEFAULT.compositeBuffer();
+>         // true 表示增加新的 ByteBuf 自动递增 write index, 否则 write index 会始终为 0
+>         buf4.addComponents(true, buf1, buf2);
+>         System.out.println(ByteBufUtil.prettyHexDump(buf4));
+>     }
+> }
+> ```
+> 
+> 结果：
+>
+> ```lua
+>         +-------------------------------------------------+
+>          |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
+> +--------+-------------------------------------------------+----------------+
+> |00000000| 01 02 03 04 05                                  |.....           |
+> +--------+-------------------------------------------------+----------------+
+>          +-------------------------------------------------+
+>          |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
+> +--------+-------------------------------------------------+----------------+
+> |00000000| 06 07 08 09 0a                                  |.....           |
+> +--------+-------------------------------------------------+----------------+
+>          +-------------------------------------------------+
+>          |  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f |
+> +--------+-------------------------------------------------+----------------+
+> |00000000| 01 02 03 04 05 06 07 08 09 0a                   |..........      |
+> +--------+-------------------------------------------------+----------------+
+> ```
+
 ### 13.7.5 ByteBuf的自动创建与释放
 
 **在入站处理时，Netty是何时自动创建入站的ByteBuf缓冲区呢？**
