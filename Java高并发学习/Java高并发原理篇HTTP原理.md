@@ -367,6 +367,8 @@ Netty天生是异步事件驱动的架构，在性能和可靠性上都十分优
 
 ![image-20220811124935470](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220811124935470.png)
 
+1.4.1-1.4.3为netty关于Http的相关知识介绍。
+
 ### 1.4.1 Netty处理HTTP请求
 
 通常HTTP协议通信过程中，客户端和服务器的交互过程如下：
@@ -439,11 +441,257 @@ Netty的HTTP响应的处理流程，只需要在流水线装配HttpResponseEncod
 
 ### 1.4.4 回显业务处理器
 
+经过上面的介绍，其实我们这个简单的web服务器，本质上我们只需要将Netty为我们处理好并传过来的FullHttpRequest进行处理，将需要回显的内容提取出来，然后封装成FullHttpResponse传到出站处理器即可，剩下的工作netty都会帮我们完成。
 
+首先需要编写业务处理器，主要思路就是拿到请求uri、请求方法、请求头以及请求参数的信息，代码如下：
+
+```java
+public class EchoHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+        if (!request.decoderResult().isSuccess()) {
+            EchoUtil.sendError(ctx, HttpResponseStatus.BAD_REQUEST);
+            return;
+        }
+        EchoUtil.cacheHttp(ctx, request);
+        Map<String, Object> result = new HashMap<>();
+        result.put("request_uri", request.uri());
+        result.put("request_method", request.method().toString());
+        HttpHeaders headers = request.headers();
+        Map<String, Object> headerMap = new HashMap<>();
+        for (Map.Entry<String, String> next : headers.entries()) {
+            headerMap.put(next.getKey(), next.getValue());
+        }
+        result.put("request_header", headerMap);
+        Map<String, Object> params = getParams(request);
+        result.put("request_params", params);
+        if (HttpMethod.POST.equals(request.method())) {
+            Map<String, Object> data = getPostData(request);
+            result.put("request_data", data);
+        }
+        String jsonString = JSONObject.toJSONString(result);
+        EchoUtil.sendJsonContent(ctx,jsonString);
+    }
+
+    /**
+     * 获取Post参数
+     */
+    private Map<String, Object> getPostData(FullHttpRequest request) {
+        Map<String, Object> data = null;
+        String contentType = request.headers().get("Content-Type").trim();
+        if (contentType.contains("application/x-www-form-urlencoded")) {
+            data = getFormBody(request);
+        } else if (contentType.contains("multipart/form-data")) {
+            data = getFormBody(request);
+        } else if (contentType.contains("application/json")) {
+            data = getFormJson(request);
+        } else if (contentType.contains("text/plain")) {
+            ByteBuf content = request.content();
+            byte[] bytes = new byte[content.readableBytes()];
+            content.readBytes(bytes);
+            String text = new String(bytes, StandardCharsets.UTF_8);
+            data = new HashMap<>();
+            data.put("text", text);
+        }
+        return data;
+    }
+
+    /**
+     * 获取uri参数
+     */
+    private Map<String, Object> getParams(FullHttpRequest request) {
+        Map<String, Object> paramsMap = new HashMap<>();
+        //把uri的参数分割成key-value形式
+        QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
+        Map<String, List<String>> parameters = decoder.parameters();
+        for (Map.Entry<String, List<String>> entry : parameters.entrySet()) {
+            paramsMap.put(entry.getKey(), entry.getValue().get(0));
+        }
+        return paramsMap;
+    }
+
+    /**
+     * 获取form表单数据
+     */
+    private Map<String, Object> getFormBody(FullHttpRequest request) {
+        Map<String, Object> data = new HashMap<>();
+        try {
+            HttpPostRequestDecoder decoder = new HttpPostRequestDecoder(new DefaultHttpDataFactory(DefaultHttpDataFactory.MINSIZE), request, StandardCharsets.UTF_8);
+            List<InterfaceHttpData> bodyData = decoder.getBodyHttpDatas();
+            if (bodyData == null || bodyData.isEmpty()) {
+                if (request.content().isReadable()) {
+                    String json = request.content().toString(StandardCharsets.UTF_8);
+                    data.put("body", json);
+                }
+                return data;
+            }
+            for (InterfaceHttpData bodyDatum : bodyData) {
+                if (bodyDatum.getHttpDataType() == InterfaceHttpData.HttpDataType.Attribute) {
+                    MixedAttribute attribute = (MixedAttribute) bodyDatum;
+                    data.put(attribute.getName(), attribute.getValue());
+                }
+            }
+        }catch (Exception e){
+            e.printStackTrace();
+        }
+        return data;
+    }
+
+    /**
+     * 获取json数据
+     */
+    private Map<String, Object> getFormJson(FullHttpRequest request) {
+        Map<String, Object> params = new HashMap<>();
+
+        ByteBuf content = request.content();
+        byte[] bytes = new byte[content.readableBytes()];
+        content.readBytes(bytes);
+        String strContent = new String(bytes, StandardCharsets.UTF_8);
+
+        JSONObject jsonObject = JSONObject.parseObject(strContent);
+        for (Object key : jsonObject.keySet())
+        {
+            params.put(key.toString(), jsonObject.get(key));
+        }
+
+        return params;
+    }
+}
+```
+
+然后附带的工具类代码如下：
+
+```java
+public class EchoUtil {
+    public static final AttributeKey<HttpVersion> VERSION_KEY =
+            AttributeKey.valueOf("VERSION");
+    public static final AttributeKey<Boolean> KEEP_ALIVE_KEY =
+            AttributeKey.valueOf("KEEP_ALIVE_KEY");
+
+    /**
+     * 通过channel缓存Http协议版本，以及是否是长连接
+     */
+    public static void cacheHttp(ChannelHandlerContext context, FullHttpRequest request) {
+        if (context.channel().attr(KEEP_ALIVE_KEY).get() == null) {
+            context.channel().attr(VERSION_KEY).set(request.protocolVersion());
+            boolean keepAlive = HttpUtil.isKeepAlive(request);
+            context.channel().attr(KEEP_ALIVE_KEY).set(keepAlive);
+        }
+    }
+
+    public static void sendError(ChannelHandlerContext context, HttpResponseStatus status) {
+        FullHttpResponse response = new DefaultFullHttpResponse(getHttpVersion(context), status, Unpooled.copiedBuffer("Fail" + status + "\r\n", StandardCharsets.UTF_8));
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain;charset=UTF-8");
+        sendAndCleanupConnection(context,response);
+    }
+
+    private static HttpVersion getHttpVersion(ChannelHandlerContext ctx) {
+        HttpVersion version;
+        if (isHTTP1_0(ctx)) {
+            version = HttpVersion.HTTP_1_0;
+        } else {
+            version = HttpVersion.HTTP_1_1;
+        }
+        return version;
+    }
+
+    public static boolean isHTTP1_0(ChannelHandlerContext ctx) {
+
+        HttpVersion version =
+                ctx.channel().attr(VERSION_KEY).get();
+        if (null == version) {
+            return false;
+        }
+        return version.equals(HttpVersion.HTTP_1_0);
+    }
+
+    /**
+     * 发送响应
+     */
+    public static void sendAndCleanupConnection(ChannelHandlerContext ctx, FullHttpResponse response) {
+        boolean keepAlive = ctx.channel().attr(KEEP_ALIVE_KEY).get();
+        HttpUtil.setContentLength(response, response.content().readableBytes());
+        if (!keepAlive) {
+            // 如果不是长连接，设置 connection:close 头部
+            response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaders.Values.CLOSE);
+        } else if (isHTTP1_0(ctx)) {
+            // 如果是1.0版本的长连接，设置 connection:keep-alive 头部
+            response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderNames.KEEP_ALIVE);
+        }
+        //发送内容
+        ChannelFuture channelFuture = ctx.channel().writeAndFlush(response);
+
+        if (!keepAlive) {
+            // 如果不是长连接，发送完成之后，关闭连接
+            channelFuture.addListener(ChannelFutureListener.CLOSE);
+        }
+    }
+
+    /**
+     * 发送Json数据
+     */
+    public static void sendJsonContent(ChannelHandlerContext ctx, String json){
+        HttpVersion version = getHttpVersion(ctx);
+        FullHttpResponse response = new DefaultFullHttpResponse(
+                version, HttpResponseStatus.OK, Unpooled.copiedBuffer(json, StandardCharsets.UTF_8));
+        response.headers().set(CONTENT_TYPE, "application/json; charset=UTF-8");
+        sendAndCleanupConnection(ctx, response);
+    }
+}
+```
+
+最后完成服务端启动类的编写即可：
+
+```java
+@Slf4j
+public class EchoServer {
+
+    private static final Integer port = 8999;
+
+    public static void main(String[] args) {
+        start();
+    }
+
+    private static void start() {
+        // 创建连接监听reactor 线程组
+        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+        // 创建连接处理 reactor 线程组
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        ServerBootstrap bootstrap = new ServerBootstrap();
+        try {
+            bootstrap
+                    .group(bossGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+
+                        @Override
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ch.pipeline().addLast(new HttpRequestDecoder());
+                            ch.pipeline().addLast(new HttpResponseEncoder());
+                            ch.pipeline().addLast(new HttpObjectAggregator(65535));
+                            ch.pipeline().addLast(new EchoHandler());
+                        }
+                    });
+            Channel channel = bootstrap.bind(port).sync().channel();
+            log.info("服务已经启动，正在监听{}端口", port);
+            channel.closeFuture().sync();
+        } catch (Exception e) {
+            log.error("发生异常，错误信息{}", e.getMessage());
+        } finally {
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+        }
+
+    }
+}
+```
 
 ### 1.4.5 测试
 
+我们可以使用postman进行测试，可以测试GET请求、POST请求及POST请求的各种参数类型。
 
+![image-20220822140231349](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220822140231349.png)
 
 # 二、高并发HTTP的核心原理
 
