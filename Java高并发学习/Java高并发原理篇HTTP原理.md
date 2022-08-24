@@ -888,31 +888,66 @@ HTTP长连接和HTTP短连接，指的是传输层的TCP连接是否被多次使
 
 ### 2.4.1 在不同协议下的HTTP长连接
 
+在HTTP1.0很多浏览器都对HTTP协议进行了扩展，那就是Keep-Alive扩展协议，该扩展作为HTTP1.0版本的补充实验性持久连接协议出现，实现了HTTP长连接的建立和使用。Keep-Alive协议中，如果客户端在首部加上`Connection:Keep-Alive`请求头，则表示请求服务端将传输层TCP连接默认保持在打开状态，如果服务端同意将这条TCP连接保持在打开状态，就会在响应中包含同样的首部，如果没有包含则客户端会认为服务端不支持keep-alive扩展协议。
 
+当然此协议也存在问题，首先该协议不是扩展协议，客户端必须携带`Connection:Keep-Alive`请求头才能使用，而且处于客户端和服务端中间的反向代如果不支持也无法使用。
+
+HTTP1.0的Keep-alive是应用层的扩展协议，与TCP的Keepalive不同，TCP的Keepalive是Socket连接的一个可选项，用于Scoket连接的保活，新建Socket时，可以设置SO_KEEPALIVE套接字可选项打开保活机制。
+
+HTTP1.1并没有使用HTTP1.0的KeepAlive扩展协议，而是自己实现了连接复用方案。HTTP1.1默认使用长连接，需要显示关闭连接，在报文首部加上`Connection:Close`请求头就可以关闭了。当然，不发送`Connection:Close`请求头，不意味着服务器承诺TCP连接永远保持打开。空闲的TCP连接也可以被客户端与服务端关闭
 
 ## 2.5 服务端HTTP长连接技术
 
-2.5.1 Tomcat的长连接配置
+### 2.5.1 Tomcat的长连接配置
 
-2.5.2 Nginx的长连接配置
+服务器端Tomcat的长连接配置主要分为两种场景：
 
-2.5.3 服务吨长连接的注意事项
+1. 单独部署的Tomcat
+2. 内嵌部署的Tomcat
+
+
+
+### 2.5.2 Nginx的长连接配置
+
+### 2.5.3 服务吨长连接的注意事项
 
 ## 2.6 客户端HTTP长连接技术
 
-2.6.1 HttpURLConnection
+### 2.6.1 HttpURLConnection
 
-2.6.2 Apache HTTPClient
+### 2.6.2 Apache HTTPClient
 
-2.6.3 Nginx承担客户端角色
+### 2.6.3 Nginx承担客户端角色
 
 # 三、WebSocket原理
 
-3.1 WebSocket简介
+### 3.1 WebSocket简介
 
-3.2 WebSocket示例
+WebSocket是一种全双工通信的协议，其通信在TCP连接上进行，所以属于应用层协议。WebSocket使得客户端和服务器之间的数据交换变得更加简单，允许服务端主动向客户端推送数据。在WebSocket编程中，浏览器和服务器只需要完成一次升级握手，两者之间就直接可以创建持久性的连接，并进行双向数据传输。
 
-3.3 WebSocket原理
+#### Ajax短轮询和LongPoll长轮询原理
+
+在WebSocket技术之前，浏览器和服务器之间的双向通信主要分为Ajax短轮询和LongPoll长轮询。
+
+Ajax短轮询即浏览器周期性的向服务器发起Http请求，浏览器通过HTTP1.1的持久连接（一次连接，多次请求）可以在建立连接后发起多次异步请求。Ajax短轮询原理十分简单，让浏览器几秒一个请求，询问服务器是否有新信息。这种模式缺点很明显，即需要不断向服务器发送请求，HTTP请求每次都带上很长的请求头，造成服务器带宽和CPU资源浪费。
+
+Long Poll长轮询在原理上跟Ajax短轮询差不多，都是采用轮询的方式，不过采取的是服务端阻塞模型，轮询过程中，服务器端在收到浏览器的请求后，如果暂时没有消息推给浏览器，服务端就会一直阻塞，直到服务端有消息才会响应给客户端，收到响应后开启下一次轮询请求。
+
+无论是Ajax短轮询还是Long Poll长轮询，都不是最好的双向通信方式，都需要很多资源。而WebSocket则不同，该协议只需要经过一次HTTP 请求，就可以做到源源不断的信息传送了，当传输协议完成HTTP到WebSocket协议升级后，服务端就可以主动推送信息给客户端，高效率的实现双向通信。
+
+#### WebSocket与HTTP关系
+
+WebSocket的最大特点就是，是全双工通信，服务器可以主动向客户端推送信息，客户端也可以主动向服务器发送信息。WebSocket与HTTP之间的关系是：WebSocket其实是一个新协议，通信过程与跟HTTP协议基本没有关系，只是为了兼容现有浏览器，所以在握手阶段使用了HTTP协议，如下图：
+
+![image-20220823212831804](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220823212831804.png)
+
+WebSocket与HTTP协议都处于TCP/IP协议栈的应用层，都是TCP/IP协议的子集。HTTP协议是单向通信协议，只有客户端发起HTTP请求，服务端才会返回数据；而WebSocket协议是双向通信协议，在建立连接之后，客户端和服务器都可以主动向对方发送或接受数据。WebSocket的通信连接建立的前提需要借助HTTP协议，完成通信连接建立之后，通信连接上的双向通信就与HTTP协议无关了。
+
+### 3.2 WebSocket示例
+
+
+
+### 3.3 WebSocket原理
 
 # 四、SSL/TLS核心原理
 
