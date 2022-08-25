@@ -894,7 +894,7 @@ HTTP长连接和HTTP短连接，指的是传输层的TCP连接是否被多次使
 
 HTTP1.0的Keep-alive是应用层的扩展协议，与TCP的Keepalive不同，TCP的Keepalive是Socket连接的一个可选项，用于Scoket连接的保活，新建Socket时，可以设置SO_KEEPALIVE套接字可选项打开保活机制。
 
-HTTP1.1并没有使用HTTP1.0的KeepAlive扩展协议，而是自己实现了连接复用方案。HTTP1.1默认使用长连接，需要显示关闭连接，在报文首部加上`Connection:Close`请求头就可以关闭了。当然，不发送`Connection:Close`请求头，不意味着服务器承诺TCP连接永远保持打开。空闲的TCP连接也可以被客户端与服务端关闭
+HTTP1.1并没有使用HTTP1.0的KeepAlive扩展协议，而是自己实现了连接复用方案。HTTP1.1默认使用长连接，需要显示关闭连接，在报文首部加上`Connection:Close`请求头就可以关闭了。当然，不发送`Connection:Close`请求头，不意味着服务器承诺TCP连接永远保持打开，空闲的TCP连接也可以被客户端与服务端关闭。
 
 ## 2.5 服务端HTTP长连接技术
 
@@ -903,7 +903,41 @@ HTTP1.1并没有使用HTTP1.0的KeepAlive扩展协议，而是自己实现了连
 服务器端Tomcat的长连接配置主要分为两种场景：
 
 1. 单独部署的Tomcat
+
+   对于独立的Tomcat，其长连接配置是通过修改Tomcat配置文件中Connector的配置完成的。一个使用HTTP长连接的Connector连接器的配置示例大致如下：
+
+   ~~~xml
+   <Connector port="8080" protocol="HTTP/1.1"
+              connectionTimeout="20000"
+              redirectPort="8443" 
+              URIEncoding="UTF-8" 
+              
+              keepAliveTimeout="15000"
+              maxKeepAliveRequests="-1"
+              maxConnections="3000"
+              maxThreads="1000"
+              maxIdleTime="300000"
+              maxSpareThreads="200"
+              acceptCount="100"
+              enableLookups="false"
+              />
+   ~~~
+
+   上面的配置中主要有三个关于长连接的配置：
+
+   1. keepAliveTimeout，此选项为TCP的连接保持时长，单位ms。假如在keepAliveTimeout的时间内一直有请求，那么该连接会一直被保持。
+   2. maxKeepAliveRequests，此选项为长连接最大支持的请求数，超过数量的连接将被关闭，关闭时Tomcat会返回一个`Connection:close`响应头给客户端。值为-1表示没有最大请求限制，值为1表示将会禁用HTTP长连接。
+   3. maxConnections，此选项为Tomcat任意时刻能接收和处理的最大连接数，如果其值被设为-1，则表示连接不受限制。由于Linux的内核默认限制了单进程最大打开文件句柄数为1024，因此，如果此配置项的值超过1024，则相应的需要对Linux系统的单进程最大打开文件句柄数限制进行修改。
+
+   > 使用长连接意味着，一个TCP连接在当前请求结束后，如果没有新的请求到来，Socket连接不会立马释放，而是等keepAliveTimeout到期之后才被释放，如果一个高负载的Tomcat服务器建立的很多长连接，将无法继续建立新的连接，无法为新的客户端提供服务。所以，对于Tomcat长连接的配置需要慎重，错误的参数可能导致严重的性能问题。
+
 2. 内嵌部署的Tomcat
+
+   针对内嵌式Tomcat，其长连接配置可以通过一个自动配置类完成。在自动配置类中，可以配置一个TomcatServletWebServerFactory容器工厂Bean实例，SpringBoot将通过该工厂实例，在运行时获取内嵌式Tomcat容器实例。
+
+   
+
+3. 
 
 
 
