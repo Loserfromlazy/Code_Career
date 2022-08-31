@@ -3687,7 +3687,7 @@ public Result<?> receiveHeartBeat(String app, @RequestParam(value = "app_type", 
 
 **客户端处理请求**
 
-在sentinel中数据存储先流规则都是在客户端存储的。实现类CommandCenterInitFunc完成sentinel服务端发送过来的请求相关操作。我们再看`CommandCenterInitFunc#init`方法。
+在sentinel中数据存储限流规则都是在客户端存储的。实现类CommandCenterInitFunc完成sentinel服务端发送过来的请求相关操作。我们再看`CommandCenterInitFunc#init`方法。
 
 ```java
 //命令中心初始化类
@@ -5306,6 +5306,147 @@ public void registerService(String serviceName, String groupName, Instance insta
 ```
 
 ### 5.4.4 服务端服务注册流程
+
+上面我们知道了客户端服务注册时会分别发送心跳和注册请求，我们在nacos源码中找到这两个接口，这两个接口在`nacos-naming`模块下的InstanceController下，我们来看一下这两个方法，源码如下：
+
+```java
+@CanDistro
+@PostMapping
+@Secured(parser = NamingResourceParser.class, action = ActionTypes.WRITE)
+//处理服务注册
+public String register(HttpServletRequest request) throws Exception {
+    //获取服务名，命名空间
+    final String serviceName = WebUtils.required(request, CommonParams.SERVICE_NAME);
+    final String namespaceId = WebUtils
+            .optional(request, CommonParams.NAMESPACE_ID, Constants.DEFAULT_NAMESPACE_ID);
+    //获取实例
+    final Instance instance = parseInstance(request);
+    //注册实例
+    serviceManager.registerInstance(namespaceId, serviceName, instance);
+    return "ok";
+}
+@CanDistro
+@PutMapping("/beat")
+@Secured(parser = NamingResourceParser.class, action = ActionTypes.WRITE)
+//处理心跳请求
+public ObjectNode beat(HttpServletRequest request) throws Exception {
+
+    ObjectNode result = JacksonUtils.createEmptyJsonNode();
+    result.put(SwitchEntry.CLIENT_BEAT_INTERVAL, switchDomain.getClientBeatInterval());
+	//获取请求信息，集群名称服务名称等等
+    String beat = WebUtils.optional(request, "beat", StringUtils.EMPTY);
+    RsInfo clientBeat = null;
+    if (StringUtils.isNotBlank(beat)) {
+        clientBeat = JacksonUtils.toObj(beat, RsInfo.class);
+    }
+    String clusterName = WebUtils
+        .optional(request, CommonParams.CLUSTER_NAME, UtilsAndCommons.DEFAULT_CLUSTER_NAME);
+    String ip = WebUtils.optional(request, "ip", StringUtils.EMPTY);
+    int port = Integer.parseInt(WebUtils.optional(request, "port", "0"));
+    if (clientBeat != null) {
+        if (StringUtils.isNotBlank(clientBeat.getCluster())) {
+            clusterName = clientBeat.getCluster();
+        } else {
+            // fix #2533
+            clientBeat.setCluster(clusterName);
+        }
+        ip = clientBeat.getIp();
+        port = clientBeat.getPort();
+    }
+    String serviceName = WebUtils.required(request, CommonParams.SERVICE_NAME);
+    String namespaceId = WebUtils.optional(request, CommonParams.NAMESPACE_ID, Constants.DEFAULT_NAMESPACE_ID);
+    Loggers.SRV_LOG.debug("[CLIENT-BEAT] full arguments: beat: {}, serviceName: {}", clientBeat, serviceName);
+    //获取客户端注册的服务实例
+    Instance instance = serviceManager.getInstance(namespaceId, serviceName, clusterName, ip, port);
+	//如果还未注册就进行注册
+    if (instance == null) {
+        if (clientBeat == null) {
+            result.put(CommonParams.CODE, NamingResponseCode.RESOURCE_NOT_FOUND);
+            return result;
+        }
+
+        Loggers.SRV_LOG.warn("[CLIENT-BEAT] The instance has been removed for health mechanism, "
+                             + "perform data compensation operations, beat: {}, serviceName: {}", clientBeat, serviceName);
+		//设置实例信息
+        instance = new Instance();
+        instance.setPort(clientBeat.getPort());
+        instance.setIp(clientBeat.getIp());
+        instance.setWeight(clientBeat.getWeight());
+        instance.setMetadata(clientBeat.getMetadata());
+        instance.setClusterName(clusterName);
+        instance.setServiceName(serviceName);
+        instance.setInstanceId(instance.getInstanceId());
+        instance.setEphemeral(clientBeat.isEphemeral());
+		//完成实例注册
+        serviceManager.registerInstance(namespaceId, serviceName, instance);
+    }
+	//获取服务
+    Service service = serviceManager.getService(namespaceId, serviceName);
+
+    if (service == null) {
+        throw new NacosException(NacosException.SERVER_ERROR,
+                                 "service not found: " + serviceName + "@" + namespaceId);
+    }
+    if (clientBeat == null) {
+        clientBeat = new RsInfo();
+        clientBeat.setIp(ip);
+        clientBeat.setPort(port);
+        clientBeat.setCluster(clusterName);
+    }
+    //处理客户端心跳，主要是设置心跳时间和健康状态
+    service.processClientBeat(clientBeat);
+
+    result.put(CommonParams.CODE, NamingResponseCode.OK);
+    if (instance.containsMetadata(PreservedMetadataKeys.HEART_BEAT_INTERVAL)) {
+        result.put(SwitchEntry.CLIENT_BEAT_INTERVAL, instance.getInstanceHeartBeatInterval());
+    }
+    result.put(SwitchEntry.LIGHT_BEAT_ENABLED, switchDomain.isLightBeatEnabled());
+    return result;
+}
+```
+
+从这两个方法我们可以看到，发送心跳请求时如果服务还没有注册就会进行服务注册，也就是说客户端发送的两个方法都会进行服务注册。
+
+> 然后我们在跟进注册方法之前，先看一下上面代码中的处理客户端心跳的部分`service.processClientBeat(clientBeat);`，这部分代码流程如下图，此方法主要是设置心跳时间和健康状态：
+>
+> ![image-20220831171607736](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220831171607736.png)
+
+我们跟进注册方法`serviceManager.registerInstance(namespaceId, serviceName, instance);`在这个方法我们可以加上断点，然后debug启动nacos源码工程，然后随便起一个客户端注册到我们nacos源码工程上就可以debug调试服务端的服务注册的流程了，如下图：
+
+![image-20220831170733654](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220831170733654.png)
+
+我们先跟进`createEmptyService`方法，
+
+```java
+public void createEmptyService(String namespaceId, String serviceName, boolean local) throws NacosException {
+    createServiceIfAbsent(namespaceId, serviceName, local, null);
+}
+public void createServiceIfAbsent(String namespaceId, String serviceName, boolean local, Cluster cluster) throws NacosException {
+    //获取服务，如果服务为空就创建服务
+    Service service = getService(namespaceId, serviceName);
+    if (service == null) {
+
+        Loggers.SRV_LOG.info("creating empty service {}:{}", namespaceId, serviceName);
+        service = new Service();
+        service.setName(serviceName);
+        service.setNamespaceId(namespaceId);
+        service.setGroupName(NamingUtils.getGroupName(serviceName));
+        // now validate the service. if failed, exception will be thrown
+        service.setLastModifiedMillis(System.currentTimeMillis());
+        service.recalculateChecksum();
+        if (cluster != null) {
+            cluster.setService(service);
+            service.getClusterMap().put(cluster.getName(), cluster);
+        }
+        service.validate();
+		//cun
+        putServiceAndInit(service);
+        if (!local) {
+            addOrReplaceService(service);
+        }
+    }
+}
+```
 
 
 
