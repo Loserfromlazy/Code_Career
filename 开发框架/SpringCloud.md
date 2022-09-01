@@ -5410,12 +5410,14 @@ public ObjectNode beat(HttpServletRequest request) throws Exception {
 > 然后我们在跟进注册方法之前，先看一下上面代码中的处理客户端心跳的部分`service.processClientBeat(clientBeat);`，这部分代码流程如下图，此方法主要是设置心跳时间和健康状态：
 >
 > ![image-20220831171607736](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220831171607736.png)
+>
+> 那么这个方法的作用就是重置心跳时间，跟后面心跳超时检测做配合
 
 我们跟进注册方法`serviceManager.registerInstance(namespaceId, serviceName, instance);`在这个方法我们可以加上断点，然后debug启动nacos源码工程，然后随便起一个客户端注册到我们nacos源码工程上就可以debug调试服务端的服务注册的流程了，如下图：
 
 ![image-20220831170733654](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220831170733654.png)
 
-我们先跟进`createEmptyService`方法，
+我们跟进`createEmptyService`方法，
 
 ```java
 public void createEmptyService(String namespaceId, String serviceName, boolean local) throws NacosException {
@@ -5439,7 +5441,7 @@ public void createServiceIfAbsent(String namespaceId, String serviceName, boolea
             service.getClusterMap().put(cluster.getName(), cluster);
         }
         service.validate();
-		//cun
+		//存储服务及初始化
         putServiceAndInit(service);
         if (!local) {
             addOrReplaceService(service);
@@ -5448,7 +5450,112 @@ public void createServiceIfAbsent(String namespaceId, String serviceName, boolea
 }
 ```
 
+在这个方法中，会先获取服务，如果服务为空就创建服务，然后调用`putServiceAndInit(service);`进行新增服务和初始化，我们进入此方法：
 
+```java
+private void putServiceAndInit(Service service) throws NacosException {
+    //添加服务
+    putService(service);
+    //服务初始化
+    service.init();
+    consistencyService
+            .listen(KeyBuilder.buildInstanceListKey(service.getNamespaceId(), service.getName(), true), service);
+    consistencyService
+            .listen(KeyBuilder.buildInstanceListKey(service.getNamespaceId(), service.getName(), false), service);
+    Loggers.SRV_LOG.info("[NEW-SERVICE] {}", service.toJson());
+}
+```
+
+上面方法中的添加服务`putService(service);`方法十分简单，本质就是将服务存储到一个Map中：
+
+```java
+public void putService(Service service) {
+    if (!serviceMap.containsKey(service.getNamespaceId())) {
+        synchronized (putServiceLock) {
+            if (!serviceMap.containsKey(service.getNamespaceId())) {
+                serviceMap.put(service.getNamespaceId(), new ConcurrentHashMap<>(16));
+            }
+        }
+    }
+    //以service.getName()作为Key进行存储
+    serviceMap.get(service.getNamespaceId()).put(service.getName(), service);
+}
+```
+
+然后我们看一下服务初始化`service.init();`这个方法，这个方法启动了一个线程执行了客户端心跳检测任务
+
+```java
+public void init() {
+    //启动一个线程执行clientBeatCheckTask
+    HealthCheckReactor.scheduleCheck(clientBeatCheckTask);
+    for (Map.Entry<String, Cluster> entry : clusterMap.entrySet()) {
+        entry.getValue().setService(this);
+        entry.getValue().init();
+    }
+}
+```
+
+我们可以进入到这个任务类中，然后在run方法中打上断点，run方法源码如下：
+
+```java
+@Override
+public void run() {
+    try {
+        if (!getDistroMapper().responsible(service.getName())) {
+            return;
+        }
+        if (!getSwitchDomain().isHealthCheckEnabled()) {
+            return;
+        }
+        //获取所有的实例
+        List<Instance> instances = service.allIPs(true);
+        //遍历所有实例检测心跳是否超时（默认15s）
+        // first set health status of instances:
+        for (Instance instance : instances) {
+            if (System.currentTimeMillis() - instance.getLastBeat() > instance.getInstanceHeartBeatTimeOut()) {
+                if (!instance.isMarked()) {
+                    if (instance.isHealthy()) {
+                        //如果超时就设置实例不健康
+                        instance.setHealthy(false);
+                        Loggers.EVT_LOG
+                                .info("{POS} {IP-DISABLED} valid: {}:{}@{}@{}, region: {}, msg: client timeout after {}, last beat: {}",
+                                        instance.getIp(), instance.getPort(), instance.getClusterName(),
+                                        service.getName(), UtilsAndCommons.LOCALHOST_SITE,
+                                        instance.getInstanceHeartBeatTimeOut(), instance.getLastBeat());
+                        getPushService().serviceChanged(service);
+                        ApplicationUtils.publishEvent(new InstanceHeartbeatTimeoutEvent(this, instance));
+                    }
+                }
+            }
+        }
+        if (!getGlobalConfig().isExpireInstance()) {
+            return;
+        }
+        //遍历所有实例
+        // then remove obsolete instances:
+        for (Instance instance : instances) {
+            
+            if (instance.isMarked()) {
+                continue;
+            }
+            //如果实例超时过长（这里默认30s）就删除实例
+            if (System.currentTimeMillis() - instance.getLastBeat() > instance.getIpDeleteTimeout()) {
+                // delete instance
+                Loggers.SRV_LOG.info("[AUTO-DELETE-IP] service: {}, ip: {}", service.getName(),
+                        JacksonUtils.toJson(instance));
+                deleteIp(instance);
+            }
+        }
+    } catch (Exception e) {
+        Loggers.SRV_LOG.warn("Exception while processing client beat time out.", e);
+    }
+}
+```
 
 ### 5.4.5 服务发现
 
+我们这里用入门案例，启动两个用nacos做服务中心的微服务，然后通过feign接口让其中一个服务调用另一个服务的接口，这个例子暂略，写法与4.4.2Feign的应用类似。我们在调用feign方法的地方打上断点作为入口。
+
+> 暂未完结，需要先了解Feign的原理，因此需要先学习Feign的核心原理。
+
+### 5.4.6 配置中心
