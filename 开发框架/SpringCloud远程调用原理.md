@@ -979,3 +979,71 @@ Spring Cloud Feign 中有两个协议规则解析类：一个为 Feign 默认协
 
 ## 五、Feign远程调用的执行流程
 
+在Feign中生成RPC接口JDK动态代理实例涉及到的InvocationHandler调用处理器有很多种，导致Feign远程调用的执行流程稍有不同，但主要步骤是一致的，这里主要介绍两类：
+
+1. 默认的调用处理器FeignInvocationHandler
+2. 与Hystrix有关的HystrixInvocationHandler
+
+### 5.1 FeignInvocationHandler执行流程
+
+Feign的整体流程主要如下：
+
+1. 通过 Spring IOC 容器实例完成动态代理实例的装配
+2. 执行 InvocationHandler 调用处理器的 invoke(...)方法
+3. 执行 MethodHandler 方法处理器的 invoke(...)方法
+4. 通过 feign.Client 客户端成员完成远程 URL 请求执行和获取远程结果
+
+其中MethodHandler默认的方法处理器为SynchronousMethodHandler同步调用处理器，它的 invoke(...)方法主要通过内部 feign.Client 类型的 client 成员实例完成远程 URL 请求执行和获取远程结果。MethodHandler通过什么来完成请求主要由eign.Client 客户端类型决定（比如JDK自带HTTP工具，又或者是HttpClient等等），不同的类型完成 URL 请求处理的具体方式不同。
+
+默认的基于 FeignInvocationHandler 调用处理器的执行流程在运行机制和调用性能上都满足不了生产环境的要求，大致原因有以下两点：
+
+在远程调用过程中没有异常的熔断监测和恢复机制且没有用到高性能的 HTTP 连接池技术。
+
+### 5.2 HystrixInvocationHandler执行流程
+
+HystrixInvocationHandler 是具备 RPC 保护能力的调用处理器，它实现了 InvocationHandler 接口，对接口的 invoke(...)抽象方法的实现源码如下：
+
+```java
+@Override
+public Object invoke(final Object proxy, final Method method, final Object[] args) throws Throwable {
+    //equals等方法处理略
+    //创建一个HystrixCommand命令，对同步方法调用器进行封装。
+  HystrixCommand<Object> hystrixCommand =
+      new HystrixCommand<Object>(setterMethodMap.get(method)) {
+        @Override
+        protected Object run() throws Exception {
+          try {
+            return HystrixInvocationHandler.this.dispatch.get(method).invoke(args);
+          } catch (Exception e) {
+            throw e;
+          } catch (Throwable t) {
+            throw (Error) t;
+          }
+        }
+
+        @Override
+        protected Object getFallback() {
+          //省略异常回调源代码
+      };
+
+      //根据method的返回值类型，返回hystrixCommand或直接执行
+  if (Util.isDefault(method)) {
+    return hystrixCommand.execute();
+  } else if (isReturnsHystrixCommand(method)) {
+    return hystrixCommand;
+  } else if (isReturnsObservable(method)) {
+    // Create a cold Observable
+    return hystrixCommand.toObservable();
+  } else if (isReturnsSingle(method)) {
+    // Create a cold Observable as a Single
+    return hystrixCommand.toObservable().toSingle();
+  } else if (isReturnsCompletable(method)) {
+    return hystrixCommand.toObservable().toCompletable();
+  } else if (isReturnsCompletableFuture(method)) {
+    return new ObservableCompletableFuture<>(hystrixCommand);
+  }
+  return hystrixCommand.execute();
+}
+```
+
+5.3 Feign远程调用的完成流程及特性
