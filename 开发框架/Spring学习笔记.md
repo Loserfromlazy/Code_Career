@@ -2817,15 +2817,7 @@ protected void inject(Object bean, @Nullable String beanName, @Nullable Property
 
 > 关于Bean的依赖注入会在6.2.8循环依赖更详细的说明
 
-### 6.2.6 整体流程和每一步的时序图
-
-经过对以上四个关键点的介绍，我们已经大致的体会了Spring IOC容器从初始化到加载配置到初始化bean和bean注入依赖的整体流程。在这里我将给出整体流程图和每一步的时序图，可以自行跟着去debug，对每一步有更清晰的认知。
-
-
-
-> 流程图时序图正在绘制中，即将更新
-
-### 6.2.7 XML和注解形式的ApplicationContext在IOC构建流程上的区别
+### 6.2.6 XML和注解形式的ApplicationContext在IOC构建流程上的区别
 
 在之前的关键点二中其实就是ClassPathXmlApplicationContext（简称xmlIOC）和AnnotationConfigApplicationContext（简称annoIOC）在流程上的不同。在xmlIOC中加载配置文件创建Bean工厂都是在obtainFreshBeanFactory中完成的，而在annoIOC中则是在构造函数和register中完成的，在annoIOC中的obtainFreshBeanFactory方法是什么都不做的。
 

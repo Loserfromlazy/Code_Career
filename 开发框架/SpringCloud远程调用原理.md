@@ -1,12 +1,14 @@
 # Spring Cloud 远程调用原理
 
-# 一、RPC入门与代理模式
+> 此笔记是基于我的[Spring Cloud笔记](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud.md)上对Feign远程调用进行深入学习的。学习前可以先看一下我的[SpringCloud#4.4Feign远程调用](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud.md#44-feign%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8)。
+
+## 一、RPC入门与代理模式
 
 这里主要通过一个RPC远程调用的客户端实现类的入门案例，并通过代理模式进行改造，来初步了解一下Feign的基本原理。如果不了解代理模式及JDK代理可以看我的笔记[Java代理](https://www.cnblogs.com/yhr520/p/15601620.html)
 
-> 此笔记所有代码都在此项目(LearnSpringCloud)路径[代码地址](https://github.com/Loserfromlazy/LearnSpringCloud/)下的**rpcDemo和rpcDemoProvider**这两个项目中
+> 此笔记`第一章RPC入门与代理模式`的代码都在此项目[LearnSpringCloud](https://github.com/Loserfromlazy/LearnSpringCloud/)下的**rpcDemo和rpcDemoProvider**这两个项目中
 
-## 1.1 入门案例：简单的RPC实现类
+### 1.1 入门案例：简单的RPC实现类
 
 客户端RPC实现类主要有以下功能或职责：
 
@@ -56,14 +58,13 @@ public interface RpcDemoClient {
 
 ```java
 @Slf4j
-@Service
 public class RpcDemoClientImpl implements RpcDemoClient{
     final String contextPath = RpcConstant.CONTEXT;
 
     @Override
     public Result<Boolean> test() {
         //封装URI
-        String uri = "/demo/test";
+        String uri = "/test";
         String restUri = contextPath + uri;
         log.info("restUri={}",restUri);
         //发起HTTP请求
@@ -84,7 +85,7 @@ public class RpcDemoClientImpl implements RpcDemoClient{
     @Override
     public Result<String> testPrint(String input) {
         //封装URI
-        String uri = "/demo/print?input={0}";
+        String uri = "/print?input={0}";
         String uriParams = MessageFormat.format(uri, input);
         String restUri = contextPath + uriParams;
         log.info("restUri={}",restUri);
@@ -120,7 +121,7 @@ void testRpcDemoClient(){
 
 以上我们就完成了一个简单的RPC实现类
 
-## 1.2 静态代理改造
+### 1.2 静态代理改造
 
 通常来说我们在远程调用时会通过代理对目标对象进行委托，在客户端和目标对象起到中介作用。那么为什么要用代理呢？因为我们实际会通过代理类对委托类进行拓展，比如远程调用的负载均衡、熔断、重试功能都要通过代理实现。
 
@@ -134,7 +135,6 @@ void testRpcDemoClient(){
 
 ```java
 @Slf4j
-@Service
 @AllArgsConstructor
 public class ClientStaticProxy implements RpcDemoClient{
     //真正执行的实现类
@@ -170,7 +170,7 @@ void testRpcStaticClientProxy(){
 
 以上就是简单的静态代理的改造。
 
-## 1.3 动态代理改造
+### 1.3 动态代理改造
 
 实际开发中我们肯定不能为每一个实现类实现代理类，所以我们可以通过动态代理的方式实现代理。动态代理改造需要的类跟静态代理类似，只不过代理类是用jdk动态代理生成的。
 
@@ -205,19 +205,777 @@ public void testDynamicClientProxy(){
 > }
 > ```
 
-# 二、模拟Feign的动态代理实现类
+## 二、模拟Feign的动态代理实现类
+
+> 此笔记`第二章模拟Feign的动态代理实现类`的代码都在此项目[LearnSpringCloud](https://github.com/Loserfromlazy/LearnSpringCloud/)下的**rpcDemo和rpcDemoProvider**这两个项目中
 
 下面我们通过简单的模拟Feign的动态代理实现类，来了解一下Feign，为后面学习Feign的相关组件源码做铺垫。
 
-2.1 模拟Feign的方法处理器MethodHandler
+### 2.1 模拟Feign的方法处理器MethodHandler
 
-2.2 模拟Feign的调用处理器InvocationHandler
+由于每一个Feign客户端一般都会包含多个远程调用方法，因此Feign为远程调用封装了一个专门的接口MethodHandler，此接口仅包含一个invoke抽象方法，方法的作用是组装URL，完成REST远程调用，返回JSON结果。主要代码如下：
 
-2.3 模拟Feign的RCP动态代理
+```java
+public interface MyMethodHandler {
 
-2.4 测试远程调用
+    /**
+     * 组装URL，完成REST远程调用，返回JSON结果
+     *
+     * @param args RPC方法的参数
+     * @return REST接口响应
+     * @throws Throwable 异常
+     */
+    Object invoke(Object[] args) throws Throwable;
+}
+```
 
-2.5 feign的弹性RPC客户端实现类
+实现类如下：
+
+```java
+@Slf4j
+public class MyMethodHandlerImpl implements MyMethodHandler{
+
+    /**
+     * REST URL的前半部分，来自Feign接口的类级别注释
+     * 比如：“http://www.demo.com:8111/demo”
+     */
+    final String contextPath;
+    /**
+     * REST URL的后半部分，来自Feign接口的方法级别注释
+     * 比如："/print"或"/test"
+     */
+    final String url;
+
+    public MyMethodHandlerImpl(String contextPath, String url) {
+        this.contextPath = contextPath;
+        this.url = url;
+    }
+
+    @Override
+    public Object invoke(Object[] args) throws Throwable {
+        String restUrl = contextPath + MessageFormat.format(url,args);
+        log.info("restUrl={}",restUrl);
+        String response = HttpUtils.getRequest(restUrl);
+        Result result = JSONObject.parseObject(response, Result.class);
+        return result;
+    }
+}
+```
+
+### 2.2 模拟Feign的调用处理器InvocationHandler
+
+调用处理器是一个相对简单的类，它里面有一个Map成员dispatch，保存着RPC方法反射实例和MethodHandler之间的映射。它是通过 Java 反射扫描远程调用接口中的每一个方法的反射注解，组装出一个对应的 Map 映射实例，它的 key 值为 RPC 方法的反射实例，value 值为 MockRpcMethodHandler 方法的处理器实例。主要代码如下：
+
+```java
+public class MyInvocationHandler implements InvocationHandler {
+
+    /**
+     * 远程调用的映射，根据方法名称，分发方法处理器
+     * key：Feign接口的方法名称；value：方法处理器
+     */
+    private Map<Method,MyMethodHandler> dispatch;
+
+    public static <T> T newInstance(Class<T> clazz){
+        //获取contextPath
+        RestController controllerAnno = clazz.getAnnotation(RestController.class);
+        if (controllerAnno == null){
+            return null;
+        }
+        String contextPath = controllerAnno.value();
+        MyInvocationHandler invocationHandler = new MyInvocationHandler();
+        invocationHandler.dispatch = new LinkedHashMap<>();
+        //遍历获取url
+        for (Method method : clazz.getMethods()) {
+            RequestMapping requestMapping = method.getAnnotation(RequestMapping.class);
+            if (requestMapping == null){
+                continue;
+            }
+            String uri = requestMapping.name();
+            //缓存MethodHandler
+            MyMethodHandler methodHandler = new MyMethodHandlerImpl(contextPath,uri);
+            invocationHandler.dispatch.put(method,methodHandler);
+        }
+        T proxy = (T) Proxy.newProxyInstance(clazz.getClassLoader(), new Class[]{clazz}, invocationHandler);
+        return proxy;
+    }
 
 
+
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        if ("equals".equals(method.getName())){
+            Object o = args.length > 0 && args[0] != null ? args[0] : null;
+            return equals(o);
+        }else if ("hashCode".equals(method.getName())){
+            return hashCode();
+        }else if ("toString".equals(method.getName())){
+            return toString();
+        }
+        //从dispatch映射中取出MyMethodHandler，并进行远程调用
+        MyMethodHandler methodHandler = dispatch.get(method);
+        return methodHandler.invoke(args);
+    }
+}
+```
+
+此类的newInstance方法是一个静态方法，用于组装和完成dispatch的映射，最后通过jdk的Proxy.newProxyInstance方法生成代理对象并返回。
+
+### 2.3 测试远程调用
+
+下面我们来进行测试，我们就使用1.1中的RpcDemoClient，但是我们需要加上注解，因为我们现在是通过注解获取的URI，代码如下：
+
+```java
+@RestController(RpcConstant.CONTEXT)
+public interface RpcDemoClient {
+
+    //这里我们是简单实现，所以用name属性标识url，并且用{?}表示参数
+    @RequestMapping(name = "/test")
+    Result<Boolean> test();
+
+    @RequestMapping(name = "/print?input={0}")
+    Result<String> testPrint(String input);
+}
+```
+
+测试类代码如下：
+
+```java
+@Test
+public void testMyFeignImpl(){
+    RpcDemoClient client = MyInvocationHandler.newInstance(RpcDemoClient.class);
+    Result<Boolean> test = client.test();
+    System.out.println(test);
+    Result<String> stringResult = client.testPrint("123456");
+    System.out.println(stringResult);
+}
+```
+
+Feign的RPC客户端实现类是一种JDK动态代理类，能完成对简单RPC类的动态代理，其次Feign通过对InvocationHandler、MethodHandler完成了对RPC被委托类的增强，其InvocationHandler可以通过使用Ribbon、Hystrix使Feign客户端具备负载均衡、熔断等能力。下面我们来正式的看一下Feign的组件。
+
+## 三、Feign的重要组件
+
+### 3.1 Feign的调用处理器组件
+
+通过JDK动态代理生成代理类的核心步骤就是定制一个调用处理器，实现JDK的反射包下的InvocationHandler接口，并且实现invoke方法。
+
+在Feign中提供了一个默认的调用处理器，名为FeignInvocationHandler，在feign-core核心包中，当然此类是可以替换的，如果与Hystrix一起使用就会被替换为HystrixInvocationHandler，此类在feign-hystrix的jar包中。
+
+FeignInvocationHandler的源码如下：
+
+```java
+//此类是ReflectiveFeign的内部类，是默认的调用处理器
+static class FeignInvocationHandler implements InvocationHandler {
+
+  private final Target target;
+    //method和MethodHandler的映射
+  private final Map<Method, MethodHandler> dispatch;
+	//构造函数
+  FeignInvocationHandler(Target target, Map<Method, MethodHandler> dispatch) {
+    this.target = checkNotNull(target, "target");
+    this.dispatch = checkNotNull(dispatch, "dispatch for %s", target);
+  }
+
+  @Override
+  public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+    if ("equals".equals(method.getName())) {
+      try {
+        Object otherHandler =
+            args.length > 0 && args[0] != null ? Proxy.getInvocationHandler(args[0]) : null;
+        return equals(otherHandler);
+      } catch (IllegalArgumentException e) {
+        return false;
+      }
+    } else if ("hashCode".equals(method.getName())) {
+      return hashCode();
+    } else if ("toString".equals(method.getName())) {
+      return toString();
+    }
+	//从映射中取得MethodHandler的实例，然后调用MethodHandler的invoke方法
+    return dispatch.get(method).invoke(args);
+  }
+
+  //重写toString等方法略。。。
+}
+```
+
+### 3.2 Feign的方法处理器组件
+
+Feign的MethodHandler是feign的自定义接口，在InvocationHandlerFactory内部，默认有两个实现类DefaultMethodHandler和SynchronousMethodHandler，源码如下：
+
+```java
+public interface InvocationHandlerFactory {
+
+  InvocationHandler create(Target target, Map<Method, MethodHandler> dispatch);
+    
+  interface MethodHandler {
+	//完成URL请求
+    Object invoke(Object[] argv) throws Throwable;
+  }
+
+  static final class Default implements InvocationHandlerFactory {
+
+    @Override
+    public InvocationHandler create(Target target, Map<Method, MethodHandler> dispatch) {
+      return new ReflectiveFeign.FeignInvocationHandler(target, dispatch);
+    }
+  }
+}
+```
+
+![image-20220905124804460](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220905124804460.png)
+
+其中内置的 SynchronousMethodHandler 同步方法处理实现类是 Feign 的一个重要类，提供了基本的远程URL同步请求响应处理，源码如下：
+
+```java
+final class SynchronousMethodHandler implements MethodHandler {
+
+  private static final long MAX_RESPONSE_BUFFER_SIZE = 8192L;
+
+  //RPC远程调用的元数据，保存了RPC方法的配置键，格式为“接口名#方法名(形参表)”；其次保存了RPC方法的请求模板（包括URL、请求方法等），然后还保存了returnType返回类型和一些其他属性
+  private final MethodMetadata metadata;
+  //RPC远程调用Java接口的元数据，保存了RPC接口的类名称服务名称等信息，也就是说@FeignClient注解中的配置主要属性值都在target实例中
+  private final Target<?> target;
+  private final Client client;//Feign的客户端实例，执行REST的请求和处理响应
+  private final Retryer retryer;
+  private final List<RequestInterceptor> requestInterceptors;//请求拦截器
+  private final Logger logger;
+  private final Logger.Level logLevel;
+  private final RequestTemplate.Factory buildTemplateFromArgs;
+  private final Options options;
+  private final Decoder decoder;//结果解码器
+  private final ErrorDecoder errorDecoder;
+  private final boolean decode404;//是否反编码404
+  //其余属性略。。。
+    
+  //执行rpc请求，解析响应信息
+  @Override
+  public Object invoke(Object[] argv) throws Throwable {
+    //生成requestTemplate实例
+    RequestTemplate template = buildTemplateFromArgs.create(argv);
+    Options options = findOptions(argv);
+    Retryer retryer = this.retryer.clone();
+    while (true) {
+      try {
+          //执行REST请求和处理响应
+        return executeAndDecode(template, options);
+      } catch (RetryableException e) {
+        try {
+          retryer.continueOrPropagate(e);
+        } catch (RetryableException th) {
+          Throwable cause = th.getCause();
+          if (propagationPolicy == UNWRAP && cause != null) {
+            throw cause;
+          } else {
+            throw th;
+          }
+        }
+        if (logLevel != Logger.Level.NONE) {
+          logger.logRetry(metadata.configKey(), logLevel);
+        }
+        continue;
+      }
+    }
+  }
+  
+  Object executeAndDecode(RequestTemplate template, Options options) throws Throwable {
+    //通过请求模板实例生成目标request的请求实例，主要完成请求的URL、参数和请求头等内容的封装。
+    Request request = targetRequest(template);
+
+    if (logLevel != Logger.Level.NONE) {
+      logger.logRequest(metadata.configKey(), logLevel, request);
+    }
+
+    Response response;
+    long start = System.nanoTime();
+    try {
+      //发起真正的RPC远程调用
+      response = client.execute(request, options);
+    } catch (IOException e) {
+      if (logLevel != Logger.Level.NONE) {
+        logger.logIOException(metadata.configKey(), logLevel, e, elapsedTime(start));
+      }
+      throw errorExecuting(request, e);
+    }
+    long elapsedTime = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+    boolean shouldClose = true;
+    try {
+      if (logLevel != Logger.Level.NONE) {
+        response =
+            logger.logAndRebufferResponse(metadata.configKey(), logLevel, response, elapsedTime);
+      }
+      if (Response.class == metadata.returnType()) {
+        if (response.body() == null) {
+          return response;
+        }
+        if (response.body().length() == null ||
+            response.body().length() > MAX_RESPONSE_BUFFER_SIZE) {
+          shouldClose = false;
+          return response;
+        }
+        // Ensure the response body is disconnected
+        byte[] bodyData = Util.toByteArray(response.body().asInputStream());
+        return response.toBuilder().body(bodyData).build();
+      }
+      if (response.status() >= 200 && response.status() < 300) {
+        if (void.class == metadata.returnType()) {
+          return null;
+        } else {
+          //将请求结果进行解码
+          Object result = decode(response);
+          shouldClose = closeAfterDecode;
+          return result;
+        }
+      } else if (decode404 && response.status() == 404 && void.class != metadata.returnType()) {
+        Object result = decode(response);
+        shouldClose = closeAfterDecode;
+        return result;
+      } else {
+        throw errorDecoder.decode(metadata.configKey(), response);
+      }
+    } catch (IOException e) {
+      if (logLevel != Logger.Level.NONE) {
+        logger.logIOException(metadata.configKey(), logLevel, e, elapsedTime);
+      }
+      throw errorReading(request, response, e);
+    } finally {
+      if (shouldClose) {
+        ensureClosed(response.body());
+      }
+    }
+  }
+    //其余方法略。。。
+}
+```
+
+Feign的SynchronousMethodHandler 同步方法处理除了上面的属性和方法还有一个内部工厂类，源码如下：
+
+```java
+static class Factory {
+
+  private final Client client;
+  private final Retryer retryer;
+  private final List<RequestInterceptor> requestInterceptors;
+  private final Logger logger;
+  private final Logger.Level logLevel;
+  private final boolean decode404;
+  private final boolean closeAfterDecode;
+  private final ExceptionPropagationPolicy propagationPolicy;
+
+  //省略构造器
+
+  //工厂的默认创建方法，创建一个方法调用器
+  public MethodHandler create(Target<?> target,
+                              MethodMetadata md,
+                              RequestTemplate.Factory buildTemplateFromArgs,
+                              Options options,
+                              Decoder decoder,
+                              ErrorDecoder errorDecoder) {
+    return new SynchronousMethodHandler(target, client, retryer, requestInterceptors, logger,
+        logLevel, md, buildTemplateFromArgs, options, decoder,
+        errorDecoder, decode404, closeAfterDecode, propagationPolicy);
+  }
+}
+```
+
+### 3.3 Feign的客户端组件
+
+客户端组件是feign中的重要组件，负责最终HTTP请求的执行，核心逻辑是发送Request请求到服务器，接收到Response后进行解码，并返回结果。
+
+feign.Client是顶层接口，源码如下：
+
+```java
+public interface Client {
+  /**
+   * Executes a request against its {@link Request#url() url} and returns a response.
+   * 提交HTTP请求，并且接收response响应后进行解码
+   * @param request safe to replay.
+   * @param options options to apply to this request.
+   * @return connected response, {@link Response.Body} is absent or unread.
+   * @throws IOException on a network error connecting to {@link Request#url()}.
+   */
+  Response execute(Request request, Options options) throws IOException;
+}
+```
+
+此接口不同的实现类其内部的HTTP的技术是不同的：
+
+- Client.Default:默认的实现类，使用JDK的HttpURLConnection类提交HTTP请求
+
+  ![image-20220905131638800](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220905131638800.png)
+
+- ApacheHttpClient:内部使用Apache HttpClient开源组件提交HTTP请求
+
+  客户端实现类 ApacheHttpClient 处于 feign-httpclient 独立 JAR 包中，如果使用，还需引入配套版本的 JAR 包依赖：
+
+  ~~~xml
+  <dependency>
+   <groupId>io.github.openfeign</groupId>
+   <artifactId>feign-httpclient</artifactId>
+   <version>${feign-httpclient.version}</version>
+  </dependency>
+  <dependency>
+   <groupId>org.apache.httpcomponents</groupId>
+   <artifactId>httpclient</artifactId>
+   <version>${httpclient.version}</version>
+  </dependency>
+  ~~~
+
+  在配置文件中将配置项 feign.httpclient.enabled 的值设置为 true，表示需要启用ApacheHttpClient。
+
+- OkHttpClient:内部使用OkHttp3开源组件提交HTTP请求
+
+  OkHttp3 组件是 Square公司开发的，用于替代 HttpUrlConnection 和 ApacheHttpClient 的高性能 HTTP 组件。OkHttp3 较好地支持 SPDY 协议（SPDY 是 Google 开发的基于 TCP 的传输层协议。
+
+- LoadBalancerFeignClient:内部使用Ribbon负载均衡技术完成HTTP请求处理
+
+  该客户端类处于 Feign 核心 JAR 包中，在内部使用 Ribbon 开源组件实现多个 Provider 实例之间的负载均衡。它的内部有一个封装的 delegate 被委托客户端成员，该成员才是最终的 HTTP请求提交者。Ribbon 负载均衡组件计算出合适的服务端 Provider 实例之后，由 delegate 被委托客户端完成到 Provider 服务端之间的 HTTP 请求。
+
+## 四、Feign的动态代理的创建流程
+
+### 4.1 Feign的整体流程
+
+根据上面的学习，我们能大概了解feign的工作原理，在应用程序启动的初始化过程中，Feign完成了以下工作：
+
+1. 对于每一个RPC远程调用的Java接口，Feign根据@FeignClient注解生成本地JDK动态代理实例。
+2. 对于Java接口中的每一个方法，Feign根据Spring MVC类型的注解生成方法处理器实例，该实例内部有一个RequestTemplate请求模板实例
+
+在远程调用的过程中，Feign完成了以下工作：
+
+1. Feign使用远程方法调用的实际参数替换掉RequestTemplate请求模板实例中的参数，生成最终的HTTP请求
+2. 将HTTP请求通过feign.Client客户端实例发送到Provider服务端。
+
+综上，Feign的整体运行流程如下：
+
+1. 通过应用启动类上的@EnableFeignClients 注解开启 Feign 的装配和远程代理实例创建。在@EnableFeignClients 注解源码中可以看到导入了 FeignClientsRegistrar 类，该类用于扫描@FeignClient 注解过的 RPC 接口。
+
+   ```java
+   //略。。。
+   @Import(FeignClientsRegistrar.class)
+   public @interface EnableFeignClients {
+   //略。。。
+   }
+   ```
+
+2. 通过对@FeignClient 注解 RPC 接口扫描创建远程调用的动态代理实例。FeignClientsRegistrar类会进行包扫描，扫描所有包下@FeignClient注解过的接口，创建 RPC接口的FactoryBean工厂类实例，并将这些FactoryBean 注入 Spring IOC 容器中，当其他类需要注入Feign客户端时，Spring 就会通过注册的 FactoryBean 工厂类实例的 getObject()方法获取 RPC 接口的动态代理实例。部分源码如下：
+
+   ```java
+   //FeignClientsRegistrar#registerFeignClients方法部分源码，省略其余代码
+   for (BeanDefinition candidateComponent : candidateComponents) {
+      if (candidateComponent instanceof AnnotatedBeanDefinition) {
+         // verify annotated class is an interface
+         AnnotatedBeanDefinition beanDefinition = (AnnotatedBeanDefinition) candidateComponent;
+         AnnotationMetadata annotationMetadata = beanDefinition.getMetadata();
+         Assert.isTrue(annotationMetadata.isInterface(),
+               "@FeignClient can only be specified on an interface");
+   
+         Map<String, Object> attributes = annotationMetadata
+               .getAnnotationAttributes(
+                     FeignClient.class.getCanonicalName());
+   
+         String name = getClientName(attributes);
+         registerClientConfiguration(registry, name,
+               attributes.get("configuration"));
+   	//此方法是类的内部方法，此方法主要作用是将FeignClient注解属性封装、注册到Spring IOC容器，通过Spring提供的工具类BeanDefinitionReaderUtils#registerBeanDefinition进行注册
+         registerFeignClient(registry, annotationMetadata, attributes);
+      }
+   }
+   
+   //FeignClientsRegistrar#registerFeignClient方法源码，省略其余代码
+   private void registerFeignClient(BeanDefinitionRegistry registry,
+   			AnnotationMetadata annotationMetadata, Map<String, Object> attributes) {
+       String className = annotationMetadata.getClassName();
+       //将FeignClient注解的属性等相关信息封装进BeanDefinitionBuilder，注意此时封装的类型是FeignClientFactoryBean.class
+       BeanDefinitionBuilder definition = BeanDefinitionBuilder
+           .genericBeanDefinition(FeignClientFactoryBean.class);
+       validate(attributes);
+       definition.addPropertyValue("url", getUrl(attributes));
+       definition.addPropertyValue("path", getPath(attributes));
+       String name = getName(attributes);
+       definition.addPropertyValue("name", name);
+       String contextId = getContextId(attributes);
+       definition.addPropertyValue("contextId", contextId);
+       definition.addPropertyValue("type", className);
+       definition.addPropertyValue("decode404", attributes.get("decode404"));
+       definition.addPropertyValue("fallback", attributes.get("fallback"));
+       definition.addPropertyValue("fallbackFactory", attributes.get("fallbackFactory"));
+       definition.setAutowireMode(AbstractBeanDefinition.AUTOWIRE_BY_TYPE);
+   
+       String alias = contextId + "FeignClient";
+       AbstractBeanDefinition beanDefinition = definition.getBeanDefinition();
+   
+       boolean primary = (Boolean) attributes.get("primary"); // has a default, won't be
+       // null
+   
+       beanDefinition.setPrimary(primary);
+   
+       String qualifier = getQualifier(attributes);
+       if (StringUtils.hasText(qualifier)) {
+           alias = qualifier;
+       }
+   
+       BeanDefinitionHolder holder = new BeanDefinitionHolder(beanDefinition, className,
+                                                              new String[] { alias });
+       BeanDefinitionReaderUtils.registerBeanDefinition(holder, registry);
+   }
+   ```
+
+   在创建 RPC 接口的动态代理实例时，Feign还会为每一个 RPC 接口创建一个调用处理器，也会为接口的每一个 RPC 方法创建一个方法处理器，并且将方法处理器缓存在调用处理器的 dispatch映射成员中。同时还会生成一个RequesTemplate 请求模板实例，RequestTemplate 中包含请求的所有信息，如请求 URL、请求类型、请求参数等。
+
+3. 发生RPC调用时，通过动态代理实例类完成远程Provider的 HTTP 调用，Feign会根据 RPC 方法的反射实例从调用处理器的dispatch 成员中取得方法处理器，然后由 MethodHandler 方法处理器开始 HTTP 请求处理。
+
+   MethodHandler 会结合实际的调用参数，通过 RequesTemplate 模板实例生成 Request 请求实例。最后，将 Request 请求实例交给 feign.Client 客户端实例进一步完成 HTTP 请求处理。
+
+4. 在完成远程 HTTP 调用前需要进行客户端负载均衡等处理，生产环境下，Feign 必须和 Ribbon 结合在一起使用，所以方法处理器MethodHandler的客户端client成员必须是具备负载均衡能力的LoadBalancerFeignClient 类型，而不是完成 HTTP 请求提交的 ApacheHttpClient 等类型。只有在负载均衡计算出最佳的 Provider 实例之后，才能开始HTTP 请求的提交。
+
+### 4.2 RPC动态代理容器实例的FactiryBean
+
+为了方便 Feign 的 RPC 客户端动态代理实例的使用，还需要将其注册到 Spring IOC 容器，以方便使用者通过@Resource 或@Autoware 注解将其注入其他的依赖属性。Feign 的 RPC 客户端动态代理 IOC 容器实例只能通过 FactoryBean 方式创建，原因有两点：
+
+- 代理对象为通过 JDK 反射机制动态创建的 Bean，不是直接定义的普通实现类；
+- 它配置的属性值比较多，而且是通过 @FeignClient 注解配置完成的
+
+> FactoryBean 通常是用来创建比较复杂的bean，一般的bean 直接用xml配置和基于Java配置即可，但如果一个bean的创建过程中涉及到很多其他的bean 和复杂的逻辑，用xml配置比较困难，这时可以考虑用FactoryBean。FactoryBean 注册到容器之后，从Spring上下文通过ID或者类型获取IOC容器Bean时，获取的实际上是FactoryBean的getObject()返回的对象，而不是FactoryBean本身.
+
+Feign 提供了一个用于获取 RPC 容器实例的工厂类，名为 FeignClientFactoryBean 类，部分源码如下：
+
+```java
+class FeignClientFactoryBean
+      implements FactoryBean<Object>, InitializingBean, ApplicationContextAware {
+   private Class<?> type;//RPC接口的class对象
+   private String name;//RPC接口配置的远程provider微服务名称
+   private String url;//RPC接口配置的url值，由@FeignClient注解配置
+   private String contextId;
+   private String path;//RPC接口配置的path值，由@FeignClient注解配置
+   private boolean decode404;
+   private ApplicationContext applicationContext;
+   private Class<?> fallback = void.class;
+   private Class<?> fallbackFactory = void.class;
+   
+    //获取IOC容器的Feign.Builder建造者Bean
+   protected Feign.Builder feign(FeignContext context) {
+       FeignLoggerFactory loggerFactory = get(context, FeignLoggerFactory.class);
+       Logger logger = loggerFactory.create(this.type);
+
+       // @formatter:off
+       //从IOC容器中获取Feign.Builder实例，并且设置编解码器、日志器、方法解析器
+       Feign.Builder builder = get(context, Feign.Builder.class)
+           // required values
+           .logger(logger)
+           .encoder(get(context, Encoder.class))
+           .decoder(get(context, Decoder.class))
+           .contract(get(context, Contract.class));
+       // @formatter:on
+       configureFeign(context, builder);
+       return builder;
+   }
+    
+   //通过ID或类型获取IOC容器的Bean时调用
+   @Override
+	public Object getObject() throws Exception {
+        //委托给getTarget()方法
+		return getTarget();
+	} 
+    //委托方法：获取RPC动态代理的Bean
+    <T> T getTarget() {
+		FeignContext context = this.applicationContext.getBean(FeignContext.class);
+		Feign.Builder builder = feign(context);
+
+		if (!StringUtils.hasText(this.url)) {
+			if (!this.name.startsWith("http")) {
+				this.url = "http://" + this.name;
+			}
+			else {
+				this.url = this.name;
+			}
+			this.url += cleanPath();
+			return (T) loadBalance(builder, context,
+					new HardCodedTarget<>(this.type, this.name, this.url));
+		}
+		if (StringUtils.hasText(this.url) && !this.url.startsWith("http")) {
+			this.url = "http://" + this.url;
+		}
+		String url = this.url + cleanPath();
+		Client client = getOptional(context, Client.class);
+		if (client != null) {
+			if (client instanceof LoadBalancerFeignClient) {
+				// not load balancing because we have a url,
+				// but ribbon is on the classpath, so unwrap
+				client = ((LoadBalancerFeignClient) client).getDelegate();
+			}
+			builder.client(client);
+		}
+		Targeter targeter = get(context, Targeter.class);
+		return (T) targeter.target(this, builder, context,
+				new HardCodedTarget<>(this.type, this.name, url));
+	}
+   //其余方法略。。。
+}
+	
+```
+
+在扫描注解时就会将FeignClient包装成FeignClientFactoryBean（在上面4.1中的总流程的第二步源码中有体现），注入到容器中，在使用时获取FactoryBean的getObject()返回的对象。
+
+### 4.3 Feign.Builder建造者容器实例
+
+当从 Spring IOC 容器获取 RPC 接口的动态代理实例时，也就是当 FeignClientFactoryBean 的getObject()方法被调用时，其调用的 getTarget()方法首先从 IOC 容器获取配置好的 Feign.Builder建造者容器实例，然后通过 Feign.Builder 建造者容器实例的 target()方法完成 RPC 动态代理实例的创建。源码见上一小节4.2。
+
+Feign.Builder 类是 feign.Feign 抽象类的一个内部类，部分源码如下：
+
+```java
+public abstract class Feign {
+
+  //建造者方法
+  public static Builder builder() {
+    return new Builder();
+  }
+    
+  //内部类：建造者类
+  public static class Builder {
+      public <T> T target(Class<T> apiType, String url) {
+          return target(new HardCodedTarget<T>(apiType, url));
+      }
+	  //创建RPC客户端的动态代理实例	
+      public <T> T target(Target<T> target) {
+          return build().newInstance(target);
+      }
+      //建造方法
+      public Feign build() {
+          //方法处理器工厂的实例
+          SynchronousMethodHandler.Factory synchronousMethodHandlerFactory =
+              new SynchronousMethodHandler.Factory(client, retryer, requestInterceptors, logger,
+                  logLevel, decode404, closeAfterDecode, propagationPolicy);
+          //RPC方法解析器
+          ParseHandlersByName handlersByName =
+              new ParseHandlersByName(contract, options, encoder, decoder, queryMapEncoder,
+                  errorDecoder, synchronousMethodHandlerFactory);
+          //反射式Feign实例
+          return new ReflectiveFeign(handlersByName, invocationHandlerFactory, queryMapEncoder);
+    }
+    //其余方法略。。。
+  }
+  
+  public abstract <T> T newInstance(Target<T> target);
+  //其余方法略。。。
+}
+```
+
+当FeignClientFactoryBean工厂类的getObject()方法被调用后，通过Feign.Builder容器实例的target()方法完成 RPC 动态代理实例的创建。然后target方法首先调用内部的 build()方法创建一个 Feign 实例，然后通过该实例的 newInstance(...)方法（注意这里的newInstance是抽象类Feign的抽象方法，最终会在其实现类中通过反射创建代理对象）创建最终的 RPC 动态代理实例。
+
+### 4.4 默认的RPC动态代理实例的创建流程
+
+默认情况下，Feign.Builder 建造者实例的 target()方法会调用自身的 build()方法创建一个ReflectiveFeign（反射式 Feign）实例，然后调用该实例的 newInstance()方法创建远程接口最终的JDK 动态代理实例。
+
+我们可以看一下ReflectiveFeign的源码：
+
+```java
+public class ReflectiveFeign extends Feign {
+
+  private final ParseHandlersByName targetToHandlersByName;
+  private final InvocationHandlerFactory factory;
+  private final QueryMapEncoder queryMapEncoder;
+  
+  @Override
+  public <T> T newInstance(Target<T> target) {
+    //方法名和MethodHandler的映射
+    Map<String, MethodHandler> nameToHandler = targetToHandlersByName.apply(target);
+    Map<Method, MethodHandler> methodToHandler = new LinkedHashMap<Method, MethodHandler>();
+    List<DefaultMethodHandler> defaultMethodHandlers = new LinkedList<DefaultMethodHandler>();
+    //方法反射对象和MethodHandler的映射
+    for (Method method : target.type().getMethods()) {
+      if (method.getDeclaringClass() == Object.class) {
+        continue;
+      } else if (Util.isDefault(method)) {
+        DefaultMethodHandler handler = new DefaultMethodHandler(method);
+        defaultMethodHandlers.add(handler);
+        methodToHandler.put(method, handler);
+      } else {
+        methodToHandler.put(method, nameToHandler.get(Feign.configKey(target.type(), method)));
+      }
+    }
+    //创建一个InvocationHandler调用处理器和方法处理器类似，它的创建也是通过工厂模式完成的。默认的InvocationHandler实例是通过InvocationHandlerFactory工厂类完成的
+    InvocationHandler handler = factory.create(target, methodToHandler);
+    //JDK动态代理生成代理对象
+    T proxy = (T) Proxy.newProxyInstance(target.type().getClassLoader(),
+        new Class<?>[] {target.type()}, handler);
+
+    for (DefaultMethodHandler defaultMethodHandler : defaultMethodHandlers) {
+      defaultMethodHandler.bindTo(proxy);
+    }
+    return proxy;
+  }
+  //其余代码略。。。
+}
+```
+
+从上面我们可以看到此方法步骤跟我们之前的简单模拟的流程类似：
+
+1. 首先进行方法解析，进行方法名称和方法处理器的映射
+2. 创建方法反射对象和MethodHandler的映射
+3. 创建一个InvocationHandler
+4. 创建一个动态代理对象
+
+下面我们来看看newInstance一开始的TargetToHandlersByName#apply方法是如何做名称映射的。TargetToHandlersByName是ReflectiveFeign的内部类作用是方法解析器，其apply方法源码如下：
+
+```java
+public Map<String, MethodHandler> apply(Target key) {
+  //解析RPC方法元数据，返回一个方法元数据列表
+  List<MethodMetadata> metadata = contract.parseAndValidatateMetadata(key.type());
+  Map<String, MethodHandler> result = new LinkedHashMap<String, MethodHandler>();
+  //遍历RPC方法元数据
+  for (MethodMetadata md : metadata) {
+    BuildTemplateByResolvingArgs buildTemplate;
+    if (!md.formParams().isEmpty() && md.template().bodyTemplate() == null) {
+      buildTemplate = new BuildFormEncodedTemplateFromArgs(md, encoder, queryMapEncoder);
+    } else if (md.bodyIndex() != null) {
+      buildTemplate = new BuildEncodedTemplateFromArgs(md, encoder, queryMapEncoder);
+    } else {
+      buildTemplate = new BuildTemplateByResolvingArgs(md, queryMapEncoder);
+    }
+    //通过方法处理器工厂factory创建SynchronousMethodHandler同步方法处理器实例
+    result.put(md.configKey(),
+        factory.create(key, md, buildTemplate, options, decoder, errorDecoder));
+  }
+  return result;
+}
+```
+
+从上面源码可知，TargetToHandlersByName是通过方法处理器工厂factory的create方法完成的，而默认的方法处理器工厂定义在SynchronousMethodHandler类中，我们可以直接跟进去，源码如下：
+
+```java
+static class Factory {
+
+  private final Client client;
+  private final Retryer retryer;
+  private final List<RequestInterceptor> requestInterceptors;
+  private final Logger logger;
+  private final Logger.Level logLevel;
+  private final boolean decode404;
+  private final boolean closeAfterDecode;
+  private final ExceptionPropagationPolicy propagationPolicy;
+
+  //构造函数略。。。
+
+  public MethodHandler create(Target<?> target,
+                              MethodMetadata md,
+                              RequestTemplate.Factory buildTemplateFromArgs,
+                              Options options,
+                              Decoder decoder,
+                              ErrorDecoder errorDecoder) {
+    return new SynchronousMethodHandler(target, client, retryer, requestInterceptors, logger,
+        logLevel, md, buildTemplateFromArgs, options, decoder,
+        errorDecoder, decode404, closeAfterDecode, propagationPolicy);
+  }
+}
+```
+
+从上面源码可见默认方法处理器工厂类 Factory 的 create()方法创建的正是同步方法处理器SynchronousMethodHandler 的实例。
+
+### 4.5 Contract远程调用协议规则类
+
+在通过 ReflectiveFeign.newInstance()方法创建本地 JDK Proxy 实例时，首先需要调用方法解析器 ParseHandlersByName 的 apply()方法，获取方法名和方法处理器的映射。在ParseHandlersByName.apply()方法中，需要通过Contract协议规则类将远程调用Feign接口中的所有方法配置和注解解析成一个` List<MethodMetadata>`方法元数据列表。
+
+Spring Cloud Feign 中有两个协议规则解析类：一个为 Feign 默认协议规则解析类（DefaultContract）；另一个为 SpringMvcContract 协议规则解析类，后者用于解析使用了 Spring MVC 规则配置 RPC方法。虽然Feign 有一套自己的默认协议规则，定义了一系列 RPC 方法的配置注解，用于 RPC 方法所对应的 HTTP 请求相关的参数，但是为了降低学习成本，Spring Cloud并没有推荐采用 Feign 自己的协议规则注解来进行 RPC 接口配置，而是推荐部分 Spring MVC 协议规则注解来进行 RPC 接口的配置，并且通过SpringMvcContract 协议规则解析类进行解析。
+
+## 五、Feign远程调用的执行流程
 
