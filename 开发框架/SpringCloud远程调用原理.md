@@ -1004,46 +1004,151 @@ Feign的整体流程主要如下：
 HystrixInvocationHandler 是具备 RPC 保护能力的调用处理器，它实现了 InvocationHandler 接口，对接口的 invoke(...)抽象方法的实现源码如下：
 
 ```java
-@Override
-public Object invoke(final Object proxy, final Method method, final Object[] args) throws Throwable {
-    //equals等方法处理略
-    //创建一个HystrixCommand命令，对同步方法调用器进行封装。
-  HystrixCommand<Object> hystrixCommand =
-      new HystrixCommand<Object>(setterMethodMap.get(method)) {
-        @Override
-        protected Object run() throws Exception {
-          try {
-            return HystrixInvocationHandler.this.dispatch.get(method).invoke(args);
-          } catch (Exception e) {
-            throw e;
-          } catch (Throwable t) {
-            throw (Error) t;
-          }
+final class HystrixInvocationHandler implements InvocationHandler {
+
+    private final Map<Method, MethodHandler> dispatch;
+    @Override
+    public Object invoke(final Object proxy, final Method method, final Object[] args) throws Throwable {
+        //equals等方法处理略
+        //创建一个HystrixCommand命令，对同步方法调用器进行封装。
+        HystrixCommand<Object> hystrixCommand =
+            new HystrixCommand<Object>(setterMethodMap.get(method)) {
+            @Override
+            protected Object run() throws Exception {
+                try {
+                    //invoke方法会创建HystrixCommand实例，对从dispatch中获取的SynchronousMethodHandler实例进行封装，然后对 RPC 方法实例 method 进行判断，判断是直接返回 hystrixCommand 命令实例，还是立即执行其 execute()方法
+                    return HystrixInvocationHandler.this.dispatch.get(method).invoke(args);
+                } catch (Exception e) {
+                    throw e;
+                } catch (Throwable t) {
+                    throw (Error) t;
+                }
+            }
+
+            @Override
+            protected Object getFallback() {
+                //省略异常回调源代码
+            };
+
+            //根据method的返回值类型，返回hystrixCommand或直接执行它的execute()方法
+            if (Util.isDefault(method)) {
+                return hystrixCommand.execute();
+            } else if (isReturnsHystrixCommand(method)) {
+                return hystrixCommand;
+            } else if (isReturnsObservable(method)) {
+                // Create a cold Observable
+                return hystrixCommand.toObservable();
+            } else if (isReturnsSingle(method)) {
+                // Create a cold Observable as a Single
+                return hystrixCommand.toObservable().toSingle();
+            } else if (isReturnsCompletable(method)) {
+                return hystrixCommand.toObservable().toCompletable();
+            } else if (isReturnsCompletableFuture(method)) {
+                return new ObservableCompletableFuture<>(hystrixCommand);
+            }
+            return hystrixCommand.execute();
         }
+    }
+```
 
-        @Override
-        protected Object getFallback() {
-          //省略异常回调源代码
-      };
+HystrixCommand 具备熔断、隔离、回退等能力，如果它的 run()方法执行发生异常，就会执行 getFallback()失败回调方法。也就是说如果 MethodHandler 内的 RPC 调用出现异常，比如远程 server 宕机、网络延迟太大而导致请求超时、远程 server 来不及响应等，hystrixCommand 命令器就会调用失败回调方法 getFallback()返回回退结果。而 hystrixCommand 的 getFallback()方法最终会调用配置在 RPC 接口@FeignClient 注解的fallback 属性上的失败回退类中对应的回退方法，执行业务级别的失败回退处理。
 
-      //根据method的返回值类型，返回hystrixCommand或直接执行
-  if (Util.isDefault(method)) {
-    return hystrixCommand.execute();
-  } else if (isReturnsHystrixCommand(method)) {
-    return hystrixCommand;
-  } else if (isReturnsObservable(method)) {
-    // Create a cold Observable
-    return hystrixCommand.toObservable();
-  } else if (isReturnsSingle(method)) {
-    // Create a cold Observable as a Single
-    return hystrixCommand.toObservable().toSingle();
-  } else if (isReturnsCompletable(method)) {
-    return hystrixCommand.toObservable().toCompletable();
-  } else if (isReturnsCompletableFuture(method)) {
-    return new ObservableCompletableFuture<>(hystrixCommand);
+使用HystrixInvocationHandler方法处理器进行远程调用，总体流程与使用默认的方法处理器FeignInvocationHandler进行远程调用大致是相同的
+
+### 5.3 Feign远程调用的完整流程及特性
+
+Spring Cloud Feign具有以下特性：
+
+1. 可插拔的注解支持，包括feign注解和mvc注解
+2. 支持可插拔的HTTP编解码器
+3. 支持Hystrix和RPC保护机制
+4. 支持ribbon负载均衡
+5. 支持HTTP请求和响应的压缩
+
+Feign的完整流程（一图流）：
+
+![image-20220906105436989](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220906105436989.png)
+
+## 六、Hystrix Feign动态代理创建流程
+
+### 6.1 HystrixFeign.Builder 建造者容器实例
+
+Feign 中默认的远程接口的 JDK 动态代理实例创建是通过 Feign.Builder 建造者容器实例的 target()方法来完成的。而target()方法的第一步是通过自身的 build()方法来构造一个ReflectiveFeign实例，第二步是通过反射式 Feign 实例的 newInstance()方法创建真正的 JDK Proxy 代理实例。
+
+而HystrixFeign，有自己的建造者类 HystrixFeign.Builder 类，该类继承了 feign.Feign.Builder 默认的建造者，重写了它获得 Feign 实例的 build()方法，源码如下：
+
+```java
+public final class HystrixFeign {
+  //创建新的构造者实例
+  public static Builder builder() {
+    return new Builder();
   }
-  return hystrixCommand.execute();
+  //内部类：HystrixFeign.Builder 类
+  public static final class Builder extends Feign.Builder {
+
+    private Contract contract = new Contract.Default();
+    private SetterFactory setterFactory = new SetterFactory.Default();
+      
+    public <T> T target(Target<T> target, T fallback) {
+      return build(fallback != null ? new FallbackFactory.Default<T>(fallback) : null)
+          .newInstance(target);
+    }
+
+    public <T> T target(Target<T> target, FallbackFactory<? extends T> fallbackFactory) {
+      return build(fallbackFactory).newInstance(target);
+    }
+
+	//其余方法略。。。
+    @Override
+    public Feign build() {
+      return build(null);
+    }
+      //重载的 build 方法替换了基类的 invocationHandlerFactory然后调用基类的 build()方法建造一个 ReflectiveFeign（反射式 Feign）的实例
+    Feign build(final FallbackFactory<?> nullableFallbackFactory) {
+      super.invocationHandlerFactory(new InvocationHandlerFactory() {
+        @Override
+        public InvocationHandler create(Target target,
+                                        Map<Method, MethodHandler> dispatch) {
+          //返回的是 HystrixInvocationHandler
+          return new HystrixInvocationHandler(target, dispatch, setterFactory,
+              nullableFallbackFactory);
+        }
+      });
+      super.contract(new HystrixDelegatingContract(contract));
+      return super.build();
+    }
+  }
 }
 ```
 
-5.3 Feign远程调用的完成流程及特性
+也就是说，HystrixFeign.Builder类其实还是返回了一个ReflectiveFeign实例，只不过是将其中的invocationHandlerFactory和contract替换成了Hystrix自己的，这样的话，当ReflectiveFeign调用newInstance方法生成代理对象时，此时被替换过的处理器工厂将创建带RPC 保护功能的 HystrixInvocationHandler 类型的调用处理器。
+
+### 6.2 配置HystrixFeign.Builder
+
+使用 HystrixFeign.Builder 实例替换 feign.Feign.Builder 实例，在 FeignClientsConfiguration 中自动配置类的源码完成。部分源码如下：
+
+```java
+@Configuration(proxyBeanMethods = false)
+public class FeignClientsConfiguration {
+    
+    //其余代码略。。。
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass({ HystrixCommand.class, HystrixFeign.class })
+    protected static class HystrixFeignConfiguration {
+        @Bean
+        @Scope("prototype")
+        @ConditionalOnMissingBean
+        @ConditionalOnProperty(name = "feign.hystrix.enabled")
+        public Feign.Builder feignHystrixBuilder() {
+            return HystrixFeign.builder();
+        }
+    }
+}
+```
+
+从源码中我们可知，如果想创建一个 HystrixFeign.Builder 类型的实例必须同时满足两个条件：
+
+1. 在类路径中同时存在 HystrixCommand.class 和 HystrixFeign.class 两个类。
+2. 应用的配置文件中存在着 feign.hystrix.enabled 的配置项
+
