@@ -2487,6 +2487,10 @@ spring:
     nacos:
       discovery:
         server-addr: 127.0.0.1:8848
+        # 修改服务注册中的命名空间 默认是注册到public
+        #namespace: xxx
+        # 修改服务注册到nacos上分组名称，默认是DEFAULT_GROUP
+        #group: xxx
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://127.0.0.1:3306/my_girl?allowMultiQueries=true&useUnicode=true&characterEncoding=UTF-8
@@ -2608,7 +2612,9 @@ hystrix:
 
 ![image-20211222132622606](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20211222132622606.png)
 
-### 5.1.4数据模型
+### 5.1.4 Nacos领域模型
+
+**数据模型**
 
 ![nacosmodel20211222](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/nacosmodel20211222.png)
 
@@ -2623,6 +2629,10 @@ hystrix:
 > Namespace + Group + Service如同Maven中的GAV坐标，GAV坐标是为了锁定Jar，而这里是为了锁定服务
 >
 > Namespace + Group + DataId是为了锁定配置⽂件
+
+**服务领域模型**
+
+![image-20220907133632877](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220907133632877.png)
 
 ### 5.1.5 nacos集群
 
@@ -5405,7 +5415,7 @@ public ObjectNode beat(HttpServletRequest request) throws Exception {
 }
 ```
 
-从这两个方法我们可以看到，发送心跳请求时如果服务还没有注册就会进行服务注册，也就是说客户端发送的两个方法都会进行服务注册。
+从这两个方法我们可以看到，发送心跳请求时如果服务还没有注册就会进行服务注册，也就是说**客户端发送的两个方法都会进行服务注册**。
 
 > 然后我们在跟进注册方法之前，先看一下上面代码中的处理客户端心跳的部分`service.processClientBeat(clientBeat);`，这部分代码流程如下图，此方法主要是设置心跳时间和健康状态：
 >
@@ -5417,9 +5427,12 @@ public ObjectNode beat(HttpServletRequest request) throws Exception {
 
 ![image-20220831170733654](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220831170733654.png)
 
-我们跟进`createEmptyService`方法，
+#### createEmptyService
+
+我们先跟进`createEmptyService`方法，
 
 ```java
+//这里serviceName服务名称=分组名称+微服务服务名
 public void createEmptyService(String namespaceId, String serviceName, boolean local) throws NacosException {
     createServiceIfAbsent(namespaceId, serviceName, local, null);
 }
@@ -5450,7 +5463,7 @@ public void createServiceIfAbsent(String namespaceId, String serviceName, boolea
 }
 ```
 
-在这个方法中，会先获取服务，如果服务为空就创建服务，然后调用`putServiceAndInit(service);`进行新增服务和初始化，我们进入此方法：
+在这个方法中，会先获取服务，如果服务为空就创建服务，然后调用`putServiceAndInit(service);`进行新增服务和心跳初始化，我们进入此方法：
 
 ```java
 private void putServiceAndInit(Service service) throws NacosException {
@@ -5465,6 +5478,10 @@ private void putServiceAndInit(Service service) throws NacosException {
     Loggers.SRV_LOG.info("[NEW-SERVICE] {}", service.toJson());
 }
 ```
+
+> 到这里service相关属性如下：
+>
+> ![image-20220907141252030](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220907141252030.png)
 
 上面方法中的添加服务`putService(service);`方法十分简单，本质就是将服务存储到一个Map中：
 
@@ -5481,6 +5498,10 @@ public void putService(Service service) {
     serviceMap.get(service.getNamespaceId()).put(service.getName(), service);
 }
 ```
+
+> serviceMap的结构是这样的：
+>
+> Map(namespace, Map(group::serviceName, Service))
 
 然后我们看一下服务初始化`service.init();`这个方法，这个方法启动了一个线程执行了客户端心跳检测任务
 
@@ -5552,9 +5573,87 @@ public void run() {
 }
 ```
 
+这里主要对所有服务的心跳进行检测，超时15s就设置为不健康，超时30s就删除该实例。
+
+`createEmptyService`到此就结束了，然后我们回到`ServiceManager#registerInstance`这个方法：
+
+```java
+public void registerInstance(String namespaceId, String serviceName, Instance instance) throws NacosException {
+    //创建服务，并初始化心跳检测
+    createEmptyService(namespaceId, serviceName, instance.isEphemeral());
+    //获取服务
+    Service service = getService(namespaceId, serviceName);
+    
+    if (service == null) {
+        throw new NacosException(NacosException.INVALID_PARAM,
+                "service not found, namespace: " + namespaceId + ", service: " + serviceName);
+    }
+    //新增实例
+    addInstance(namespaceId, serviceName, instance.isEphemeral(), instance);
+}
+```
+
+#### addInstance
+
+然后我们跟进`addInstance`方法：
+
+```java
+public void addInstance(String namespaceId, String serviceName, boolean ephemeral, Instance... ips)throws NacosException {
+    //生成key
+    String key = KeyBuilder.buildInstanceListKey(namespaceId, serviceName, ephemeral);
+    //获取服务
+    Service service = getService(namespaceId, serviceName);
+    //对service上锁，锁住当前注册的服务
+    synchronized (service) {
+        //比较并获得新的实例列表
+        List<Instance> instanceList = addIpAddresses(service, ephemeral, ips);
+        
+        Instances instances = new Instances();
+        instances.setInstanceList(instanceList);
+        //存储实例
+        consistencyService.put(key, instances);
+    }
+}
+```
+
+> 这里key大概可以看成命名空间+服务名称
+>
+> ![image-20220907141433153](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220907141433153.png)
+
+我们debug跟进`consistencyService.put(key, instances);`方法，它会进入到`DistroConsistencyServiceImpl#put`方法中，在跟进其中的onPut方法：
+
+```java
+public void onPut(String key, Record value) {
+    
+    if (KeyBuilder.matchEphemeralInstanceListKey(key)) {
+        Datum<Instances> datum = new Datum<>();
+        datum.value = (Instances) value;
+        datum.key = key;
+        datum.timestamp.incrementAndGet();
+        //将实例存入dataStore中
+        dataStore.put(key, datum);
+    }
+    //其余代码略。。。
+}
+```
+
+> ```java
+> public class DataStore {
+>     
+>     private Map<String, Datum> dataMap = new ConcurrentHashMap<>(1024);
+>     
+>     public void put(String key, Datum value) {
+>         dataMap.put(key, value);
+>     }
+>     //其余代码略
+> }
+> ```
+
+也就是说服务注册最终会将实例信息存入DataStore中，到此服务端服务注册流程完。
+
 ### 5.4.5 服务发现
 
-> 暂未完结
+我们先写一个测试用的例子，在
 
 
 
