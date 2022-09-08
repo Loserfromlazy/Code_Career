@@ -1,6 +1,8 @@
 # Spring Cloud 远程调用原理
 
-> 此笔记是基于我的[Spring Cloud笔记](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud.md)上对Feign远程调用进行深入学习的。学习前可以先看一下我的[SpringCloud#4.4Feign远程调用](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud.md#44-feign%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8)。
+> 此笔记是基于我的[Spring Cloud笔记](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud.md)上对Feign和Ribbon进行深入学习的。学习前可以先看一下我的[SpringCloud](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud.md)第4.2Ribbon负载均衡和4.4章Feign远程调用。
+>
+> 参考资料：springcloud Nginx高并发核心编程；互联网等资源。
 
 ## 一、RPC入门与代理模式
 
@@ -1152,3 +1154,142 @@ public class FeignClientsConfiguration {
 1. 在类路径中同时存在 HystrixCommand.class 和 HystrixFeign.class 两个类。
 2. 应用的配置文件中存在着 feign.hystrix.enabled 的配置项
 
+## 七、远程调用的负载均衡Ribbon源码详解
+
+### 7.1 Ribbon的使用
+
+在实际使用中Ribbon通常与RestTemplate一起使用，使用方式如下，首先配置Ribbon：
+
+```java
+@Bean
+@LoadBalanced//Ribbon负载均衡
+public RestTemplate getRestTemplate() {
+    return new RestTemplate();
+}
+```
+
+然后在接口中注入RestTemplate使用即可：
+
+```java
+@Service
+public class RibbonService {
+
+    @Autowired
+    private RestTemplate restTemplate;
+    
+    public String hi(String id) {
+        return restTemplate.getForObject("http://xxx?id="+id,String.class);
+    }
+}
+```
+
+我们下面来看一下@LoadBalanced这个注解的源码：
+
+```java
+@Target({ ElementType.FIELD, ElementType.PARAMETER, ElementType.METHOD })
+@Retention(RetentionPolicy.RUNTIME)
+@Documented
+//被 @Inherited 注解修饰的注解，如果作用于某个类上，其子类是可以继承的该注解的。反之，如果一个注解没有被 @Inherited注解所修饰，那么他的作用范围只能是当前类，其子类是不能被继承的
+@Inherited
+@Qualifier
+//Annotation to mark a RestTemplate bean to be configured to use a LoadBalancerClient.
+public @interface LoadBalanced {
+}
+```
+
+根据源码注释可知，此类的作用是将RestTemplate bean标记为配置为使用LoadBalancerClient。
+
+### 7.2 RestTemplate绑定拦截器
+
+我们接着往下看，有@LoadBalanced注解，肯定就有支持这个注解工作的类，我们这时就可以从Spring自动装配入手，我们在ribbon的spring-cloud-netflix-ribbon的jar包下找spring.factorys文件：
+
+```
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+org.springframework.cloud.netflix.ribbon.RibbonAutoConfiguration
+```
+
+然后我们跟入RibbonAutoConfiguration配置类：
+
+```java
+@Configuration
+@Conditional(RibbonAutoConfiguration.RibbonClassesConditions.class)
+@RibbonClients
+//负载均衡要基于注册中心来做，所以RibbonAutoConfiguration加载要在Eureka初始化完毕后进行
+@AutoConfigureAfter(
+		name = "org.springframework.cloud.netflix.eureka.EurekaClientAutoConfiguration")
+@AutoConfigureBefore({ LoadBalancerAutoConfiguration.class,
+		AsyncLoadBalancerAutoConfiguration.class })
+@EnableConfigurationProperties({ RibbonEagerLoadProperties.class,
+		ServerIntrospectorProperties.class })
+public class RibbonAutoConfiguration {
+
+}
+```
+
+这里我们关注@AutoConfigureBefore注解，表示RibbonAutoConfiguration此类需要在其之前进行加载。因此我们关注一下LoadBalancerAutoConfiguration这个配置类，源码如下，此类中有三个需要理解的地方，这三个地方就是Ribbon如何给RestTemplate绑定ribbon的拦截器，我在下面进行了标注：
+
+```java
+@Configuration(proxyBeanMethods = false)
+//只有当RestTemplate存在时才进行装配
+@ConditionalOnClass(RestTemplate.class)
+@ConditionalOnBean(LoadBalancerClient.class)
+@EnableConfigurationProperties(LoadBalancerRetryProperties.class)
+public class LoadBalancerAutoConfiguration {
+	//1.这里将标注了@LoadBalanced的RestTemplate注解注入到下面的List集合
+   @LoadBalanced
+   @Autowired(required = false)
+   private List<RestTemplate> restTemplates = Collections.emptyList();
+
+   @Autowired(required = false)
+   private List<LoadBalancerRequestTransformer> transformers = Collections.emptyList();
+
+   @Bean
+   public SmartInitializingSingleton loadBalancedRestTemplateInitializerDeprecated(
+         final ObjectProvider<List<RestTemplateCustomizer>> restTemplateCustomizers) {
+       //3.通过下面的定制器给集合中的每一个RestTemplate添加拦截器
+      return () -> restTemplateCustomizers.ifAvailable(customizers -> {
+          //遍历注入的RestTemplate集合
+         for (RestTemplate restTemplate : LoadBalancerAutoConfiguration.this.restTemplates) {
+             //通过定制器定制添加拦截器
+            for (RestTemplateCustomizer customizer : customizers) {
+               customizer.customize(restTemplate);
+            }
+         }
+      });
+   }
+    
+    //省略部分代码
+
+   @Configuration(proxyBeanMethods = false)
+   @ConditionalOnClass(RetryTemplate.class)
+   public static class RetryInterceptorAutoConfiguration {
+
+      @Bean
+      @ConditionalOnMissingBean
+      public RetryLoadBalancerInterceptor ribbonInterceptor(
+            LoadBalancerClient loadBalancerClient,
+            LoadBalancerRetryProperties properties,
+            LoadBalancerRequestFactory requestFactory,
+            LoadBalancedRetryFactory loadBalancedRetryFactory) {
+         return new RetryLoadBalancerInterceptor(loadBalancerClient, properties,
+               requestFactory, loadBalancedRetryFactory);
+      }
+	//2.定制器，此类作用是将loadBalancerInterceptor加入到restTemplate
+      @Bean
+      @ConditionalOnMissingBean
+      public RestTemplateCustomizer restTemplateCustomizer(
+            final RetryLoadBalancerInterceptor loadBalancerInterceptor) {
+         return restTemplate -> {
+             //获取restTemplate全部拦截器的集合
+            List<ClientHttpRequestInterceptor> list = new ArrayList<>(
+                  restTemplate.getInterceptors());
+             //将loadBalancerInterceptor加入集合，然后再塞回去
+            list.add(loadBalancerInterceptor);
+            restTemplate.setInterceptors(list);
+         };
+      }
+   }
+}
+```
+
+### 7.3 Ribbon的拦截器

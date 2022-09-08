@@ -4848,9 +4848,11 @@ public class DegradeController {
 }
 ```
 
-## 5.4 Nacos源码 1.3.2版本
+## 5.4 Nacos源码
 
 > **我这里用的springcloud版本是Hoxton.RELEASE；spring-cloud-alibaba版本2.2.2**
+>
+> **nacos服务端版本 1.3.2版本**
 
 ### 5.4.1 工程搭建
 
@@ -5653,7 +5655,7 @@ public void onPut(String key, Record value) {
 
 ### 5.4.5 服务发现
 
-我们先写一个测试用的例子，在
+> 未完结
 
 
 
