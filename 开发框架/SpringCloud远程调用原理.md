@@ -1293,3 +1293,498 @@ public class LoadBalancerAutoConfiguration {
 ```
 
 ### 7.3 Ribbon的拦截器
+
+在看拦截器之前，我们先来看看刚才略过的RibbonAutoConfiguration，这个配置类会注入一些Ribbon常用的类，其中有两个类需要注意：
+
+```java
+//注入SpringClientFactory
+@Bean
+public SpringClientFactory springClientFactory() {
+   SpringClientFactory factory = new SpringClientFactory();
+   factory.setConfigurations(this.configurations);
+   return factory;
+}
+//注入LoadBalancerClient
+@Bean
+@ConditionalOnMissingBean(LoadBalancerClient.class)
+public LoadBalancerClient loadBalancerClient() {
+   return new RibbonLoadBalancerClient(springClientFactory());
+}
+```
+
+其中SpringClientFactory的构造函数中引入了RibbonClientConfiguration
+
+```java
+public SpringClientFactory() {
+   super(RibbonClientConfiguration.class, NAMESPACE, "ribbon.client.name");
+}
+```
+
+在RibbonClientConfiguration注入了一些常用组件：
+
+```java
+public class RibbonClientConfiguration {
+    
+	@Bean
+	@ConditionalOnMissingBean
+	public IRule ribbonRule(IClientConfig config) {
+		if (this.propertiesFactory.isSet(IRule.class, name)) {
+			return this.propertiesFactory.get(IRule.class, config, name);
+		}
+        //默认轮询策略，其父类是PredicateBasedRule
+		ZoneAvoidanceRule rule = new ZoneAvoidanceRule();
+		rule.initWithNiwsConfig(config);
+		return rule;
+	}
+    @Bean
+	@ConditionalOnMissingBean
+	@SuppressWarnings("unchecked")
+	public ServerList<Server> ribbonServerList(IClientConfig config) {
+		if (this.propertiesFactory.isSet(ServerList.class, name)) {
+			return this.propertiesFactory.get(ServerList.class, config, name);
+		}
+		ConfigurationBasedServerList serverList = new ConfigurationBasedServerList();
+		serverList.initWithNiwsConfig(config);
+		return serverList;
+	}
+    @Bean
+	@ConditionalOnMissingBean
+	public ILoadBalancer ribbonLoadBalancer(IClientConfig config,
+			ServerList<Server> serverList, ServerListFilter<Server> serverListFilter,
+			IRule rule, IPing ping, ServerListUpdater serverListUpdater) {
+		if (this.propertiesFactory.isSet(ILoadBalancer.class, name)) {
+			return this.propertiesFactory.get(ILoadBalancer.class, config, name);
+		}
+        //默认使用ZoneAwareLoadBalancer负载均衡器
+		return new ZoneAwareLoadBalancer<>(config, rule, ping, serverList,
+				serverListFilter, serverListUpdater);
+	}
+    //略。。。
+}
+```
+
+这些类在下面都会用到，在看完Ribbon的自动配置类都注入了哪些类之后，我们进入正题来看一下Ribbon的拦截器。在IDEA中可以使用Double Shift来进行搜索，我们搜索到此拦截器，然后重点关注一下拦截方法：
+
+```java
+public class LoadBalancerInterceptor implements ClientHttpRequestInterceptor {
+
+   private LoadBalancerClient loadBalancer;
+
+   private LoadBalancerRequestFactory requestFactory;
+
+   //构造函数略
+
+   @Override
+   public ClientHttpResponse intercept(final HttpRequest request, final byte[] body,
+         final ClientHttpRequestExecution execution) throws IOException {
+       //获取源URI比如：http://cloud-service-user/user/getUserList;其中cloud-service-user是我们的微服务名称
+      final URI originalUri = request.getURI();
+       //获取服务名，就是上面的cloud-service-user
+      String serviceName = originalUri.getHost();
+      Assert.state(serviceName != null,
+            "Request URI does not contain a valid hostname: " + originalUri);
+       //然后拦截器将工作交给了loadBalancer去执行
+      return this.loadBalancer.execute(serviceName,
+            this.requestFactory.createRequest(request, body, execution));
+   }
+
+}
+```
+
+从源码中我们可以看到Ribbon的拦截器将工作最后委托给了loadBalancer，而loadBalancer实际上是一个LoadBalancerClient，这个类在上面我们看到了是Ribbon自动配置类注入的。接下来我们就跟进execute方法中：
+
+```java
+public interface LoadBalancerClient extends ServiceInstanceChooser {
+
+   <T> T execute(String serviceId, LoadBalancerRequest<T> request) throws IOException;
+  
+   <T> T execute(String serviceId, ServiceInstance serviceInstance,
+         LoadBalancerRequest<T> request) throws IOException;
+  
+   URI reconstructURI(ServiceInstance instance, URI original);
+
+}
+```
+
+跟进去我们发现LoadBalancerClient是一个接口，然后我们继续进入他的实现类，如果有多个（选择Ribbon的实现类）：
+
+```java
+public class RibbonLoadBalancerClient implements LoadBalancerClient {
+    //其余代码略。。。
+	@Override
+	public <T> T execute(String serviceId, LoadBalancerRequest<T> request)
+			throws IOException {
+        //进入下面贴的execute重载方法
+		return execute(serviceId, request, null);
+	}
+    
+    public <T> T execute(String serviceId, LoadBalancerRequest<T> request, Object hint)
+			throws IOException {
+        //从容器中获取loadBalancer，该类是自动装配时注入的
+		ILoadBalancer loadBalancer = getLoadBalancer(serviceId);
+        //获取服务实例
+		Server server = getServer(loadBalancer, hint);
+		if (server == null) {
+			throw new IllegalStateException("No instances available for " + serviceId);
+		}
+        //将服务实例封装成RibbonServer
+		RibbonServer ribbonServer = new RibbonServer(serviceId, server,
+				isSecure(server, serviceId),
+				serverIntrospector(serviceId).getMetadata(server));
+		//继续执行请求
+		return execute(serviceId, ribbonServer, request);
+	}
+}
+```
+
+上面源码中我们主要有以下几个关注点：
+
+![image-20220909105420223](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220909105420223.png)
+
+我们下面一一跟进：
+
+1. 如何获取的loadBalancer，这点比较简单，我在注释中也标明了，springboot自动装配时装配了此类，在RibbonClientConfiguration配置类中。
+
+2. 如何获取服务实例，我们可以跟进getServer方法
+
+   ```java
+   protected Server getServer(ILoadBalancer loadBalancer, Object hint) {
+      if (loadBalancer == null) {
+         return null;
+      }
+      // Use 'default' on a null hint, or just pass it on?
+      return loadBalancer.chooseServer(hint != null ? hint : "default");
+   }
+   ```
+
+   这里我们发现，它调用了loadBalancer的chooseServer方法，然后我们跟进此方法，然后进入实现类，实现类我们选择ZoneAwareLoadBalancer实现类，因为在之前我们也了解了这是Ribbon自动装配时默认的loadBalancer，如下图：
+
+   ![image-20220909110340182](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220909110340182.png)
+
+   进入后，发现此类由调用了父类的方法：
+
+   ```java
+   @Override
+   public Server chooseServer(Object key) {
+       //这里一般只关心这里即可，略去的代码一般不会走到
+       //原因是ZoneAwareLoadBalancer是为了适配亚马逊云做的，我们一般只会有一个Zone,也就是说下面if判断的size一般都等于1
+       if (!ENABLED.get() || getLoadBalancerStats().getAvailableZones().size() <= 1) {
+           logger.debug("Zone aware logic disabled or there is only one zone");
+           return super.chooseServer(key);
+       }
+   	//其余代码略。。。
+   }
+   ```
+
+   我们继续跟进：
+
+   ```java
+   public Server chooseServer(Object key) {
+       if (counter == null) {
+           counter = createCounter();
+       }
+       counter.increment();
+       if (rule == null) {
+           return null;
+       } else {
+           try {
+               //通过负载均衡规则进行选择
+               return rule.choose(key);
+           } catch (Exception e) {
+               logger.warn("LoadBalancer [{}]:  Error choosing server for key {}", name, key, e);
+               return null;
+           }
+       }
+   }
+   ```
+
+   我们进入到接口，在实现类中我们选择PredicateBaseRule，因为我们自动装配的默认规则ZoneAvoidanceRule就是继承了这个类：
+
+   ![image-20220909110504176](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220909110504176.png)
+
+   我们查看它的choose方法，这里主要调用了chooseRoundRobinAfterFiltering方法，并通过lb.getAllServers()获取全部服务实例作为参数传入：
+
+   ```java
+   @Override
+   public Server choose(Object key) {
+       ILoadBalancer lb = getLoadBalancer();
+       Optional<Server> server = getPredicate().chooseRoundRobinAfterFiltering(lb.getAllServers(), key);
+       if (server.isPresent()) {
+           return server.get();
+       } else {
+           return null;
+       }       
+   }
+   ```
+
+   我们只关心主线，因此我们跟进chooseRoundRobinAfterFiltering方法：
+
+   ```java
+   public Optional<Server> chooseRoundRobinAfterFiltering(List<Server> servers, Object loadBalancerKey) {
+       //获取符合条件的服务集合。Eligible：符合条件的
+       List<Server> eligible = getEligibleServers(servers, loadBalancerKey);
+       if (eligible.size() == 0) {
+           return Optional.absent();
+       }
+       //关键代码，用Optional包装选择出的实例
+       return Optional.of(eligible.get(incrementAndGetModulo(eligible.size())));
+   }
+   ```
+
+   这里最关键的就是return返回的这句代码，用Optional包装的选择出来的实例。那么是怎么选择的呢，我们进入incrementAndGetModulo方法：
+
+   ```java
+   //此方法传入所有符合条件实例的总数
+   private int incrementAndGetModulo(int modulo) {
+       for (;;) {
+           //获取当前服务实例的索引值
+           int current = nextIndex.get();
+           //通过求余的方式记录下一个索引值
+           int next = (current + 1) % modulo;
+           //通过CAS设置下一个索引值
+           if (nextIndex.compareAndSet(current, next) && current < modulo)
+               return current;
+       }
+   }
+   ```
+
+   到此就是获取服务实例的全过程
+
+3. 如何发起、执行请求
+
+   我们继续跟进execute方法：
+
+   ```java
+   @Override
+   public <T> T execute(String serviceId, ServiceInstance serviceInstance,
+   		LoadBalancerRequest<T> request) throws IOException {
+   	Server server = null;
+   	if (serviceInstance instanceof RibbonServer) {
+   		server = ((RibbonServer) serviceInstance).getServer();
+   	}
+   	if (server == null) {
+   		throw new IllegalStateException("No instances available for " + serviceId);
+   	}
+   	
+   	RibbonLoadBalancerContext context = this.clientFactory
+   			.getLoadBalancerContext(serviceId);
+       //Ribbon的状态记录类
+   	RibbonStatsRecorder statsRecorder = new RibbonStatsRecorder(context, server);
+   
+   	try {
+           //发起、执行请求,这个request就是一直传进来的ruquest，调用apply方法就会根据Server实例封装调用RestTemplate进行HTTP请求
+   		T returnVal = request.apply(serviceInstance);
+           //记录返回值
+   		statsRecorder.recordStats(returnVal);
+   		return returnVal;
+   	}
+   	// catch IOException and rethrow so RestTemplate behaves correctly
+   	catch (IOException ex) {
+   		statsRecorder.recordStats(ex);
+   		throw ex;
+   	}
+   	catch (Exception ex) {
+   		statsRecorder.recordStats(ex);
+   		ReflectionUtils.rethrowRuntimeException(ex);
+   	}
+   	return null;
+   }
+   ```
+
+   我们可以查看execute方法传入的这个request，如下图：
+
+   ![image-20220909113700892](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220909113700892.png)
+
+   createRequest方法如下：
+
+   ```java
+   public LoadBalancerRequest<ClientHttpResponse> createRequest(
+         final HttpRequest request, final byte[] body,
+         final ClientHttpRequestExecution execution) {
+      return instance -> {
+         HttpRequest serviceRequest = new ServiceRequestWrapper(request, instance,
+               this.loadBalancer);
+         if (this.transformers != null) {
+            for (LoadBalancerRequestTransformer transformer : this.transformers) {
+               serviceRequest = transformer.transformRequest(serviceRequest,
+                     instance);
+            }
+         }
+         return execution.execute(serviceRequest, body);
+      };
+   }
+   ```
+
+### 7.4 Ribbon的ServerList
+
+上面我们介绍了Ribbon的拦截器，拦截器的主要作用就是将请求交给Ribbon，然后由ribbon去负载均衡发送请求，那么在chooseServer时的服务列表是从何而来，下面我们就来分析一下。
+
+首先ServerList是在Ribbon自动装配的过程中被实现的：
+
+```java
+@Bean
+@ConditionalOnMissingBean
+@SuppressWarnings("unchecked")
+public ServerList<Server> ribbonServerList(IClientConfig config) {
+    //从配置中获取Server集合。这里是因为Ribbon不需要nacos或eureka也能使用
+   if (this.propertiesFactory.isSet(ServerList.class, name)) {
+      return this.propertiesFactory.get(ServerList.class, config, name);
+   }
+   ConfigurationBasedServerList serverList = new ConfigurationBasedServerList();
+   serverList.initWithNiwsConfig(config);
+    //这里一般情况下只是注入了一个空的ServerList，数据由后续进行注入
+   return serverList;
+}
+```
+
+接下来我们看一下LoadBalancer，因为在这里执行chooseServer方法时已经有了，所以我们看一下使用ServerList的地方，我们看一下LoadBalancer的自动装配：
+
+```java
+@Bean
+@ConditionalOnMissingBean
+public ILoadBalancer ribbonLoadBalancer(IClientConfig config,
+      ServerList<Server> serverList, ServerListFilter<Server> serverListFilter,
+      IRule rule, IPing ping, ServerListUpdater serverListUpdater) {
+   if (this.propertiesFactory.isSet(ILoadBalancer.class, name)) {
+      return this.propertiesFactory.get(ILoadBalancer.class, config, name);
+   }
+   return new ZoneAwareLoadBalancer<>(config, rule, ping, serverList,
+         serverListFilter, serverListUpdater);
+}
+```
+
+我们跟进ZoneAwareLoadBalancer类的构造函数，会发现他会调用父类的构造函数：
+
+```java
+public ZoneAwareLoadBalancer(IClientConfig clientConfig, IRule rule,
+                             IPing ping, ServerList<T> serverList, ServerListFilter<T> filter,
+                             ServerListUpdater serverListUpdater) {
+    super(clientConfig, rule, ping, serverList, filter, serverListUpdater);
+}
+```
+
+我们继续跟进进入到了DynamicServerListLoadBalancer的构造方法：
+
+```java
+public DynamicServerListLoadBalancer(IClientConfig clientConfig, IRule rule, IPing ping,
+                                     ServerList<T> serverList, ServerListFilter<T> filter,
+                                     ServerListUpdater serverListUpdater) {
+    super(clientConfig, rule, ping);
+    this.serverListImpl = serverList;
+    this.filter = filter;
+    this.serverListUpdater = serverListUpdater;
+    if (filter instanceof AbstractServerListFilter) {
+        ((AbstractServerListFilter) filter).setLoadBalancerStats(getLoadBalancerStats());
+    }
+    restOfInit(clientConfig);
+}
+```
+
+在这个构造方法中主要关注`restOfInit(...)`这个方法:
+
+```java
+void restOfInit(IClientConfig clientConfig) {
+    boolean primeConnection = this.isEnablePrimingConnections();
+    // turn this off to avoid duplicated asynchronous priming done in BaseLoadBalancer.setServerList()
+    this.setEnablePrimingConnections(false);
+    //启动发现实例
+    enableAndInitLearnNewServersFeature();
+	//更新服务列表，因为上面是延时启动，所以我们还需要立即启动一次
+    updateListOfServers();
+    if (primeConnection && this.getPrimeConnections() != null) {
+        this.getPrimeConnections()
+                .primeConnections(getReachableServers());
+    }
+    this.setEnablePrimingConnections(primeConnection);
+    LOGGER.info("DynamicServerListLoadBalancer for client {} initialized: {}", clientConfig.getClientName(), this.toString());
+}
+```
+
+我们进入到`enableAndInitLearnNewServersFeature();`方法：
+
+```java
+public void enableAndInitLearnNewServersFeature() {
+    LOGGER.info("Using serverListUpdater {}", serverListUpdater.getClass().getSimpleName());
+    serverListUpdater.start(updateAction);
+}
+```
+
+我们先来看一下这个updateAction是什么：
+
+```java
+protected final ServerListUpdater.UpdateAction updateAction = new ServerListUpdater.UpdateAction() {
+    @Override
+    public void doUpdate() {
+        updateListOfServers();
+    }
+};
+```
+
+可以看到updateAction中有一个doUpdate()方法，且此方法会执行`updateListOfServers();`方法，在这里就会进行服务的拉取。代码如下：
+
+~~~java
+@VisibleForTesting
+public void updateListOfServers() {
+    List<T> servers = new ArrayList<T>();
+    if (serverListImpl != null) {
+        //拉取服务实例，nacos和eureka都实现了ServerList
+        servers = serverListImpl.getUpdatedListOfServers();
+        LOGGER.debug("List of Servers for {} obtained from Discovery client: {}",
+                getIdentifier(), servers);
+
+        if (filter != null) {
+            servers = filter.getFilteredListOfServers(servers);
+            LOGGER.debug("Filtered List of Servers for {} obtained from Discovery client: {}",
+                    getIdentifier(), servers);
+        }
+    }
+    updateAllServerList(servers);
+}
+~~~
+
+然后我们跟进start方法：
+
+![image-20220909162749927](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220909162749927.png)
+
+我们这里选择第二个实现类，可以通过debug断点的方式进行确定。
+
+> - 通过定时任务进行更新。由这个实现类 PollingServerListUpdater 做到的。
+> - 利用 Eureka 的事件监听器来更新。由这个实现类 EurekaNotificationServerListUpdater 做到的。
+
+```java
+@Override
+public synchronized void start(final UpdateAction updateAction) {
+    if (isActive.compareAndSet(false, true)) {
+        final Runnable wrapperRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (!isActive.get()) {
+                    if (scheduledFuture != null) {
+                        scheduledFuture.cancel(true);
+                    }
+                    return;
+                }
+                try {
+                    //调用doUpdate方法或者说是调用doUpdate中的updateListOfServers()
+                    updateAction.doUpdate();
+                    lastUpdated = System.currentTimeMillis();
+                } catch (Exception e) {
+                    logger.warn("Failed one update cycle", e);
+                }
+            }
+        };
+		//启动延迟任务，每隔一定时间执行wrapperRunnable也就是执行updateListOfServers()
+        scheduledFuture = getRefreshExecutor().scheduleWithFixedDelay(
+                wrapperRunnable,
+                initialDelayMs,
+                refreshIntervalMs,
+                TimeUnit.MILLISECONDS
+        );
+    } else {
+        logger.info("Already active, no-op");
+    }
+}
+```
+
+## 八、Feign+Ribbon进行远程调用
+
