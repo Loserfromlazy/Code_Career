@@ -635,7 +635,7 @@ public interface Client {
 
 ## 四、Feign的动态代理的创建流程
 
-### 4.1 Feign的整体流程
+### 4.1 Feign创建动态代理的整体流程
 
 根据上面的学习，我们能大概了解feign的工作原理，在应用程序启动的初始化过程中，Feign完成了以下工作：
 
@@ -730,6 +730,10 @@ public interface Client {
 
 4. 在完成远程 HTTP 调用前需要进行客户端负载均衡等处理，生产环境下，Feign 必须和 Ribbon 结合在一起使用，所以方法处理器MethodHandler的客户端client成员必须是具备负载均衡能力的LoadBalancerFeignClient 类型，而不是完成 HTTP 请求提交的 ApacheHttpClient 等类型。只有在负载均衡计算出最佳的 Provider 实例之后，才能开始HTTP 请求的提交。
 
+FeignClient的创建详细流程：
+
+![FeignCreate20220912](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/FeignCreate20220912.png)
+
 ### 4.2 RPC动态代理容器实例的FactiryBean
 
 为了方便 Feign 的 RPC 客户端动态代理实例的使用，还需要将其注册到 Spring IOC 容器，以方便使用者通过@Resource 或@Autoware 注解将其注入其他的依赖属性。Feign 的 RPC 客户端动态代理 IOC 容器实例只能通过 FactoryBean 方式创建，原因有两点：
@@ -781,6 +785,7 @@ class FeignClientFactoryBean
     //委托方法：获取RPC动态代理的Bean
     <T> T getTarget() {
 		FeignContext context = this.applicationContext.getBean(FeignContext.class);
+        //根据当前是Hystrix还是Sentinel注入不同的Builder
 		Feign.Builder builder = feign(context);
 
 		if (!StringUtils.hasText(this.url)) {
@@ -807,9 +812,23 @@ class FeignClientFactoryBean
 			}
 			builder.client(client);
 		}
+        //Targeter是一个目标类，最终本质上是调用build().newInstance(target);方法
 		Targeter targeter = get(context, Targeter.class);
 		return (T) targeter.target(this, builder, context,
 				new HardCodedTarget<>(this.type, this.name, url));
+	}
+    
+    protected <T> T loadBalance(Feign.Builder builder, FeignContext context,
+			HardCodedTarget<T> target) {
+		Client client = getOptional(context, Client.class);
+		if (client != null) {
+			builder.client(client);
+			Targeter targeter = get(context, Targeter.class);
+			return targeter.target(this, builder, context, target);
+		}
+
+		throw new IllegalStateException(
+				"No Feign Client for loadBalancing defined. Did you forget to include spring-cloud-starter-netflix-ribbon?");
 	}
    //其余方法略。。。
 }
@@ -821,6 +840,8 @@ class FeignClientFactoryBean
 ### 4.3 Feign.Builder建造者容器实例
 
 当从 Spring IOC 容器获取 RPC 接口的动态代理实例时，也就是当 FeignClientFactoryBean 的getObject()方法被调用时，其调用的 getTarget()方法首先从 IOC 容器获取配置好的 Feign.Builder建造者容器实例，然后通过 Feign.Builder 建造者容器实例的 target()方法完成 RPC 动态代理实例的创建。源码见上一小节4.2。
+
+当然如果项目中使用了Hystrix或Sentinel将会引用他们的Builder，这里只以
 
 Feign.Builder 类是 feign.Feign 抽象类的一个内部类，部分源码如下：
 
@@ -857,7 +878,6 @@ public abstract class Feign {
     //其余方法略。。。
   }
   
-  public abstract <T> T newInstance(Target<T> target);
   //其余方法略。。。
 }
 ```
@@ -1057,7 +1077,7 @@ HystrixCommand 具备熔断、隔离、回退等能力，如果它的 run()方�
 
 使用HystrixInvocationHandler方法处理器进行远程调用，总体流程与使用默认的方法处理器FeignInvocationHandler进行远程调用大致是相同的
 
-### 5.3 Feign远程调用的完整流程及特性
+### 5.3 Feign的流程及特性
 
 Spring Cloud Feign具有以下特性：
 
@@ -1067,7 +1087,7 @@ Spring Cloud Feign具有以下特性：
 4. 支持ribbon负载均衡
 5. 支持HTTP请求和响应的压缩
 
-Feign的完整流程（一图流）：
+Feign的流程（一图流）：
 
 ![image-20220906105436989](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220906105436989.png)
 
@@ -1786,5 +1806,119 @@ public synchronized void start(final UpdateAction updateAction) {
 }
 ```
 
-## 八、Feign+Ribbon进行远程调用
+## 八、Feign+Ribbon+Hystrix/Sentinel进行远程调用
 
+### 8.1 调用流程
+
+了解Feign和Ribbon之后我们看看一个Feign+Ribbon+Hystrix/Sentinel远程调用的具体流程：
+
+![FeignInvoke20220912](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/FeignInvoke20220912.png)
+
+### 8.2 Feign和Ribbon的整合分析
+
+根据上面整体的远程调用流程图（可以根据上面的流程自己跟踪源码），我们可以看到Feign的LoadBalanceFeignClient客户端底层还是对Ribbon的封装和使用。这其中有一个关键的Feign和Ribbon整合的类就是CachingSpringLoadBalancerFactory，在LoadBalancerFeignClient#execute方法中有一句关键代码：
+
+```java
+return lbClient(clientName).executeWithLoadBalancer(ribbonRequest, requestConfig).toResponse();
+```
+
+其中的lbClient方法就会调用lbClientFactory创建FeignLoadBalancer，源码如下：
+
+~~~java
+private FeignLoadBalancer lbClient(String clientName) {
+    return this.lbClientFactory.create(clientName);
+}
+~~~
+
+这个方法其实就是CachingSpringLoadBalancerFactory#create方法，我们来看一下源码：
+
+```java
+public FeignLoadBalancer create(String clientName) {
+   FeignLoadBalancer client = this.cache.get(clientName);
+   if (client != null) {
+      return client;
+   }
+    //获取Ribbon相关的类
+   IClientConfig config = this.factory.getClientConfig(clientName);
+   ILoadBalancer lb = this.factory.getLoadBalancer(clientName);
+   ServerIntrospector serverIntrospector = this.factory.getInstance(clientName,
+         ServerIntrospector.class);
+   client = this.loadBalancedRetryFactory != null
+         ? new RetryableFeignLoadBalancer(lb, config, serverIntrospector,
+               this.loadBalancedRetryFactory)
+         : new FeignLoadBalancer(lb, config, serverIntrospector);
+   this.cache.put(clientName, client);
+   return client;
+}
+```
+
+这个方法先根据服务名从缓存中获取一个FeignLoadBalancer，获取不到就创建一个。创建的过程就是从每个服务对应的容器中获取到IClientConfig和ILoadBalancer，其中ILoadBalancer类就是Ribbon的负载均衡的核心类。
+
+那么这个create方法最后返回的FeignLoadBalancer是什么呢？
+
+```java
+public class FeignLoadBalancer extends
+    AbstractLoadBalancerAwareClient<FeignLoadBalancer.RibbonRequest, FeignLoadBalancer.RibbonResponse> {
+
+    private final RibbonProperties ribbon;
+
+    protected int connectTimeout;
+
+    protected int readTimeout;
+
+    protected IClientConfig clientConfig;
+
+    protected ServerIntrospector serverIntrospector;
+
+    public FeignLoadBalancer(ILoadBalancer lb, IClientConfig clientConfig,
+                             ServerIntrospector serverIntrospector) {
+        super(lb, clientConfig);
+        this.setRetryHandler(RetryHandler.DEFAULT);
+        this.clientConfig = clientConfig;
+        this.ribbon = RibbonProperties.from(clientConfig);
+        RibbonProperties ribbon = this.ribbon;
+        this.connectTimeout = ribbon.getConnectTimeout();
+        this.readTimeout = ribbon.getReadTimeout();
+        this.serverIntrospector = serverIntrospector;
+    }
+}
+```
+
+FeignLoadBalancer继承自AbstractLoadBalancerAwareClient，这个类主要作用是通过ILoadBalancer组件获取一个Server，然后基于这个Server重构了URI，也就是将你的请求路径`http://服务名/demo/hello`转换成类似`http://127.0.0.1:8080/demo/hello`这种路径，也就是将原服务名替换成服务所在的某一台机器ip和端口，替换之后就交由子类实现的exceut方法来发送http请求。
+
+AbstractLoadBalancerAwareClient#executeWithLoadBalancer(...)源码如下：
+
+```java
+public T executeWithLoadBalancer(final S request, final IClientConfig requestConfig) throws ClientException {
+    LoadBalancerCommand<T> command = buildLoadBalancerCommand(request, requestConfig);
+
+    try {
+        return command.submit(
+            new ServerOperation<T>() {
+                @Override
+                public Observable<T> call(Server server) {
+                    URI finalUri = reconstructURIWithServer(server, request.getUri());
+                    S requestForServer = (S) request.replaceUri(finalUri);
+                    try {
+                        return Observable.just(AbstractLoadBalancerAwareClient.this.execute(requestForServer, requestConfig));
+                    } 
+                    catch (Exception e) {
+                        return Observable.error(e);
+                    }
+                }
+            })
+            .toBlocking()
+            .single();
+    } catch (Exception e) {
+        Throwable t = e.getCause();
+        if (t instanceof ClientException) {
+            throw (ClientException) t;
+        } else {
+            throw new ClientException(e);
+        }
+    }
+    
+}
+```
+
+以上就是Feign和Ribbon的整合分析。
