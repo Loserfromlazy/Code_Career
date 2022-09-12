@@ -5655,7 +5655,7 @@ public void onPut(String key, Record value) {
 
 ### 5.4.5 服务发现
 
-> 未完结
+这部分涉及到Spring Cloud远程调用的相关原理，可以先看我的[Spring Cloud远程调用](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8%E5%8E%9F%E7%90%86.md)笔记。
 
 
 
