@@ -5655,8 +5655,267 @@ public void onPut(String key, Record value) {
 
 ### 5.4.5 服务发现
 
-这部分涉及到Spring Cloud远程调用的相关原理，可以先看我的[Spring Cloud远程调用](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8%E5%8E%9F%E7%90%86.md)笔记。
+> 这部分涉及到Spring Cloud远程调用的相关原理，可以先看我的[Spring Cloud远程调用](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8%E5%8E%9F%E7%90%86.md)笔记。
+>
 
+我们编写一个测试用的接口，这里我们先简单使用discoveryClient进行服务发现：
 
+```java
+@GetMapping("/testServiceFind")
+public Integer testServiceFind(){
+    /*1.从Nacos Server中获取关注的那个服务的实例信息即服务发现*/
+    List<ServiceInstance> user = discoveryClient.getInstances("user");
+    /*2.如果有多个实例选择一个来使用(负载均衡)*/
+    ServiceInstance serviceInstance = user.get(0);
+    /*3.从元数据信息获取host port*/
+    String host = serviceInstance.getHost();
+    int port = serviceInstance.getPort();
+    String url = "http://"+host+":"+port+"/user/findUserById";
+    System.out.println("############URL##########:"+url);
+    return 111;
+}
+```
+
+我们在getInstances方法上打上断点，然后请求方法并跟进代码。请求链路如下：
+
+~~~
+CompositeDiscoveryClient#getInstances
+-->NacosDiscoveryClient#getInstances
+-->NacosServiceDiscovery#getInstances
+~~~
+
+然后我们来看NacosServiceDiscovery#getInstances方法：
+
+```java
+public List<ServiceInstance> getInstances(String serviceId) throws NacosException {
+   String group = discoveryProperties.getGroup();
+    //调用命名服务选取实例
+   List<Instance> instances = namingService.selectInstances(serviceId, group, true);
+   return hostToServiceInstanceList(instances, serviceId);
+}
+```
+
+然后我们跟进selectInstances方法，最后会来到NacosNamingService#selectInstances()：
+
+```java
+@Override
+public List<Instance> selectInstances(String serviceName, String groupName, List<String> clusters, boolean healthy,
+        boolean subscribe) throws NacosException {
+    
+    ServiceInfo serviceInfo;
+    //这个subscribe表示是否是订阅模式，默认为true，即默认为订阅模式
+    if (subscribe) {
+        //获取服务信息
+        serviceInfo = hostReactor.getServiceInfo(NamingUtils.getGroupedName(serviceName, groupName),
+                StringUtils.join(clusters, ","));
+    } else {
+        serviceInfo = hostReactor
+                .getServiceInfoDirectlyFromServer(NamingUtils.getGroupedName(serviceName, groupName),
+                        StringUtils.join(clusters, ","));
+    }
+    return selectInstances(serviceInfo, healthy);
+}
+```
+
+然后我们跟进hostReactor.getServiceInfo：
+
+```java
+public ServiceInfo getServiceInfo(final String serviceName, final String clusters) {
+    
+    NAMING_LOGGER.debug("failover-mode: " + failoverReactor.isFailoverSwitch());
+    String key = ServiceInfo.getKey(serviceName, clusters);
+    if (failoverReactor.isFailoverSwitch()) {
+        return failoverReactor.getService(key);
+    }
+    
+    ServiceInfo serviceObj = getServiceInfo0(serviceName, clusters);
+    
+    if (null == serviceObj) {
+        serviceObj = new ServiceInfo(serviceName, clusters);
+        
+        serviceInfoMap.put(serviceObj.getKey(), serviceObj);
+        
+        updatingMap.put(serviceName, new Object());
+        //更新服务列表
+        updateServiceNow(serviceName, clusters);
+        updatingMap.remove(serviceName);
+        
+    } else if (updatingMap.containsKey(serviceName)) {
+        
+        if (UPDATE_HOLD_INTERVAL > 0) {
+            // hold a moment waiting for update finish
+            synchronized (serviceObj) {
+                try {
+                    serviceObj.wait(UPDATE_HOLD_INTERVAL);
+                } catch (InterruptedException e) {
+                    NAMING_LOGGER
+                            .error("[getServiceInfo] serviceName:" + serviceName + ", clusters:" + clusters, e);
+                }
+            }
+        }
+    }
+    //
+    scheduleUpdateIfAbsent(serviceName, clusters);
+    
+    return serviceInfoMap.get(serviceObj.getKey());
+}
+```
+
+在上面这段源码中，有两个关键点：
+
+1. updateServiceNow(serviceName, clusters);
+
+   此方法的含义是更新服务列表，我们跟进此方法：
+
+   ```java
+   public void updateServiceNow(String serviceName, String clusters) {
+       ServiceInfo oldService = getServiceInfo0(serviceName, clusters);
+       try {
+           //获取服务列表
+           String result = serverProxy.queryList(serviceName, clusters, pushReceiver.getUdpPort(), false);
+           
+           if (StringUtils.isNotEmpty(result)) {
+               //解析返回结果
+               processServiceJson(result);
+           }
+       } catch (Exception e) {
+           NAMING_LOGGER.error("[NA] failed to update serviceName: " + serviceName, e);
+       } finally {
+           if (oldService != null) {
+               synchronized (oldService) {
+                   oldService.notifyAll();
+               }
+           }
+       }
+   }
+   ```
+
+   ```java
+   public String queryList(String serviceName, String clusters, int udpPort, boolean healthyOnly)
+           throws NacosException {
+       
+       final Map<String, String> params = new HashMap<String, String>(8);
+       params.put(CommonParams.NAMESPACE_ID, namespaceId);
+       params.put(CommonParams.SERVICE_NAME, serviceName);
+       params.put("clusters", clusters);
+       params.put("udpPort", String.valueOf(udpPort));
+       params.put("clientIP", NetUtils.localIP());
+       params.put("healthyOnly", String.valueOf(healthyOnly));
+       //向nacos服务端发送请求，获取服务列表
+       return reqApi(UtilAndComs.nacosUrlBase + "/instance/list", params, HttpMethod.GET);
+   }
+   ```
+
+   ```java
+   public ServiceInfo processServiceJson(String json) {
+       ServiceInfo serviceInfo = JacksonUtils.toObj(json, ServiceInfo.class);
+       ServiceInfo oldService = serviceInfoMap.get(serviceInfo.getKey());
+       if (serviceInfo.getHosts() == null || !serviceInfo.validate()) {
+           //empty or error push, just ignore
+           return oldService;
+       }
+       
+       boolean changed = false;
+       
+       if (oldService != null) {
+           
+           if (oldService.getLastRefTime() > serviceInfo.getLastRefTime()) {
+               NAMING_LOGGER.warn("out of date data received, old-t: " + oldService.getLastRefTime() + ", new-t: "
+                       + serviceInfo.getLastRefTime());
+           }
+           
+           serviceInfoMap.put(serviceInfo.getKey(), serviceInfo);
+           
+           Map<String, Instance> oldHostMap = new HashMap<String, Instance>(oldService.getHosts().size());
+           for (Instance host : oldService.getHosts()) {
+               oldHostMap.put(host.toInetAddr(), host);
+           }
+           
+           Map<String, Instance> newHostMap = new HashMap<String, Instance>(serviceInfo.getHosts().size());
+           for (Instance host : serviceInfo.getHosts()) {
+               newHostMap.put(host.toInetAddr(), host);
+           }
+           
+           Set<Instance> modHosts = new HashSet<Instance>();
+           Set<Instance> newHosts = new HashSet<Instance>();
+           Set<Instance> remvHosts = new HashSet<Instance>();
+           
+           List<Map.Entry<String, Instance>> newServiceHosts = new ArrayList<Map.Entry<String, Instance>>(
+                   newHostMap.entrySet());
+           for (Map.Entry<String, Instance> entry : newServiceHosts) {
+               Instance host = entry.getValue();
+               String key = entry.getKey();
+               if (oldHostMap.containsKey(key) && !StringUtils
+                       .equals(host.toString(), oldHostMap.get(key).toString())) {
+                   modHosts.add(host);
+                   continue;
+               }
+               
+               if (!oldHostMap.containsKey(key)) {
+                   newHosts.add(host);
+               }
+           }
+           
+           for (Map.Entry<String, Instance> entry : oldHostMap.entrySet()) {
+               Instance host = entry.getValue();
+               String key = entry.getKey();
+               if (newHostMap.containsKey(key)) {
+                   continue;
+               }
+               
+               if (!newHostMap.containsKey(key)) {
+                   remvHosts.add(host);
+               }
+               
+           }
+           
+           if (newHosts.size() > 0) {
+               changed = true;
+               NAMING_LOGGER.info("new ips(" + newHosts.size() + ") service: " + serviceInfo.getKey() + " -> "
+                       + JacksonUtils.toJson(newHosts));
+           }
+           
+           if (remvHosts.size() > 0) {
+               changed = true;
+               NAMING_LOGGER.info("removed ips(" + remvHosts.size() + ") service: " + serviceInfo.getKey() + " -> "
+                       + JacksonUtils.toJson(remvHosts));
+           }
+           
+           if (modHosts.size() > 0) {
+               changed = true;
+               updateBeatInfo(modHosts);
+               NAMING_LOGGER.info("modified ips(" + modHosts.size() + ") service: " + serviceInfo.getKey() + " -> "
+                       + JacksonUtils.toJson(modHosts));
+           }
+           
+           serviceInfo.setJsonFromServer(json);
+           
+           if (newHosts.size() > 0 || remvHosts.size() > 0 || modHosts.size() > 0) {
+               eventDispatcher.serviceChanged(serviceInfo);
+               DiskCache.write(serviceInfo, cacheDir);
+           }
+           
+       } else {
+           changed = true;
+           NAMING_LOGGER.info("init new ips(" + serviceInfo.ipCount() + ") service: " + serviceInfo.getKey() + " -> "
+                   + JacksonUtils.toJson(serviceInfo.getHosts()));
+           serviceInfoMap.put(serviceInfo.getKey(), serviceInfo);
+           eventDispatcher.serviceChanged(serviceInfo);
+           serviceInfo.setJsonFromServer(json);
+           DiskCache.write(serviceInfo, cacheDir);
+       }
+       
+       MetricsMonitor.getServiceInfoMapSizeMonitor().set(serviceInfoMap.size());
+       
+       if (changed) {
+           NAMING_LOGGER.info("current ips:(" + serviceInfo.ipCount() + ") service: " + serviceInfo.getKey() + " -> "
+                   + JacksonUtils.toJson(serviceInfo.getHosts()));
+       }
+       
+       return serviceInfo;
+   }
+   ```
+
+2. scheduleUpdateIfAbsent(serviceName, clusters);
 
 ### 5.4.6 配置中心
