@@ -5653,7 +5653,7 @@ public void onPut(String key, Record value) {
 
 也就是说服务注册最终会将实例信息存入DataStore中，到此服务端服务注册流程完。
 
-### 5.4.5 服务发现
+### 5.4.5 客户端服务发现流程
 
 > 这部分涉及到Spring Cloud远程调用的相关原理，可以先看我的[Spring Cloud远程调用](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8%E5%8E%9F%E7%90%86.md)笔记。
 >
@@ -5689,7 +5689,7 @@ CompositeDiscoveryClient#getInstances
 ```java
 public List<ServiceInstance> getInstances(String serviceId) throws NacosException {
    String group = discoveryProperties.getGroup();
-    //调用命名服务选取实例
+    //调用命名服务选取实例，这里可以看到订阅模式默认为true
    List<Instance> instances = namingService.selectInstances(serviceId, group, true);
    return hostToServiceInstanceList(instances, serviceId);
 }
@@ -5709,10 +5709,12 @@ public List<Instance> selectInstances(String serviceName, String groupName, List
         serviceInfo = hostReactor.getServiceInfo(NamingUtils.getGroupedName(serviceName, groupName),
                 StringUtils.join(clusters, ","));
     } else {
+        //直接从服务端获取信息
         serviceInfo = hostReactor
                 .getServiceInfoDirectlyFromServer(NamingUtils.getGroupedName(serviceName, groupName),
                         StringUtils.join(clusters, ","));
     }
+    //将serviceInfo转换成实例数组，并去除不健康的、未启用的以及权重小于等于0的
     return selectInstances(serviceInfo, healthy);
 }
 ```
@@ -5727,9 +5729,9 @@ public ServiceInfo getServiceInfo(final String serviceName, final String cluster
     if (failoverReactor.isFailoverSwitch()) {
         return failoverReactor.getService(key);
     }
-    
+    //获取本地缓存的服务信息
     ServiceInfo serviceObj = getServiceInfo0(serviceName, clusters);
-    
+    //如果为空再去服务端获取服务信息
     if (null == serviceObj) {
         serviceObj = new ServiceInfo(serviceName, clusters);
         
@@ -5754,16 +5756,29 @@ public ServiceInfo getServiceInfo(final String serviceName, final String cluster
             }
         }
     }
-    //
+    //如果没有更新定时任务就创建一个
     scheduleUpdateIfAbsent(serviceName, clusters);
     
     return serviceInfoMap.get(serviceObj.getKey());
 }
 ```
 
-在上面这段源码中，有两个关键点：
+在上面这段源码中，有三个关键点：
 
-1. updateServiceNow(serviceName, clusters);
+1. getServiceInfo0(serviceName, clusters);
+
+   我们跟进去可以发现，nacos首先会从本地缓存获取服务信息
+
+   ```java
+   private ServiceInfo getServiceInfo0(String serviceName, String clusters) {
+       
+       String key = ServiceInfo.getKey(serviceName, clusters);
+       
+       return serviceInfoMap.get(key);
+   }
+   ```
+
+2. updateServiceNow(serviceName, clusters);
 
    此方法的含义是更新服务列表，我们跟进此方法：
 
@@ -5775,7 +5790,7 @@ public ServiceInfo getServiceInfo(final String serviceName, final String cluster
            String result = serverProxy.queryList(serviceName, clusters, pushReceiver.getUdpPort(), false);
            
            if (StringUtils.isNotEmpty(result)) {
-               //解析返回结果
+               //解析返回结果，geng'xi
                processServiceJson(result);
            }
        } catch (Exception e) {
@@ -5789,6 +5804,8 @@ public ServiceInfo getServiceInfo(final String serviceName, final String cluster
        }
    }
    ```
+
+   其中，获取服务列表方法源码如下：
 
    ```java
    public String queryList(String serviceName, String clusters, int udpPort, boolean healthyOnly)
@@ -5806,116 +5823,327 @@ public ServiceInfo getServiceInfo(final String serviceName, final String cluster
    }
    ```
 
+3. scheduleUpdateIfAbsent(serviceName, clusters);
+
+   这个方法主要作用是如果没有更新定时任务就创建一个服务定时查询更新的任务，源码如下：
+
    ```java
-   public ServiceInfo processServiceJson(String json) {
-       ServiceInfo serviceInfo = JacksonUtils.toObj(json, ServiceInfo.class);
-       ServiceInfo oldService = serviceInfoMap.get(serviceInfo.getKey());
-       if (serviceInfo.getHosts() == null || !serviceInfo.validate()) {
-           //empty or error push, just ignore
-           return oldService;
+   //private final Map<String, ScheduledFuture<?>> futureMap = new HashMap<String, ScheduledFuture<?>>();
+   //futureMap 是一个缓存 map，其 key 为 groupId@@微服务名称@@clusters，value 是一个定时异步操作对象ScheduledFuture
+   public void scheduleUpdateIfAbsent(String serviceName, String clusters) {
+       if (futureMap.get(ServiceInfo.getKey(serviceName, clusters)) != null) {
+           return;
        }
        
-       boolean changed = false;
-       
-       if (oldService != null) {
-           
-           if (oldService.getLastRefTime() > serviceInfo.getLastRefTime()) {
-               NAMING_LOGGER.warn("out of date data received, old-t: " + oldService.getLastRefTime() + ", new-t: "
-                       + serviceInfo.getLastRefTime());
+       synchronized (futureMap) {
+           if (futureMap.get(ServiceInfo.getKey(serviceName, clusters)) != null) {
+               return;
            }
-           
-           serviceInfoMap.put(serviceInfo.getKey(), serviceInfo);
-           
-           Map<String, Instance> oldHostMap = new HashMap<String, Instance>(oldService.getHosts().size());
-           for (Instance host : oldService.getHosts()) {
-               oldHostMap.put(host.toInetAddr(), host);
-           }
-           
-           Map<String, Instance> newHostMap = new HashMap<String, Instance>(serviceInfo.getHosts().size());
-           for (Instance host : serviceInfo.getHosts()) {
-               newHostMap.put(host.toInetAddr(), host);
-           }
-           
-           Set<Instance> modHosts = new HashSet<Instance>();
-           Set<Instance> newHosts = new HashSet<Instance>();
-           Set<Instance> remvHosts = new HashSet<Instance>();
-           
-           List<Map.Entry<String, Instance>> newServiceHosts = new ArrayList<Map.Entry<String, Instance>>(
-                   newHostMap.entrySet());
-           for (Map.Entry<String, Instance> entry : newServiceHosts) {
-               Instance host = entry.getValue();
-               String key = entry.getKey();
-               if (oldHostMap.containsKey(key) && !StringUtils
-                       .equals(host.toString(), oldHostMap.get(key).toString())) {
-                   modHosts.add(host);
-                   continue;
-               }
-               
-               if (!oldHostMap.containsKey(key)) {
-                   newHosts.add(host);
-               }
-           }
-           
-           for (Map.Entry<String, Instance> entry : oldHostMap.entrySet()) {
-               Instance host = entry.getValue();
-               String key = entry.getKey();
-               if (newHostMap.containsKey(key)) {
-                   continue;
-               }
-               
-               if (!newHostMap.containsKey(key)) {
-                   remvHosts.add(host);
-               }
-               
-           }
-           
-           if (newHosts.size() > 0) {
-               changed = true;
-               NAMING_LOGGER.info("new ips(" + newHosts.size() + ") service: " + serviceInfo.getKey() + " -> "
-                       + JacksonUtils.toJson(newHosts));
-           }
-           
-           if (remvHosts.size() > 0) {
-               changed = true;
-               NAMING_LOGGER.info("removed ips(" + remvHosts.size() + ") service: " + serviceInfo.getKey() + " -> "
-                       + JacksonUtils.toJson(remvHosts));
-           }
-           
-           if (modHosts.size() > 0) {
-               changed = true;
-               updateBeatInfo(modHosts);
-               NAMING_LOGGER.info("modified ips(" + modHosts.size() + ") service: " + serviceInfo.getKey() + " -> "
-                       + JacksonUtils.toJson(modHosts));
-           }
-           
-           serviceInfo.setJsonFromServer(json);
-           
-           if (newHosts.size() > 0 || remvHosts.size() > 0 || modHosts.size() > 0) {
-               eventDispatcher.serviceChanged(serviceInfo);
-               DiskCache.write(serviceInfo, cacheDir);
-           }
-           
-       } else {
-           changed = true;
-           NAMING_LOGGER.info("init new ips(" + serviceInfo.ipCount() + ") service: " + serviceInfo.getKey() + " -> "
-                   + JacksonUtils.toJson(serviceInfo.getHosts()));
-           serviceInfoMap.put(serviceInfo.getKey(), serviceInfo);
-           eventDispatcher.serviceChanged(serviceInfo);
-           serviceInfo.setJsonFromServer(json);
-           DiskCache.write(serviceInfo, cacheDir);
+           //新增一个UpdateTask任务并延时启动
+           ScheduledFuture<?> future = addTask(new UpdateTask(serviceName, clusters));
+           futureMap.put(ServiceInfo.getKey(serviceName, clusters), future);
        }
-       
-       MetricsMonitor.getServiceInfoMapSizeMonitor().set(serviceInfoMap.size());
-       
-       if (changed) {
-           NAMING_LOGGER.info("current ips:(" + serviceInfo.ipCount() + ") service: " + serviceInfo.getKey() + " -> "
-                   + JacksonUtils.toJson(serviceInfo.getHosts()));
-       }
-       
-       return serviceInfo;
+   }
+   
+   public synchronized ScheduledFuture<?> addTask(UpdateTask task) {
+       //延时一秒启动
+       return executor.schedule(task, DEFAULT_DELAY, TimeUnit.MILLISECONDS);
    }
    ```
 
-2. scheduleUpdateIfAbsent(serviceName, clusters);
+   下面我们来看一下这个updateTask都干了什么，其源码如下
 
-### 5.4.6 配置中心
+   ```java
+   public class UpdateTask implements Runnable {
+       
+       //省略部分代码
+       
+       @Override
+       public void run() {
+           long delayTime = -1;
+           
+           try {
+               //本地缓存获取服务
+               ServiceInfo serviceObj = serviceInfoMap.get(ServiceInfo.getKey(serviceName, clusters));
+               //如果本地缓存没有则立即更新本地缓存
+               if (serviceObj == null) {
+                   updateServiceNow(serviceName, clusters);
+                   delayTime = DEFAULT_DELAY;
+                   return;
+               }
+               //如果服务的最新更新时间小于等于缓存刷新（最后一次拉取数据的时间）时间，从服务端重新查询
+               if (serviceObj.getLastRefTime() <= lastRefTime) {
+                   updateServiceNow(serviceName, clusters);
+                   serviceObj = serviceInfoMap.get(ServiceInfo.getKey(serviceName, clusters));
+               } else {
+                   // if serviceName already updated by push, we should not override it
+                   // since the push data may be different from pull through force push
+                   refreshOnly(serviceName, clusters);
+               }
+               //设置缓存刷新时间
+               lastRefTime = serviceObj.getLastRefTime();
+               
+               if (!eventDispatcher.isSubscribed(serviceName, clusters) && !futureMap
+                       .containsKey(ServiceInfo.getKey(serviceName, clusters))) {
+                   // abort the update task
+                   NAMING_LOGGER.info("update task is stopped, service:" + serviceName + ", clusters:" + clusters);
+                   return;
+               }
+               //获取延时时间
+               delayTime = serviceObj.getCacheMillis();
+               
+           } catch (Throwable e) {
+               NAMING_LOGGER.warn("[NA] failed to update serviceName: " + serviceName, e);
+           } finally {
+               if (delayTime > 0) {
+                   //延时执行，一般是10s，该时间是由服务端传回来的
+                   executor.schedule(this, delayTime, TimeUnit.MILLISECONDS);
+               }
+           }
+           
+       }
+   }
+   ```
+
+
+综上，我们简单了解一下nacos客户端服务发现的总体流程，也知道了在订阅模式下，nacos会本地维护一个服务列表缓存并进行定时更新，从而达到服务发现的目的。
+
+但是我们在开发中其实主要使用的是Feign接口进行远程调用而不是手动获取服务列表进行负载均衡，那么nacos是如何与Feign+Ribbon结合维护本地服务列表缓存的呢？
+
+基于对Feign+Ribbon的了解，我们直到ribbon是在这里进行服务实例的更新的。因此我们打上断点，如下图：
+
+![image-20220913110847226](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220913110847226.png)
+
+> 这里需要先了解Feign+Ribbon+Hystrix/Sentinel的整体工作流程，具体介绍本笔记中略，可以去看我的[Spring Cloud远程调用](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8%E5%8E%9F%E7%90%86.md)笔记。
+>
+> Spring Cloud远程调用笔记中其实也介绍了nacos或eureka实现了ribbon的ServerList接口，因此Ribbon定时更新服务列表时，本质上是走的nacos的方法进行的数据维护。
+
+然后我们跟进去：
+
+![image-20220913111602541](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220913111602541.png)
+
+在这个方法中我们继续跟进，会走到`NacosServerList#getUpdatedListOfServers`方法：
+
+```java
+@Override
+public List<NacosServer> getUpdatedListOfServers() {
+    return getServers();
+}
+private List<NacosServer> getServers() {
+    try {
+        String group = discoveryProperties.getGroup();
+        //先获取NamingService，然后调用selectInstances方法
+        List<Instance> instances = nacosServiceManager
+            .getNamingService(discoveryProperties.getNacosProperties())
+            .selectInstances(serviceId, group, true);
+        return instancesToServerList(instances);
+    }
+    catch (Exception e) {
+        throw new IllegalStateException(
+            "Can not get service instances from nacos, serviceId=" + serviceId,
+            e);
+    }
+}
+```
+
+上面源码中的selectInstances方法我们很熟悉，我们前面已经介绍过了，因此到这里我们已经了解了，ribbon的服务实例的更新本质上是调用的nacos的方法，而nacos在订阅模式下，会先在本地缓存中进行查询。因此，**可以简单地理解为ribbon是通过同步nacos的服务实例进行的服务实例数据的维护**。
+
+> 我们可以简单的这么理解，但是实际上的流程我们上面已经了解过了，这里就不再赘述。
+
+### 5.4.6 服务端服务发现流程
+
+上面我们已经了解了，nacos的服务发现最终是向`/instance/list`接口发送请求获取的服务实例，因此我们来到nacos服务端源码上，找到此方法，并加上断点，源码如下：
+
+```java
+@GetMapping("/list")
+@Secured(parser = NamingResourceParser.class, action = ActionTypes.READ)
+public ObjectNode list(HttpServletRequest request) throws Exception {
+    //获取请求传过来的服务信息
+    String namespaceId = WebUtils.optional(request, CommonParams.NAMESPACE_ID, Constants.DEFAULT_NAMESPACE_ID);
+    
+    String serviceName = WebUtils.required(request, CommonParams.SERVICE_NAME);
+    String agent = WebUtils.getUserAgent(request);
+    String clusters = WebUtils.optional(request, "clusters", StringUtils.EMPTY);
+    String clientIP = WebUtils.optional(request, "clientIP", StringUtils.EMPTY);
+    int udpPort = Integer.parseInt(WebUtils.optional(request, "udpPort", "0"));
+    String env = WebUtils.optional(request, "env", StringUtils.EMPTY);
+    boolean isCheck = Boolean.parseBoolean(WebUtils.optional(request, "isCheck", "false"));
+    
+    String app = WebUtils.optional(request, "app", StringUtils.EMPTY);
+    
+    String tenant = WebUtils.optional(request, "tid", StringUtils.EMPTY);
+    
+    boolean healthyOnly = Boolean.parseBoolean(WebUtils.optional(request, "healthyOnly", "false"));
+    //tong'guo
+    return doSrvIpxt(namespaceId, serviceName, agent, clusters, clientIP, udpPort, env, isCheck, app, tenant,
+            healthyOnly);
+}
+```
+
+上面方法中我们主要跟进doSrvIpxt方法：
+
+```java
+public ObjectNode doSrvIpxt(String namespaceId, String serviceName, String agent, String clusters, String clientIP,
+        int udpPort, String env, boolean isCheck, String app, String tid, boolean healthyOnly) throws Exception {
+    
+    ClientInfo clientInfo = new ClientInfo(agent);
+    ObjectNode result = JacksonUtils.createEmptyJsonNode();
+    Service service = serviceManager.getService(namespaceId, serviceName);
+    
+    if (service == null) {
+        if (Loggers.SRV_LOG.isDebugEnabled()) {
+            Loggers.SRV_LOG.debug("no instance to serve for service: {}", serviceName);
+        }
+        result.put("name", serviceName);
+        result.put("clusters", clusters);
+        result.replace("hosts", JacksonUtils.createEmptyArrayNode());
+        return result;
+    }
+    
+    checkIfDisabled(service);
+    
+    long cacheMillis = switchDomain.getDefaultCacheMillis();
+    
+    // now try to enable the push
+    try {
+        if (udpPort > 0 && pushService.canEnablePush(agent)) {
+            
+            pushService
+                    .addClient(namespaceId, serviceName, clusters, agent, new InetSocketAddress(clientIP, udpPort),
+                            pushDataSource, tid, app);
+            cacheMillis = switchDomain.getPushCacheMillis(serviceName);
+        }
+    } catch (Exception e) {
+        Loggers.SRV_LOG
+                .error("[NACOS-API] failed to added push client {}, {}:{}", clientInfo, clientIP, udpPort, e);
+        cacheMillis = switchDomain.getDefaultCacheMillis();
+    }
+    
+    List<Instance> srvedIPs;
+    
+    srvedIPs = service.srvIPs(Arrays.asList(StringUtils.split(clusters, ",")));
+    
+    // filter ips using selector:
+    if (service.getSelector() != null && StringUtils.isNotBlank(clientIP)) {
+        srvedIPs = service.getSelector().select(clientIP, srvedIPs);
+    }
+    
+    if (CollectionUtils.isEmpty(srvedIPs)) {
+        
+        if (Loggers.SRV_LOG.isDebugEnabled()) {
+            Loggers.SRV_LOG.debug("no instance to serve for service: {}", serviceName);
+        }
+        
+        if (clientInfo.type == ClientInfo.ClientType.JAVA
+                && clientInfo.version.compareTo(VersionUtil.parseVersion("1.0.0")) >= 0) {
+            result.put("dom", serviceName);
+        } else {
+            result.put("dom", NamingUtils.getServiceName(serviceName));
+        }
+        
+        result.put("hosts", JacksonUtils.createEmptyArrayNode());
+        result.put("name", serviceName);
+        result.put("cacheMillis", cacheMillis);
+        result.put("lastRefTime", System.currentTimeMillis());
+        result.put("checksum", service.getChecksum());
+        result.put("useSpecifiedURL", false);
+        result.put("clusters", clusters);
+        result.put("env", env);
+        result.put("metadata", JacksonUtils.transferToJsonNode(service.getMetadata()));
+        return result;
+    }
+    
+    Map<Boolean, List<Instance>> ipMap = new HashMap<>(2);
+    ipMap.put(Boolean.TRUE, new ArrayList<>());
+    ipMap.put(Boolean.FALSE, new ArrayList<>());
+    
+    for (Instance ip : srvedIPs) {
+        ipMap.get(ip.isHealthy()).add(ip);
+    }
+    
+    if (isCheck) {
+        result.put("reachProtectThreshold", false);
+    }
+    
+    double threshold = service.getProtectThreshold();
+    
+    if ((float) ipMap.get(Boolean.TRUE).size() / srvedIPs.size() <= threshold) {
+        
+        Loggers.SRV_LOG.warn("protect threshold reached, return all ips, service: {}", serviceName);
+        if (isCheck) {
+            result.put("reachProtectThreshold", true);
+        }
+        
+        ipMap.get(Boolean.TRUE).addAll(ipMap.get(Boolean.FALSE));
+        ipMap.get(Boolean.FALSE).clear();
+    }
+    
+    if (isCheck) {
+        result.put("protectThreshold", service.getProtectThreshold());
+        result.put("reachLocalSiteCallThreshold", false);
+        
+        return JacksonUtils.createEmptyJsonNode();
+    }
+    
+    ArrayNode hosts = JacksonUtils.createEmptyArrayNode();
+    
+    for (Map.Entry<Boolean, List<Instance>> entry : ipMap.entrySet()) {
+        List<Instance> ips = entry.getValue();
+        
+        if (healthyOnly && !entry.getKey()) {
+            continue;
+        }
+        
+        for (Instance instance : ips) {
+            
+            // remove disabled instance:
+            if (!instance.isEnabled()) {
+                continue;
+            }
+            
+            ObjectNode ipObj = JacksonUtils.createEmptyJsonNode();
+            
+            ipObj.put("ip", instance.getIp());
+            ipObj.put("port", instance.getPort());
+            // deprecated since nacos 1.0.0:
+            ipObj.put("valid", entry.getKey());
+            ipObj.put("healthy", entry.getKey());
+            ipObj.put("marked", instance.isMarked());
+            ipObj.put("instanceId", instance.getInstanceId());
+            ipObj.put("metadata", JacksonUtils.transferToJsonNode(instance.getMetadata()));
+            ipObj.put("enabled", instance.isEnabled());
+            ipObj.put("weight", instance.getWeight());
+            ipObj.put("clusterName", instance.getClusterName());
+            if (clientInfo.type == ClientInfo.ClientType.JAVA
+                    && clientInfo.version.compareTo(VersionUtil.parseVersion("1.0.0")) >= 0) {
+                ipObj.put("serviceName", instance.getServiceName());
+            } else {
+                ipObj.put("serviceName", NamingUtils.getServiceName(instance.getServiceName()));
+            }
+            
+            ipObj.put("ephemeral", instance.isEphemeral());
+            hosts.add(ipObj);
+            
+        }
+    }
+    
+    result.replace("hosts", hosts);
+    if (clientInfo.type == ClientInfo.ClientType.JAVA
+            && clientInfo.version.compareTo(VersionUtil.parseVersion("1.0.0")) >= 0) {
+        result.put("dom", serviceName);
+    } else {
+        result.put("dom", NamingUtils.getServiceName(serviceName));
+    }
+    result.put("name", serviceName);
+    result.put("cacheMillis", cacheMillis);
+    result.put("lastRefTime", System.currentTimeMillis());
+    result.put("checksum", service.getChecksum());
+    result.put("useSpecifiedURL", false);
+    result.put("clusters", clusters);
+    result.put("env", env);
+    result.replace("metadata", JacksonUtils.transferToJsonNode(service.getMetadata()));
+    return result;
+}
+```
+
+### 5.4.7 配置中心

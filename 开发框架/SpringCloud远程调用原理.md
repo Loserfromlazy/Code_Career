@@ -1806,6 +1806,12 @@ public synchronized void start(final UpdateAction updateAction) {
 }
 ```
 
+总结，经过上面源码分析我们可以看到，Ribbon自己内部的服务实例缓存是通过定时任务，然后用nacos或eureka实现的ServerList中定时获取最新的服务列表。
+
+这也是Ribbon与nacos或eureka结合使用的原理，也就是说核心就是这个ServerList接口：
+
+![image-20220913092005015](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220913092005015.png)
+
 ## 八、Feign+Ribbon+Hystrix/Sentinel进行远程调用
 
 ### 8.1 调用流程
