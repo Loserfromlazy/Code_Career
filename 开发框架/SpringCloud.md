@@ -5974,7 +5974,7 @@ public ObjectNode list(HttpServletRequest request) throws Exception {
     String tenant = WebUtils.optional(request, "tid", StringUtils.EMPTY);
     
     boolean healthyOnly = Boolean.parseBoolean(WebUtils.optional(request, "healthyOnly", "false"));
-    //tong'guo
+    // 
     return doSrvIpxt(namespaceId, serviceName, agent, clusters, clientIP, udpPort, env, isCheck, app, tenant,
             healthyOnly);
 }
