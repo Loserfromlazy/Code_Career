@@ -3484,7 +3484,11 @@ public class ProxyTransactionManagementConfiguration extends AbstractTransaction
 
 综上，Spring在使用声明式事务时会注入以上的Bean（主要是将事务的Advisor增强注入了BeanFactory），在创建其他Bean时，会根据6.4.1中的流程获取一下该Bean是否使用了事务，如果使用了事务则会返回事物的增强，在创建代理对象时会传入事物的增强，完成代理对象的创建并存入单例池（即BeanFactory）。
 
-# 七、Spring的观察者模式
+# 七、Spring的事件机制
+
+在学习前我们需要了解什么是观察者模式？什么是事件机制？，观察者模式就是每当一个对象改变状态，则所有依赖于它的对象都会得到通知并被自动更新。事件处理模型则采用基于观察者模式的委派事件模型，即一个Java组件所引发的事件并不由引发事件的对象自己来负责处理，而是委派给独立的事件处理对象负责。jdk事件实现是基于观察者模式，而spring事件又是在jdk事件的基础上进行了拓展。
+
+
 
 
 
