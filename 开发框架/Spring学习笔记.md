@@ -3484,5 +3484,7 @@ public class ProxyTransactionManagementConfiguration extends AbstractTransaction
 
 综上，Spring在使用声明式事务时会注入以上的Bean（主要是将事务的Advisor增强注入了BeanFactory），在创建其他Bean时，会根据6.4.1中的流程获取一下该Bean是否使用了事务，如果使用了事务则会返回事物的增强，在创建代理对象时会传入事物的增强，完成代理对象的创建并存入单例池（即BeanFactory）。
 
+# 七、Spring的观察者模式
+
 
 
