@@ -5988,8 +5988,9 @@ public ObjectNode doSrvIpxt(String namespaceId, String serviceName, String agent
     
     ClientInfo clientInfo = new ClientInfo(agent);
     ObjectNode result = JacksonUtils.createEmptyJsonNode();
+    //从nacos的服务map中获取服务信息
     Service service = serviceManager.getService(namespaceId, serviceName);
-    
+    //如果服务为空就返回空
     if (service == null) {
         if (Loggers.SRV_LOG.isDebugEnabled()) {
             Loggers.SRV_LOG.debug("no instance to serve for service: {}", serviceName);
@@ -6005,6 +6006,7 @@ public ObjectNode doSrvIpxt(String namespaceId, String serviceName, String agent
     long cacheMillis = switchDomain.getDefaultCacheMillis();
     
     // now try to enable the push
+    //添加当前客户端 IP、UDP端口等信息到 PushService 中
     try {
         if (udpPort > 0 && pushService.canEnablePush(agent)) {
             
@@ -6018,115 +6020,14 @@ public ObjectNode doSrvIpxt(String namespaceId, String serviceName, String agent
                 .error("[NACOS-API] failed to added push client {}, {}:{}", clientInfo, clientIP, udpPort, e);
         cacheMillis = switchDomain.getDefaultCacheMillis();
     }
-    
+    //从service实例中基于srvIps得到 所有 服务提供者 信息
     List<Instance> srvedIPs;
     
     srvedIPs = service.srvIPs(Arrays.asList(StringUtils.split(clusters, ",")));
     
-    // filter ips using selector:
-    if (service.getSelector() != null && StringUtils.isNotBlank(clientIP)) {
-        srvedIPs = service.getSelector().select(clientIP, srvedIPs);
-    }
+    //省略结果的检测，异常实例的剔除等代码
     
-    if (CollectionUtils.isEmpty(srvedIPs)) {
-        
-        if (Loggers.SRV_LOG.isDebugEnabled()) {
-            Loggers.SRV_LOG.debug("no instance to serve for service: {}", serviceName);
-        }
-        
-        if (clientInfo.type == ClientInfo.ClientType.JAVA
-                && clientInfo.version.compareTo(VersionUtil.parseVersion("1.0.0")) >= 0) {
-            result.put("dom", serviceName);
-        } else {
-            result.put("dom", NamingUtils.getServiceName(serviceName));
-        }
-        
-        result.put("hosts", JacksonUtils.createEmptyArrayNode());
-        result.put("name", serviceName);
-        result.put("cacheMillis", cacheMillis);
-        result.put("lastRefTime", System.currentTimeMillis());
-        result.put("checksum", service.getChecksum());
-        result.put("useSpecifiedURL", false);
-        result.put("clusters", clusters);
-        result.put("env", env);
-        result.put("metadata", JacksonUtils.transferToJsonNode(service.getMetadata()));
-        return result;
-    }
-    
-    Map<Boolean, List<Instance>> ipMap = new HashMap<>(2);
-    ipMap.put(Boolean.TRUE, new ArrayList<>());
-    ipMap.put(Boolean.FALSE, new ArrayList<>());
-    
-    for (Instance ip : srvedIPs) {
-        ipMap.get(ip.isHealthy()).add(ip);
-    }
-    
-    if (isCheck) {
-        result.put("reachProtectThreshold", false);
-    }
-    
-    double threshold = service.getProtectThreshold();
-    
-    if ((float) ipMap.get(Boolean.TRUE).size() / srvedIPs.size() <= threshold) {
-        
-        Loggers.SRV_LOG.warn("protect threshold reached, return all ips, service: {}", serviceName);
-        if (isCheck) {
-            result.put("reachProtectThreshold", true);
-        }
-        
-        ipMap.get(Boolean.TRUE).addAll(ipMap.get(Boolean.FALSE));
-        ipMap.get(Boolean.FALSE).clear();
-    }
-    
-    if (isCheck) {
-        result.put("protectThreshold", service.getProtectThreshold());
-        result.put("reachLocalSiteCallThreshold", false);
-        
-        return JacksonUtils.createEmptyJsonNode();
-    }
-    
-    ArrayNode hosts = JacksonUtils.createEmptyArrayNode();
-    
-    for (Map.Entry<Boolean, List<Instance>> entry : ipMap.entrySet()) {
-        List<Instance> ips = entry.getValue();
-        
-        if (healthyOnly && !entry.getKey()) {
-            continue;
-        }
-        
-        for (Instance instance : ips) {
-            
-            // remove disabled instance:
-            if (!instance.isEnabled()) {
-                continue;
-            }
-            
-            ObjectNode ipObj = JacksonUtils.createEmptyJsonNode();
-            
-            ipObj.put("ip", instance.getIp());
-            ipObj.put("port", instance.getPort());
-            // deprecated since nacos 1.0.0:
-            ipObj.put("valid", entry.getKey());
-            ipObj.put("healthy", entry.getKey());
-            ipObj.put("marked", instance.isMarked());
-            ipObj.put("instanceId", instance.getInstanceId());
-            ipObj.put("metadata", JacksonUtils.transferToJsonNode(instance.getMetadata()));
-            ipObj.put("enabled", instance.isEnabled());
-            ipObj.put("weight", instance.getWeight());
-            ipObj.put("clusterName", instance.getClusterName());
-            if (clientInfo.type == ClientInfo.ClientType.JAVA
-                    && clientInfo.version.compareTo(VersionUtil.parseVersion("1.0.0")) >= 0) {
-                ipObj.put("serviceName", instance.getServiceName());
-            } else {
-                ipObj.put("serviceName", NamingUtils.getServiceName(instance.getServiceName()));
-            }
-            
-            ipObj.put("ephemeral", instance.isEphemeral());
-            hosts.add(ipObj);
-            
-        }
-    }
-    
+    //封装返回结果
     result.replace("hosts", hosts);
     if (clientInfo.type == ClientInfo.ClientType.JAVA
             && clientInfo.version.compareTo(VersionUtil.parseVersion("1.0.0")) >= 0) {
@@ -6146,4 +6047,10 @@ public ObjectNode doSrvIpxt(String namespaceId, String serviceName, String agent
 }
 ```
 
-### 5.4.7 配置中心
+我们可以看到在服务端服务发现的主要流程如下：
+
+1. 根据客户端请求的参数，从服务端
+
+### 5.4.7 nacos服务订阅
+
+### 5.4.8 配置中心

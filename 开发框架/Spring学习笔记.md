@@ -2098,9 +2098,26 @@ r">
 **注意点1：**@Transactional注解，常见的事务不生效的场景为：
 
 - @Transactional 应用在非 public 修饰的方法上
+
 - @Transactional 注解属性 propagation 设置错误
+
 - @Transactional 注解属性 rollbackFor 设置错误
+
 - 同一个类中方法调用，导致@Transactional失效
+
+  ~~~java
+  public void test(){
+      //doSomething...
+      this.test2();
+  }
+  @Transaction(rollback = Exeception.class)
+  public void test2(){
+      //doSomething...
+  }
+  ~~~
+
+  这时test2中出现异常时不会回滚得，原理就是`this.test2();`中调用test2方法的是当前类，而不是Spring的事务代理对象。
+
 - 异常被catch捕获导致@Transactional失效
 
 **注意点2：**@Transactional注解有时会有长事务的问题，根本原因就是事务的控制粒度过大导致的，因此可以通过拆分方法或者手动控制事务（手动控制事务就是使用编程式事务，在spring项目中可以使用`TransactionTemplate`类的对象，手动控制事务）
