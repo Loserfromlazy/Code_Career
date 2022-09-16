@@ -1776,6 +1776,7 @@ private AccountService accountService = (AccountService) ProxyFactory.getInstanc
 
 ```xml
 <!--        Spring-->
+   <dependencies>
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
@@ -1787,7 +1788,7 @@ private AccountService accountService = (AccountService) ProxyFactory.getInstanc
             <artifactId>spring-web</artifactId>
             <version>5.2.12.RELEASE</version>
         </dependency>
-    </dependencies>
+   </dependencies>
 ```
 
 去除原有beans.xml,使用applicationContext.xml代替，其实两者无区别只是我们惯用applicationContext这个名字罢了。
@@ -3486,9 +3487,98 @@ public class ProxyTransactionManagementConfiguration extends AbstractTransaction
 
 # 七、Spring的事件机制
 
-在学习前我们需要了解什么是观察者模式？什么是事件机制？，观察者模式就是每当一个对象改变状态，则所有依赖于它的对象都会得到通知并被自动更新。事件处理模型则采用基于观察者模式的委派事件模型，即一个Java组件所引发的事件并不由引发事件的对象自己来负责处理，而是委派给独立的事件处理对象负责。jdk事件实现是基于观察者模式，而spring事件又是在jdk事件的基础上进行了拓展。
+在学习前我们需要了解什么是观察者模式？什么是事件机制？观察者模式就是每当一个对象改变状态，则所有依赖于它的对象都会得到通知并被自动更新。事件处理模型则采用基于观察者模式的委派事件模型，即一个Java组件所引发的事件并不由引发事件的对象自己来负责处理，而是委派给独立的事件处理对象负责。jdk事件实现是基于观察者模式，而spring事件又是在jdk事件的基础上进行了拓展。
 
+Spring 基于观察者模式，实现了自身的事件机制，由三部分组成：
 
+- 事件 ApplicationEvent：通过继承它，实现自定义事件。另外，通过它的 `source` 属性可以获取事件源，`timestamp` 属性可以获得发生时间。ApplicationEvent 继承自 `java.util.EventObject`。
+- 事件发布者 ApplicationEventPublisher：通过它，可以进行事件的发布。ApplicationListener 继承自 `java.util.EventListener`。
+- 事件监听器 ApplicationListener：通过实现它，进行指定类型的事件的监听。
+
+## 7.1 快速入门
+
+我们这里通过一个入门DEMO，顺便演示一下Spring事件的用法：
+
+首先我们需要创建一个事件，需要继承Spring的事件类：
+
+```java
+public class DemoEvent extends ApplicationEvent {
+    private String message;
+
+    public DemoEvent(Object source, String message) {
+        super(source);
+        this.message = message;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
+    }
+}
+```
+
+然后我们发布该事件，发布事件主要有两种方式其一就是注入`ApplicationEventPublisher`,然后通过其发布事件方法进行发布；或者是实现`ApplicationEventPublisherAware`接口进行事件发布。我们这里以第一种为例 ：
+
+```java
+@Component
+public class DemoEventPublisher {
+
+    @Autowired
+    ApplicationEventPublisher applicationEventPublisher;
+
+    public void publishDemoEvent(String message){
+        System.out.println("publish demo event");
+        DemoEvent demoEvent = new DemoEvent(this,message);
+        applicationEventPublisher.publishEvent(demoEvent);
+    }
+}
+```
+
+> As of Spring Framework 4.2, the ApplicationEventPublisher interface provides a new overload for the *[publishEvent(Object event)](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/context/ApplicationEventPublisher.html#publishEvent-java.lang.Object-)* method that accepts any object as the event. **Therefore, Spring events no longer need to extend the ApplicationEvent class.**
+
+最后我们编写一个事件监听器即可：
+
+```java
+public class DemoEventListener implements ApplicationListener<DemoEvent> {
+
+    @Override
+    public void onApplicationEvent(DemoEvent event) {
+        System.out.println(event.getMessage());
+    }
+}
+```
+
+测试：
+
+```java
+@Autowired
+private DemoEventPublisher demoEventPublisher;
+
+@Test
+public void testEvent(){
+    demoEventPublisher.publishDemoEvent("发布事件");
+}
+```
+
+当然上述这种默认的Spring事件是阻塞的，直到所有侦听器完成处理事件。当然有时我们并不想同步的去发布事件，而是想异步发布事件，那么我们就可以在配置类中添加：
+
+```java
+@Bean(name = "applicationEventMulticaster")
+public ApplicationEventMulticaster simpleApplicationEventMulticaster() {
+    SimpleApplicationEventMulticaster eventMulticaster =
+            new SimpleApplicationEventMulticaster();
+
+    eventMulticaster.setTaskExecutor(new SimpleAsyncTaskExecutor());
+    return eventMulticaster;
+}
+```
+
+这样的话监听器将在单独的线程中异步处理事件。
+
+## 7.2 Spring内置事件
 
 
 
