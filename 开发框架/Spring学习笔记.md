@@ -3578,7 +3578,50 @@ public ApplicationEventMulticaster simpleApplicationEventMulticaster() {
 
 这样的话监听器将在单独的线程中异步处理事件。
 
-## 7.2 Spring内置事件
+Spring本身提供了一些开箱即用的ApplicationContext会触发各种框架事件：ContextRefreshedEvent, ContextStartedEvent，RequestHandledEvent。这些事件为开发者提供了一个与应用程序与上下文的生命周期挂钩的接口，并在需要的地方添加自定义逻辑，如下面代码：
 
+```java
+@Component
+public class ContextRefreshedListener implements ApplicationListener<ContextRefreshedEvent> {
+    //ContextRefreshedEvent事件在初始化或刷新ApplicationContext时触发
+    @Override
+    public void onApplicationEvent(ContextRefreshedEvent event) {
+        System.out.println("my contextRefresh event is running");
+    }
+}
+```
 
+> 常见的标准事件：
+>
+> 1. ContextRefreshedEvent
+>
+>    在初始化或刷新ApplicationContext时，Spring会引发contextfreshedevent。
+>
+> 2. ContextStartedEvent
+>
+>    通过调用ConfigurableApplicationContext上的start()方法，可以触发这个事件并启动了ApplicationContext。事实上，该方法通常用于显式停止后重新启动bean。我们还可以使用该方法处理没有自动启动配置的组件。
+>
+> 3. ContextStoppedEvent
+>
+>    通过调用ConfigurableApplicationContext上的stop()方法，可以触发这个事件并停止ApplicationContext。
+>
+> 4. ContextClosedEvent
+>
+>    通过调用ConfigurableApplicationContext中的close()方法来发布此事件，关闭ApplicationContext。
+>
+>    注意在关闭上下文之后，我们不能重新启动它，因为它的生命周期已经走到了尽头。
 
+而且从Spring4.2开始为我们不再需要通过继承ApplicationListener接口，而是可以通过@EventListener注解注册到托管bean的任何公共方法上，如下面代码：
+
+```java
+@Component
+public class MyEventAnno {
+
+    @EventListener
+    public void handleContestStart(ContextRefreshedEvent event){
+        System.out.println("my contextRefreshAnno event is running");
+    }
+}
+```
+
+当然这样是同步执行的，我们可以通过Async去异步执行。
