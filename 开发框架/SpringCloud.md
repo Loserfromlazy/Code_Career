@@ -5963,11 +5963,85 @@ private List<NacosServer> getServers() {
 
 > 我们可以简单的这么理解，但是实际上的流程我们上面已经了解过了，这里就不再赘述。
 
-#### NacosWatch
+#### 订阅自身的服务列表
 
 接下来我们看一下NacosWatch。请不要觉得突兀，其实在上面5.4.2中，在介绍配置类`NacosDiscoveryClientConfiguration`时，就介绍了默认这个类是注入的。这个类的作用其实主要是拉取自己的服务列表。我们下面来看一下：
 
-(未完结)
+![image-20220919152516440](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220919152516440.png)
+
+此类继承了SmartLifecycle接口和ApplicationEventPublisherAware接口，我们这里重点关注以下start和stop方法：
+
+```java
+@Override
+public void start() {
+    //CAS保证方法只执行一次
+   if (this.running.compareAndSet(false, true)) {
+       //新建监听器监听NamingEvent事件
+      EventListener eventListener = listenerMap.computeIfAbsent(buildKey(),
+            event -> new EventListener() {
+               @Override
+               public void onEvent(Event event) {
+                  if (event instanceof NamingEvent) {
+                     List<Instance> instances = ((NamingEvent) event)
+                           .getInstances();
+                     Optional<Instance> instanceOptional = selectCurrentInstance(
+                           instances);
+                     //更新当前实例的元数据
+                     instanceOptional.ifPresent(currentInstance -> {
+                        resetIfNeeded(currentInstance);
+                     });
+                      //发布心跳事件
+                     publisher.publishEvent(new HeartbeatEvent(NacosWatch.this,
+                           nacosWatchIndex.getAndIncrement()));
+                  }
+               }
+            });
+	//获取NamingService并进行订阅
+      NamingService namingService = nacosServiceManager
+            .getNamingService(properties.getNacosProperties());
+      try {
+          //订阅当前服务
+         namingService.subscribe(properties.getService(), properties.getGroup(),
+               Arrays.asList(properties.getClusterName()), eventListener);
+      }
+      catch (Exception e) {
+         log.error("namingService subscribe failed, properties:{}", properties, e);
+      }
+   }
+}
+@Override
+public void stop() {
+    if (this.running.compareAndSet(true, false)) {
+        EventListener eventListener = listenerMap.get(buildKey());
+        NamingService namingService = nacosServiceManager
+            .getNamingService(properties.getNacosProperties());
+        try {
+            //取消订阅
+            namingService.unsubscribe(properties.getService(), properties.getGroup(),
+                                      Arrays.asList(properties.getClusterName()), eventListener);
+        }
+        catch (NacosException e) {
+            log.error("namingService unsubscribe failed, properties:{}", properties,
+                      e);
+        }
+    }
+}
+```
+
+在start方法中会调用namingService.subscribe方法，我们下面来看一下此方法：
+
+```java
+//NacosNamingService#subscribe(...)
+@Override
+public void subscribe(String serviceName, String groupName, List<String> clusters, EventListener listener)
+        throws NacosException {
+    eventDispatcher.addListener(hostReactor
+                    .getServiceInfo(NamingUtils.getGroupedName(serviceName, groupName), StringUtils.join(clusters, ",")),
+            StringUtils.join(clusters, ","), listener);
+}
+```
+
+此方法会调用hostReactor#getServiceInfo方法，然后加入到事件分发器eventDispatcher中。其中getServiceInfo方法我们已经很熟悉了。因此我们可以知道，在服务启动时，nacos会查询并维护一份自己服务名的本地服务实例缓存。
 
 #### 处理服务变更通知
 
