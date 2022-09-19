@@ -4926,7 +4926,17 @@ public class NacosDiscoveryClientConfiguration {
          NacosServiceDiscovery nacosServiceDiscovery) {
       return new NacosDiscoveryClient(nacosServiceDiscovery);
    }
-//略。。。
+    //当spring.cloud.nacos.discovery.watch.enabled配置为true时会注入NacosWatch
+    //此配置默认为true
+    //此类作用将在5.4.5中介绍
+    @Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(value = "spring.cloud.nacos.discovery.watch.enabled",
+			matchIfMissing = true)
+	public NacosWatch nacosWatch(NacosServiceManager nacosServiceManager,
+			NacosDiscoveryProperties nacosDiscoveryProperties) {
+		return new NacosWatch(nacosServiceManager, nacosDiscoveryProperties);
+	}
 }
 ```
 
@@ -5658,6 +5668,8 @@ public void onPut(String key, Record value) {
 > 这部分涉及到Spring Cloud远程调用的相关原理，可以先看我的[Spring Cloud远程调用](https://github.com/Loserfromlazy/Code_Career/blob/master/%E5%BC%80%E5%8F%91%E6%A1%86%E6%9E%B6/SpringCloud%E8%BF%9C%E7%A8%8B%E8%B0%83%E7%94%A8%E5%8E%9F%E7%90%86.md)笔记。
 >
 
+#### 定时拉取服务列表
+
 我们编写一个测试用的接口，这里我们先简单使用discoveryClient进行服务发现：
 
 ```java
@@ -5790,7 +5802,7 @@ public ServiceInfo getServiceInfo(final String serviceName, final String cluster
            String result = serverProxy.queryList(serviceName, clusters, pushReceiver.getUdpPort(), false);
            
            if (StringUtils.isNotEmpty(result)) {
-               //解析返回结果，geng'xi
+               //解析返回结果，更新serviceInfoMap
                processServiceJson(result);
            }
        } catch (Exception e) {
@@ -5905,12 +5917,13 @@ public ServiceInfo getServiceInfo(final String serviceName, final String cluster
    }
    ```
 
+综上，我们简单了解一下nacos客户端服务发现的总体流程，也知道了nacos会本地维护一个服务列表缓存并进行定时更新，从而达到服务发现的目的。
 
-综上，我们简单了解一下nacos客户端服务发现的总体流程，也知道了在订阅模式下，nacos会本地维护一个服务列表缓存并进行定时更新，从而达到服务发现的目的。
+#### Nacos结合Ribbon定时拉取服务列表
 
 但是我们在开发中其实主要使用的是Feign接口进行远程调用而不是手动获取服务列表进行负载均衡，那么nacos是如何与Feign+Ribbon结合维护本地服务列表缓存的呢？
 
-基于对Feign+Ribbon的了解，我们直到ribbon是在这里进行服务实例的更新的。因此我们打上断点，如下图：
+基于对Feign+Ribbon的了解（详见我的Spring远程调用笔记），我们直到ribbon是在这里进行服务实例的更新的。因此我们打上断点，如下图：
 
 ![image-20220913110847226](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220913110847226.png)
 
@@ -5950,7 +5963,101 @@ private List<NacosServer> getServers() {
 
 > 我们可以简单的这么理解，但是实际上的流程我们上面已经了解过了，这里就不再赘述。
 
+#### NacosWatch
+
+接下来我们看一下NacosWatch。请不要觉得突兀，其实在上面5.4.2中，在介绍配置类`NacosDiscoveryClientConfiguration`时，就介绍了默认这个类是注入的。这个类的作用其实主要是拉取自己的服务列表。我们下面来看一下：
+
+(未完结)
+
+#### 处理服务变更通知
+
+> 本小节建议看完下一章节5.4.6后再回来看
+
+那么在服务端发送变更通知后，客户端是如何接收处理呢？在HostReactor类中有一个Field即PushReceiver，这个类负责udp的接受处理。
+
+```java
+public HostReactor(EventDispatcher eventDispatcher, NamingProxy serverProxy, BeatReactor beatReactor,
+        String cacheDir, boolean loadCacheAtStart, int pollingThreadCount) {
+	//。。。略
+    this.pushReceiver = new PushReceiver(this);
+}
+```
+
+我们看一下PushReceiver类的构造函数，在构造函数中创建了线程池和udp客户端并执行了自己的线程任务：
+
+```java
+public PushReceiver(HostReactor hostReactor) {
+    try {
+        this.hostReactor = hostReactor;
+        //创建UDP客户端
+        this.udpSocket = new DatagramSocket();
+        //新建线程池
+        this.executorService = new ScheduledThreadPoolExecutor(1, new ThreadFactory() {
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread thread = new Thread(r);
+                thread.setDaemon(true);
+                thread.setName("com.alibaba.nacos.naming.push.receiver");
+                return thread;
+            }
+        });
+        //开启线程任务
+        this.executorService.execute(this);
+    } catch (Exception e) {
+        NAMING_LOGGER.error("[NA] init udp socket failed", e);
+    }
+}
+```
+
+因为PushReceiver类本身也继承的Runnable接口，所以我们看一下run方法：
+
+```java
+@Override
+public void run() {
+    while (!closed) {
+        try {
+            
+            // byte[] is initialized with 0 full filled by default
+            byte[] buffer = new byte[UDP_MSS];
+            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+            //udp接收数据
+            udpSocket.receive(packet);
+            //将数据解析为json字符串
+            String json = new String(IoUtils.tryDecompress(packet.getData()), UTF_8).trim();
+            NAMING_LOGGER.info("received push data: " + json + " from " + packet.getAddress().toString());
+            
+            PushPacket pushPacket = JacksonUtils.toObj(json, PushPacket.class);
+            String ack;
+            if ("dom".equals(pushPacket.type) || "service".equals(pushPacket.type)) {
+                //将json字符串交给hostReactor处理，此方法processServiceJson的作用我们上面也了解了就是解析json字符串，更新本地服务缓存
+                hostReactor.processServiceJson(pushPacket.data);
+                
+                // send ack to server
+                ack = "{\"type\": \"push-ack\"" + ", \"lastRefTime\":\"" + pushPacket.lastRefTime + "\", \"data\":"
+                        + "\"\"}";
+            } else if ("dump".equals(pushPacket.type)) {
+                // dump data to server
+                ack = "{\"type\": \"dump-ack\"" + ", \"lastRefTime\": \"" + pushPacket.lastRefTime + "\", \"data\":"
+                        + "\"" + StringUtils.escapeJavaScript(JacksonUtils.toJson(hostReactor.getServiceInfoMap()))
+                        + "\"}";
+            } else {
+                // do nothing send ack only
+                ack = "{\"type\": \"unknown-ack\"" + ", \"lastRefTime\":\"" + pushPacket.lastRefTime
+                        + "\", \"data\":" + "\"\"}";
+            }
+            //发送ack回执
+            udpSocket.send(new DatagramPacket(ack.getBytes(UTF_8), ack.getBytes(UTF_8).length,
+                    packet.getSocketAddress()));
+        } catch (Exception e) {
+            NAMING_LOGGER.error("[NA] error while receiving push data", e);
+        }
+    }
+}
+```
+
 ### 5.4.6 服务端服务发现流程
+
+#### 处理拉去服务请求
 
 上面我们已经了解了，nacos的服务发现最终是向`/instance/list`接口发送请求获取的服务实例，因此我们来到nacos服务端源码上，找到此方法，并加上断点，源码如下：
 
@@ -6009,7 +6116,7 @@ public ObjectNode doSrvIpxt(String namespaceId, String serviceName, String agent
     //添加当前客户端 IP、UDP端口等信息到 PushService 中
     try {
         if (udpPort > 0 && pushService.canEnablePush(agent)) {
-            
+            //此方法最终存入PushService的clientMap中
             pushService
                     .addClient(namespaceId, serviceName, clusters, agent, new InetSocketAddress(clientIP, udpPort),
                             pushDataSource, tid, app);
@@ -6054,12 +6161,92 @@ public ObjectNode doSrvIpxt(String namespaceId, String serviceName, String agent
 3. 然后获取服务实例，并进行实例结果检测、异常实例剔除等操作。
 4. 最后封装返回结果，返回给nacos客户端。
 
-这里我们重点关注一下PushService ，它基于UDP的通信方式，主要功能就是用来辅助服务实例变化时对客户端进行通知，这个类借助了Spring的观察者模式(或者说是发布订阅模型)进行实现的。我们看一下源码：
+#### 服务变更通知
 
+这里我们重点关注一下PushService ，它基于UDP的通信方式，主要功能就是用来辅助服务实例变化时对客户端进行通知，因为nacos除了客户端定时轮询，服务端在变化时也会向客户端进行推送，该推送是基于UDP的。
 
+这个类借助了Spring的观察者模式(或者说是发布订阅模型)进行实现的。我们看一下源码：
 
-### 5.4.7 Nacos服务订阅
+![image-20220919105105731](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220919105105731.png)
 
+首先，这个类继承了ApplicationListener，这是Spring的事件机制（是基于观察者模式的），因此我们主要关注它的onApplicationEvent方法：
 
+![image-20220919110855920](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220919110855920.png)
+
+可以看到当发生服务变更事件时，PushService 会先获取服务信息然后向对应的客户端异步发送UDP广播进行通知，然后存入futureMap中。（futureMap中存放的都是已经发送了udp包的服务，如果已经发送过了，就不再发，可以减少发送的频率，节省资源。）。下面我们看一下异步操作(上图红框内)的具体代码：
+
+```java
+Future future = GlobalExecutor.scheduleUdpSender(() -> {
+    try {
+        Loggers.PUSH.info(serviceName + " is changed, add it to push queue.");
+        //从clientMap取出udp客户端实例，该客户端是在doSrvIpxt方法中存入的
+        //也就是说客户端在获取服务实例时，会在服务端保存一个客户端信息用于udp推送
+        ConcurrentMap<String, PushClient> clients = clientMap
+                .get(UtilsAndCommons.assembleFullServiceName(namespaceId, serviceName));
+        if (MapUtils.isEmpty(clients)) {
+            return;
+        }
+        
+        Map<String, Object> cache = new HashMap<>(16);
+        long lastRefTime = System.nanoTime();
+        for (PushClient client : clients.values()) {
+            if (client.zombie()) {
+                Loggers.PUSH.debug("client is zombie: " + client.toString());
+                clients.remove(client.toString());
+                Loggers.PUSH.debug("client is zombie: " + client.toString());
+                continue;
+            }
+            
+            Receiver.AckEntry ackEntry;
+            Loggers.PUSH.debug("push serviceName: {} to client: {}", serviceName, client.toString());
+            String key = getPushCacheKey(serviceName, client.getIp(), client.getAgent());
+            byte[] compressData = null;
+            Map<String, Object> data = null;
+            //switchDomain.getDefaultPushCacheMillis()默认是10s，因此不会进入此分支
+            //因此compressData为空会进入到下一个分支
+            if (switchDomain.getDefaultPushCacheMillis() >= 20000 && cache.containsKey(key)) {
+                org.javatuples.Pair pair = (org.javatuples.Pair) cache.get(key);
+                compressData = (byte[]) (pair.getValue0());
+                data = (Map<String, Object>) pair.getValue1();
+                
+                Loggers.PUSH.debug("[PUSH-CACHE] cache hit: {}:{}", serviceName, client.getAddrStr());
+            }
+            
+            if (compressData != null) {
+                ackEntry = prepareAckEntry(client, compressData, data, lastRefTime);
+            } else {
+                //compressData为空，默认会进入此分支，这里方法源码略，感兴趣可自行查看，主要作用如下：
+                //这里的prepareHostsData方法最后还是会调用doSrvIpxt方法获取当前服务实例列表进行封装
+                //然后prepareAckEntry会将所有需要发送的信息进行封装，封装成ackEntry
+                ackEntry = prepareAckEntry(client, prepareHostsData(client), lastRefTime);
+                if (ackEntry != null) {
+                    cache.put(key, new org.javatuples.Pair<>(ackEntry.origin.getData(), ackEntry.data));
+                }
+            }
+            
+            Loggers.PUSH.info("serviceName: {} changed, schedule push for: {}, agent: {}, key: {}",
+                    client.getServiceName(), client.getAddrStr(), client.getAgent(),
+                    (ackEntry == null ? null : ackEntry.key));
+            //通过udp协议向nacos客户端推送数据
+            udpPush(ackEntry);
+        }
+    } catch (Exception e) {
+        Loggers.PUSH.error("[NACOS-PUSH] failed to push serviceName: {} to client, error: {}", serviceName, e);
+        
+    } finally {
+        futureMap.remove(UtilsAndCommons.assembleFullServiceName(namespaceId, serviceName));
+    }
+    
+}, 1000, TimeUnit.MILLISECONDS);
+```
+
+以上就是服务端的服务变更通知部分的源码。nacos客户端在获取服务列表时，如果能订阅就会在服务端进行订阅，并存储在服务端的clientMap中，当服务端收到服务变更通知（基于Spring事件机制）后，会通过udp向所有订阅的客户端发送服务变更消息。当客户端收到消息后的操作就与**5.4.5中的处理服务变更通知**一节中的介绍相对应了。
+
+### 5.4.7 Nacos服务发现总结
+
+Nacos的服务发现分为两种模式：
+
+- 轮询拉取模式：nacos客户端定期主动从Nacos服务端拉取服务列表并缓存起来，再服务调用时优先读取本地缓存中的服务列表。
+- 订阅推送模式，nacos客户端订阅Nacos服务端中的服务列表，并基于UDP协议来接收服务变更通知。当Nacos中的服务列表更新时，会发送UDP广播给所有订阅者。
 
 ### 5.4.8 配置中心
