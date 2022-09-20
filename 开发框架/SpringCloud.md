@@ -2700,6 +2700,8 @@ spring:
 
 ### 5.1.6 nacos作为配置中心
 
+> 这里仅作简单介绍，具体用法见官方WIKI[Nacos-config](https://github.com/alibaba/spring-cloud-alibaba/wiki/Nacos-config)
+
 nacos作为配置中心非常简单，不再需要git仓库和bus。
 
 跟SpringConfig一样，是可以只留boostrap，其他配置全部从nacos中拉取，因为是学习项目所以只在nacos中建一个简单的配置文件，然后让客户端去拉去配置文件,下面进行配置。
@@ -6323,7 +6325,503 @@ Nacos的服务发现分为两种模式：
 - 轮询拉取模式：nacos客户端定期主动从Nacos服务端拉取服务列表并缓存起来，再服务调用时优先读取本地缓存中的服务列表。
 - 订阅推送模式，nacos客户端订阅Nacos服务端中的服务列表，并基于UDP协议来接收服务变更通知。当Nacos中的服务列表更新时，会发送UDP广播给所有订阅者。
 
-### 5.4.8 配置中心
+### 5.4.8 客户端拉取配置中心配置
 
+关于nacos的配置中心我们依旧从springboot自动装配入手，我们先来到**spring-cloud-starter-alibaba-nacos-config下的spring.properties**中。在里面有一个**NacosConfigBootstrapConfiguration**类，我们跟进去：
 
+```java
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(name = "spring.cloud.nacos.config.enabled", matchIfMissing = true)
+public class NacosConfigBootstrapConfiguration {
+	//nacos配置信息即Nacos配置文件的POJO
+   @Bean
+   @ConditionalOnMissingBean
+   public NacosConfigProperties nacosConfigProperties() {
+      return new NacosConfigProperties();
+   }
 
+   @Bean
+   @ConditionalOnMissingBean
+   public NacosConfigManager nacosConfigManager(
+         NacosConfigProperties nacosConfigProperties) {
+      return new NacosConfigManager(nacosConfigProperties);
+   }
+	//nacos属性源定位器
+   @Bean
+   public NacosPropertySourceLocator nacosPropertySourceLocator(
+         NacosConfigManager nacosConfigManager) {
+      return new NacosPropertySourceLocator(nacosConfigManager);
+   }
+
+}
+```
+
+我们这里主要关注NacosPropertySourceLocator这个Bean。跟进方法发现此类实现了PropertySourceLocator接口，于是我们主要关注其locate方法：
+
+> PropertySourceLocator是一个Spring自定义配置接口，继承此接口spring会调用locate方法，获取自定义配置文件的配置信息，引导到上下文中。PropertySourceLocator让spring读取我们自定义的配置文件（注册到Spring Environment)，然后使用@Value注解即可读取到配置文件中的属性，这解释了为什么Nacos等配置中心可以直接使用Value注解进行配置的读取
+
+```java
+@Override
+public PropertySource<?> locate(Environment env) {
+    //设置Spring上下文环境
+   nacosConfigProperties.setEnvironment(env);
+    //获取nacos的ConfigService
+   ConfigService configService = nacosConfigManager.getConfigService();
+
+   if (null == configService) {
+      log.warn("no instance of config service found, can't load config from nacos");
+      return null;
+   }
+    //获取超时时间（spring.cloud.nacos.config.timeout）
+   long timeout = nacosConfigProperties.getTimeout();
+   //新建一个NacosPropertySourceBuilder
+   nacosPropertySourceBuilder = new NacosPropertySourceBuilder(configService,
+         timeout);
+    //获取nacos配置dataId名称。（spring.cloud.nacos.config.name）
+   String name = nacosConfigProperties.getName();
+
+   String dataIdPrefix = nacosConfigProperties.getPrefix();
+   if (StringUtils.isEmpty(dataIdPrefix)) {
+      dataIdPrefix = name;
+   }
+
+   if (StringUtils.isEmpty(dataIdPrefix)) {
+      dataIdPrefix = env.getProperty("spring.application.name");
+   }
+
+   CompositePropertySource composite = new CompositePropertySource(
+         NACOS_PROPERTY_SOURCE_NAME);
+	//加载共享配置信息
+   loadSharedConfiguration(composite);
+    //加载扩展配置信息
+   loadExtConfiguration(composite);
+    //加载应用配置信息
+   loadApplicationConfiguration(composite, dataIdPrefix, nacosConfigProperties, env);
+
+   return composite;
+}
+
+private void loadSharedConfiguration(
+    CompositePropertySource compositePropertySource) {
+    //从配置文件中获取一组共享配置eg: spring.cloud.nacos.config.shared-configs[0]=xxx
+    List<NacosConfigProperties.Config> sharedConfigs = nacosConfigProperties
+        .getSharedConfigs();
+    if (!CollectionUtils.isEmpty(sharedConfigs)) {
+        checkConfiguration(sharedConfigs, "shared-configs");
+        //构建配置源并存储
+        loadNacosConfiguration(compositePropertySource, sharedConfigs);
+    }
+}
+private void loadExtConfiguration(CompositePropertySource compositePropertySource) {
+    //从配置文件中获取一组扩展配置eg: spring.cloud.nacos.config.extension-configs[0]=xxx
+    List<NacosConfigProperties.Config> extConfigs = nacosConfigProperties
+        .getExtensionConfigs();
+    if (!CollectionUtils.isEmpty(extConfigs)) {
+        checkConfiguration(extConfigs, "extension-configs");
+         //构建配置源并存储
+        loadNacosConfiguration(compositePropertySource, extConfigs);
+    }
+}
+//此方法本质上是调用loadNacosDataIfPresent
+private void loadNacosConfiguration(final CompositePropertySource composite,
+                                    List<NacosConfigProperties.Config> configs) {
+    for (NacosConfigProperties.Config config : configs) {
+        String dataId = config.getDataId();
+        String fileExtension = dataId.substring(dataId.lastIndexOf(DOT) + 1);
+        loadNacosDataIfPresent(composite, dataId, config.getGroup(), fileExtension,
+                               config.isRefresh());
+    }
+}
+private void loadApplicationConfiguration(
+    CompositePropertySource compositePropertySource, String dataIdPrefix,
+    NacosConfigProperties properties, Environment environment) {
+    //获取配置文件拓展名，官方注解：the suffix of nacos config dataId, also the file extension of config content.
+    String fileExtension = properties.getFileExtension();
+    //获取组
+    String nacosGroup = properties.getGroup();
+    // load directly once by default 直接根据默认值加载一次
+    loadNacosDataIfPresent(compositePropertySource, dataIdPrefix, nacosGroup,
+                           fileExtension, true);
+    // load with suffix, which have a higher priority than the default
+    //带上后缀加载一次
+    loadNacosDataIfPresent(compositePropertySource,
+                           dataIdPrefix + DOT + fileExtension, nacosGroup, fileExtension, true);
+    // Loaded with profile, which have a higher priority than the suffix
+    //对于所有活动的配置文件，使用文件名-配置文件后缀.文件类型 进行加载
+    for (String profile : environment.getActiveProfiles()) {
+        String dataId = dataIdPrefix + SEP1 + profile + DOT + fileExtension;
+        loadNacosDataIfPresent(compositePropertySource, dataId, nacosGroup,
+                               fileExtension, true);
+    }
+}
+```
+
+在locate方法中，主要是加载共享配置、扩展配置和应用配置信息（本质上是加载不同写法的配置文件信息），存入CompositePropertySource并返回此类。这里总结一下上面源码中方法的调用流程：
+
+![image-20220920110829559](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220920110829559.png)
+
+> 关于共享配置、扩展配置和应用配置信息：
+>
+> [Nacos-config](https://github.com/alibaba/spring-cloud-alibaba/wiki/Nacos-config)的WIKI上有关于nacos配置介绍和demo案例。三种配置的写法如下：
+>
+> 共享配置：
+>
+> ![image-20220920105820992](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220920105820992.png)
+>
+> 扩展配置：
+>
+> ![image-20220920105838036](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220920105838036.png)
+>
+> 应用配置：
+>
+> ![image-20220920105927057](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220920105927057.png)
+>
+> nacos这么设计的原因在其issue中也写明了，即：
+>
+> - 从单个应用的角度来看： 应用可能会有多套(develop/beta/product)发布环境，多套发布环境之间有不同的基础配置，例如数据库。
+> - 从多个应用的角度来看：多个应用间可能会有一些共享通用的配置，比如多个应用之间共用一套zookeeper集群。
+
+从上图中我们可以看到，不论是加载哪一类配置信息，最后都会走到loadNacosDataIfPresent方法中，因此我们跟入此方法：
+
+~~~java
+//加载nacos数据
+private void loadNacosDataIfPresent(final CompositePropertySource composite,
+			final String dataId, final String group, String fileExtension,
+			boolean isRefreshable) {
+    if (null == dataId || dataId.trim().length() < 1) {
+        return;
+    }
+    if (null == group || group.trim().length() < 1) {
+        return;
+    }
+    //创建NacosPropertySource
+    NacosPropertySource propertySource = this.loadNacosPropertySource(dataId, group,
+                                                                      fileExtension, isRefreshable);
+    //存入CompositePropertySource中
+    this.addFirstPropertySource(composite, propertySource, false);
+}
+private NacosPropertySource loadNacosPropertySource(final String dataId,
+			final String group, String fileExtension, boolean isRefreshable) {
+    if (NacosContextRefresher.getRefreshCount() != 0) {
+        if (!isRefreshable) {
+            return NacosPropertySourceRepository.getNacosPropertySource(dataId,
+                                                                        group);
+        }
+    }
+    return nacosPropertySourceBuilder.build(dataId, group, fileExtension,
+                                            isRefreshable);
+}
+~~~
+
+上面代码最后会调用NacosPropertySourceBuilder的build方法，关于如何从Config Server获取配置源的流程封装在此类中。NacosPropertySourceBuilder类是在locate方法中被创建的。
+
+我们跟进build方法：
+
+```java
+NacosPropertySource build(String dataId, String group, String fileExtension,
+      boolean isRefreshable) {
+   Map<String, Object> p = loadNacosData(dataId, group, fileExtension);
+   NacosPropertySource nacosPropertySource = new NacosPropertySource(group, dataId,
+         p, new Date(), isRefreshable);
+   NacosPropertySourceRepository.collectNacosPropertySource(nacosPropertySource);
+   return nacosPropertySource;
+}
+```
+
+此方法主要是加载nacos数据并构建NacosPropertySource。这里我们继续跟进loadNacosData，此方法中会通过configService的getConfig方法获取配置，我们跟进getConfig方法：
+
+```java
+@Override
+public String getConfig(String dataId, String group, long timeoutMs) throws NacosException {
+    return getConfigInner(namespace, dataId, group, timeoutMs);
+}
+private String getConfigInner(String tenant, String dataId, String group, long timeoutMs) throws NacosException {
+    group = null2defaultGroup(group);
+    ParamUtils.checkKeyParam(dataId, group);
+    ConfigResponse cr = new ConfigResponse();
+    cr.setDataId(dataId);
+    cr.setTenant(tenant);
+    cr.setGroup(group);
+
+    // 优先使用本地配置
+    String content = LocalConfigInfoProcessor.getFailover(agent.getName(), dataId, group, tenant);
+    if (content != null) {
+        //日志代码略
+        cr.setContent(content);
+        configFilterChainManager.doFilter(null, cr);
+        content = cr.getContent();
+        return content;
+    }
+    try {
+        //从远程获取配置
+        String[] ct = worker.getServerConfig(dataId, group, tenant, timeoutMs);
+        cr.setContent(ct[0]);
+        configFilterChainManager.doFilter(null, cr);
+        content = cr.getContent();
+        return content;
+    } catch (NacosException ioe) {
+        if (NacosException.NO_RIGHT == ioe.getErrCode()) {
+            throw ioe;
+        }
+        //日志代码略
+    content = LocalConfigInfoProcessor.getSnapshot(agent.getName(), dataId, group, tenant);
+    cr.setContent(content);
+    configFilterChainManager.doFilter(null, cr);
+    content = cr.getContent();
+    return content;
+}
+```
+
+此方法中会优先使用本地配置，当本地配置为空时，会通过ClientWorker#getServerConfig方法去获取。
+
+```java
+public String[] getServerConfig(String dataId, String group, String tenant, long readTimeout)
+        throws NacosException {
+    String[] ct = new String[2];
+    if (StringUtils.isBlank(group)) {
+        group = Constants.DEFAULT_GROUP;
+    }
+    HttpRestResult<String> result = null;
+    try {
+        Map<String, String> params = new HashMap<String, String>(3);
+        //构造请求参数略
+        //请求地址Constants.CONFIG_CONTROLLER_PATH=/v1/cs/configs
+        result = agent.httpGet(Constants.CONFIG_CONTROLLER_PATH, null, params, agent.getEncode(), readTimeout);
+    } catch (Exception ex) {
+        //异常处理略
+    }
+    //根据请求返回值进行处理，处理过程略
+    switch (result.getCode()) {
+        case HttpURLConnection.HTTP_OK:
+            //。。。
+        case HttpURLConnection.HTTP_NOT_FOUND:
+            //。。。
+        case HttpURLConnection.HTTP_CONFLICT: {
+            //。。。
+        }
+        case HttpURLConnection.HTTP_FORBIDDEN: {
+            //。。。
+        }
+    }
+}
+```
+
+此方法，最终会发送HTTP请求到nacos服务端，获取配置信息请求地址为`/v1/cs/configs`
+
+综上，就是nacos客户端拉取配置的流程。
+
+### 5.4.9 服务端处理拉取配置请求
+
+根据上一节，获取配置信息请求地址为`/v1/cs/configs`，我们在服务端找到此处源码：
+
+```java
+@GetMapping
+@Secured(action = ActionTypes.READ, parser = ConfigResourceParser.class)
+public void getConfig(HttpServletRequest request, HttpServletResponse response,
+        @RequestParam("dataId") String dataId, @RequestParam("group") String group,
+        @RequestParam(value = "tenant", required = false, defaultValue = StringUtils.EMPTY) String tenant,
+        @RequestParam(value = "tag", required = false) String tag)
+        throws IOException, ServletException, NacosException {
+    // check tenant
+    ParamUtils.checkTenant(tenant);
+    tenant = processTenant(tenant);
+    // check params
+    ParamUtils.checkParam(dataId, group, "datumId", "content");
+    ParamUtils.checkParam(tag);
+    
+    final String clientIp = RequestUtil.getRemoteIp(request);
+    //获取服务端对应的配置信息
+    inner.doGetConfig(request, response, dataId, group, tenant, tag, clientIp);
+}
+```
+
+这里我们主要关注doGetConfig方法：
+
+```java
+public String doGetConfig(HttpServletRequest request, HttpServletResponse response, String dataId, String group,
+        String tenant, String tag, String clientIp) throws IOException, ServletException {
+    final String groupKey = GroupKey2.getKey(dataId, group, tenant);
+    String autoTag = request.getHeader("Vipserver-Tag");
+    String requestIpApp = RequestUtil.getAppName(request);
+    int lockResult = tryConfigReadLock(groupKey);
+    
+    final String requestIp = RequestUtil.getRemoteIp(request);
+    boolean isBeta = false;
+    if (lockResult > 0) {
+        FileInputStream fis = null;
+        try {
+            String md5 = Constants.NULL;
+            long lastModified = 0L;
+            CacheItem cacheItem = ConfigCacheService.getContentCache(groupKey);
+            if (cacheItem != null) {
+                if (cacheItem.isBeta()) {
+                    if (cacheItem.getIps4Beta().contains(clientIp)) {
+                        isBeta = true;
+                    }
+                }
+                
+                final String configType =
+                        (null != cacheItem.getType()) ? cacheItem.getType() : FileTypeEnum.TEXT.getFileType();
+                response.setHeader("Config-Type", configType);
+                
+                String contentTypeHeader;
+                try {
+                    contentTypeHeader = FileTypeEnum.valueOf(configType.toUpperCase()).getContentType();
+                } catch (IllegalArgumentException ex) {
+                    contentTypeHeader = FileTypeEnum.TEXT.getContentType();
+                }
+                response.setHeader(HttpHeaderConsts.CONTENT_TYPE, contentTypeHeader);
+            }
+            File file = null;
+            ConfigInfoBase configInfoBase = null;
+            PrintWriter out = null;
+            if (isBeta) {
+                md5 = cacheItem.getMd54Beta();
+                lastModified = cacheItem.getLastModifiedTs4Beta();
+                if (PropertyUtil.isDirectRead()) {
+                    configInfoBase = persistService.findConfigInfo4Beta(dataId, group, tenant);
+                } else {
+                    file = DiskUtil.targetBetaFile(dataId, group, tenant);
+                }
+                response.setHeader("isBeta", "true");
+            } else {
+                if (StringUtils.isBlank(tag)) {
+                    if (isUseTag(cacheItem, autoTag)) {
+                        if (cacheItem != null) {
+                            if (cacheItem.tagMd5 != null) {
+                                md5 = cacheItem.tagMd5.get(autoTag);
+                            }
+                            if (cacheItem.tagLastModifiedTs != null) {
+                                lastModified = cacheItem.tagLastModifiedTs.get(autoTag);
+                            }
+                        }
+                        if (PropertyUtil.isDirectRead()) {
+                            configInfoBase = persistService.findConfigInfo4Tag(dataId, group, tenant, autoTag);
+                        } else {
+                            file = DiskUtil.targetTagFile(dataId, group, tenant, autoTag);
+                        }
+                        
+                        response.setHeader("Vipserver-Tag",
+                                URLEncoder.encode(autoTag, StandardCharsets.UTF_8.displayName()));
+                    } else {
+                        md5 = cacheItem.getMd5();
+                        lastModified = cacheItem.getLastModifiedTs();
+                        if (PropertyUtil.isDirectRead()) {
+                            configInfoBase = persistService.findConfigInfo(dataId, group, tenant);
+                        } else {
+                            file = DiskUtil.targetFile(dataId, group, tenant);
+                        }
+                        if (configInfoBase == null && fileNotExist(file)) {
+                            // FIXME CacheItem
+                            // No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
+                            ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, -1,
+                                    ConfigTraceService.PULL_EVENT_NOTFOUND, -1, requestIp);
+                            
+                            // pullLog.info("[client-get] clientIp={}, {},
+                            // no data",
+                            // new Object[]{clientIp, groupKey});
+                            
+                            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                            response.getWriter().println("config data not exist");
+                            return HttpServletResponse.SC_NOT_FOUND + "";
+                        }
+                    }
+                } else {
+                    if (cacheItem != null) {
+                        if (cacheItem.tagMd5 != null) {
+                            md5 = cacheItem.tagMd5.get(tag);
+                        }
+                        if (cacheItem.tagLastModifiedTs != null) {
+                            Long lm = cacheItem.tagLastModifiedTs.get(tag);
+                            if (lm != null) {
+                                lastModified = lm;
+                            }
+                        }
+                    }
+                    if (PropertyUtil.isDirectRead()) {
+                        configInfoBase = persistService.findConfigInfo4Tag(dataId, group, tenant, tag);
+                    } else {
+                        file = DiskUtil.targetTagFile(dataId, group, tenant, tag);
+                    }
+                    if (configInfoBase == null && fileNotExist(file)) {
+                        // FIXME CacheItem
+                        // No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
+                        ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, -1,
+                                ConfigTraceService.PULL_EVENT_NOTFOUND, -1, requestIp);
+                        
+                        // pullLog.info("[client-get] clientIp={}, {},
+                        // no data",
+                        // new Object[]{clientIp, groupKey});
+                        
+                        response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                        response.getWriter().println("config data not exist");
+                        return HttpServletResponse.SC_NOT_FOUND + "";
+                    }
+                }
+            }
+            
+            response.setHeader(Constants.CONTENT_MD5, md5);
+            
+            // Disable cache.
+            response.setHeader("Pragma", "no-cache");
+            response.setDateHeader("Expires", 0);
+            response.setHeader("Cache-Control", "no-cache,no-store");
+            if (PropertyUtil.isDirectRead()) {
+                response.setDateHeader("Last-Modified", lastModified);
+            } else {
+                fis = new FileInputStream(file);
+                response.setDateHeader("Last-Modified", file.lastModified());
+            }
+            
+            if (PropertyUtil.isDirectRead()) {
+                out = response.getWriter();
+                out.print(configInfoBase.getContent());
+                out.flush();
+                out.close();
+            } else {
+                fis.getChannel()
+                        .transferTo(0L, fis.getChannel().size(), Channels.newChannel(response.getOutputStream()));
+            }
+            
+            LogUtil.PULL_CHECK_LOG.warn("{}|{}|{}|{}", groupKey, requestIp, md5, TimeUtils.getCurrentTimeStr());
+            
+            final long delayed = System.currentTimeMillis() - lastModified;
+            
+            // TODO distinguish pull-get && push-get
+            /*
+             Otherwise, delayed cannot be used as the basis of push delay directly,
+             because the delayed value of active get requests is very large.
+             */
+            ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, lastModified,
+                    ConfigTraceService.PULL_EVENT_OK, delayed, requestIp);
+            
+        } finally {
+            releaseConfigReadLock(groupKey);
+            if (null != fis) {
+                fis.close();
+            }
+        }
+    } else if (lockResult == 0) {
+        
+        // FIXME CacheItem No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
+        ConfigTraceService
+                .logPullEvent(dataId, group, tenant, requestIpApp, -1, ConfigTraceService.PULL_EVENT_NOTFOUND, -1,
+                        requestIp);
+        
+        response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+        response.getWriter().println("config data not exist");
+        return HttpServletResponse.SC_NOT_FOUND + "";
+        
+    } else {
+        
+        PULL_LOG.info("[client-get] clientIp={}, {}, get data during dump", clientIp, groupKey);
+        
+        response.setStatus(HttpServletResponse.SC_CONFLICT);
+        response.getWriter().println("requested file is being modified, please try later.");
+        return HttpServletResponse.SC_CONFLICT + "";
+        
+    }
+    
+    return HttpServletResponse.SC_OK + "";
+}
+```
