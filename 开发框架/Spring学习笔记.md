@@ -2373,7 +2373,7 @@ public void refresh() throws BeansException, IllegalStateException {
 
 refresh方法中定义了整个Spring IOC的流程，每一个方法名字都清晰易懂，可维护性、可读性很强。其中`obtainFreshBeanFactory()`和`finishBeanFactoryInitialization(beanFactory);`是比较关键的方法。
 
-> 我在本文中只分析了refresh这两个方法，因为是分析主要源码和流程，其余方法可以自行debug研究。
+> 我在本文中只分析了refresh这两个方法，因为是分析IOC的主要源码和流程，其余方法这里不深入研究。
 
 其中`obtainFreshBeanFactory()`是用于刷新内部bean工厂并返回新的beanFactory。`finishBeanFactoryInitialization(beanFactory);`是初始化所有的单例Bean。
 

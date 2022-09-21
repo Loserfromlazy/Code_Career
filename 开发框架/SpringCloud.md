@@ -6325,7 +6325,9 @@ Nacos的服务发现分为两种模式：
 - 轮询拉取模式：nacos客户端定期主动从Nacos服务端拉取服务列表并缓存起来，再服务调用时优先读取本地缓存中的服务列表。
 - 订阅推送模式，nacos客户端订阅Nacos服务端中的服务列表，并基于UDP协议来接收服务变更通知。当Nacos中的服务列表更新时，会发送UDP广播给所有订阅者。
 
-### 5.4.8 客户端拉取配置中心配置
+### 5.4.8 Nacos配置中心
+
+#### 客户端拉取配置中心配置
 
 关于nacos的配置中心我们依旧从springboot自动装配入手，我们先来到**spring-cloud-starter-alibaba-nacos-config下的spring.properties**中。在里面有一个**NacosConfigBootstrapConfiguration**类，我们跟进去：
 
@@ -6610,7 +6612,7 @@ public String[] getServerConfig(String dataId, String group, String tenant, long
 
 综上，就是nacos客户端拉取配置的流程。
 
-### 5.4.9 服务端处理拉取配置请求
+#### 服务端处理拉取配置请求
 
 根据上一节，获取配置信息请求地址为`/v1/cs/configs`，我们在服务端找到此处源码：
 
@@ -6635,193 +6637,146 @@ public void getConfig(HttpServletRequest request, HttpServletResponse response,
 }
 ```
 
-这里我们主要关注doGetConfig方法：
+这里我们主要关注doGetConfig方法，此方法有点长，我们重点关注以下几部分代码：
+
+首先是tryConfigReadLock方法，此方法会从nacos的CACHE缓存中根据groupKey检查是否能获取当前配置的相关信息，然后尝试加锁，根据是否能成功获取、是否加锁成功返回不同的结果值，代码流程如下：
+
+![image-20220921085003954](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921085003954.png)
+
+然后经过一系列检查（比如是否是Bate是否使用Tag等），判断是否是从数据库中读取（因为nacos有多种存储配置的方式），如果是就读数据库否则就读本地文件，代码如下：
+
+![image-20220921091017468](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921091017468.png)
+
+最后nacos通过IO写回配置信息
+
+![image-20220921091620375](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921091620375.png)
+
+以上就是服务端拉取配置的源码流程。
+
+### 5.4.9 Nacos配置中心动态感知
+
+#### Nacos Client长轮询
+
+那么nacos的配置是如何实现动态感知的呢？我们还是从locate方法看起：
 
 ```java
-public String doGetConfig(HttpServletRequest request, HttpServletResponse response, String dataId, String group,
-        String tenant, String tag, String clientIp) throws IOException, ServletException {
-    final String groupKey = GroupKey2.getKey(dataId, group, tenant);
-    String autoTag = request.getHeader("Vipserver-Tag");
-    String requestIpApp = RequestUtil.getAppName(request);
-    int lockResult = tryConfigReadLock(groupKey);
-    
-    final String requestIp = RequestUtil.getRemoteIp(request);
-    boolean isBeta = false;
-    if (lockResult > 0) {
-        FileInputStream fis = null;
-        try {
-            String md5 = Constants.NULL;
-            long lastModified = 0L;
-            CacheItem cacheItem = ConfigCacheService.getContentCache(groupKey);
-            if (cacheItem != null) {
-                if (cacheItem.isBeta()) {
-                    if (cacheItem.getIps4Beta().contains(clientIp)) {
-                        isBeta = true;
-                    }
-                }
-                
-                final String configType =
-                        (null != cacheItem.getType()) ? cacheItem.getType() : FileTypeEnum.TEXT.getFileType();
-                response.setHeader("Config-Type", configType);
-                
-                String contentTypeHeader;
-                try {
-                    contentTypeHeader = FileTypeEnum.valueOf(configType.toUpperCase()).getContentType();
-                } catch (IllegalArgumentException ex) {
-                    contentTypeHeader = FileTypeEnum.TEXT.getContentType();
-                }
-                response.setHeader(HttpHeaderConsts.CONTENT_TYPE, contentTypeHeader);
-            }
-            File file = null;
-            ConfigInfoBase configInfoBase = null;
-            PrintWriter out = null;
-            if (isBeta) {
-                md5 = cacheItem.getMd54Beta();
-                lastModified = cacheItem.getLastModifiedTs4Beta();
-                if (PropertyUtil.isDirectRead()) {
-                    configInfoBase = persistService.findConfigInfo4Beta(dataId, group, tenant);
-                } else {
-                    file = DiskUtil.targetBetaFile(dataId, group, tenant);
-                }
-                response.setHeader("isBeta", "true");
-            } else {
-                if (StringUtils.isBlank(tag)) {
-                    if (isUseTag(cacheItem, autoTag)) {
-                        if (cacheItem != null) {
-                            if (cacheItem.tagMd5 != null) {
-                                md5 = cacheItem.tagMd5.get(autoTag);
-                            }
-                            if (cacheItem.tagLastModifiedTs != null) {
-                                lastModified = cacheItem.tagLastModifiedTs.get(autoTag);
-                            }
-                        }
-                        if (PropertyUtil.isDirectRead()) {
-                            configInfoBase = persistService.findConfigInfo4Tag(dataId, group, tenant, autoTag);
-                        } else {
-                            file = DiskUtil.targetTagFile(dataId, group, tenant, autoTag);
-                        }
-                        
-                        response.setHeader("Vipserver-Tag",
-                                URLEncoder.encode(autoTag, StandardCharsets.UTF_8.displayName()));
-                    } else {
-                        md5 = cacheItem.getMd5();
-                        lastModified = cacheItem.getLastModifiedTs();
-                        if (PropertyUtil.isDirectRead()) {
-                            configInfoBase = persistService.findConfigInfo(dataId, group, tenant);
-                        } else {
-                            file = DiskUtil.targetFile(dataId, group, tenant);
-                        }
-                        if (configInfoBase == null && fileNotExist(file)) {
-                            // FIXME CacheItem
-                            // No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
-                            ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, -1,
-                                    ConfigTraceService.PULL_EVENT_NOTFOUND, -1, requestIp);
-                            
-                            // pullLog.info("[client-get] clientIp={}, {},
-                            // no data",
-                            // new Object[]{clientIp, groupKey});
-                            
-                            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-                            response.getWriter().println("config data not exist");
-                            return HttpServletResponse.SC_NOT_FOUND + "";
-                        }
-                    }
-                } else {
-                    if (cacheItem != null) {
-                        if (cacheItem.tagMd5 != null) {
-                            md5 = cacheItem.tagMd5.get(tag);
-                        }
-                        if (cacheItem.tagLastModifiedTs != null) {
-                            Long lm = cacheItem.tagLastModifiedTs.get(tag);
-                            if (lm != null) {
-                                lastModified = lm;
-                            }
-                        }
-                    }
-                    if (PropertyUtil.isDirectRead()) {
-                        configInfoBase = persistService.findConfigInfo4Tag(dataId, group, tenant, tag);
-                    } else {
-                        file = DiskUtil.targetTagFile(dataId, group, tenant, tag);
-                    }
-                    if (configInfoBase == null && fileNotExist(file)) {
-                        // FIXME CacheItem
-                        // No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
-                        ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, -1,
-                                ConfigTraceService.PULL_EVENT_NOTFOUND, -1, requestIp);
-                        
-                        // pullLog.info("[client-get] clientIp={}, {},
-                        // no data",
-                        // new Object[]{clientIp, groupKey});
-                        
-                        response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-                        response.getWriter().println("config data not exist");
-                        return HttpServletResponse.SC_NOT_FOUND + "";
-                    }
-                }
-            }
-            
-            response.setHeader(Constants.CONTENT_MD5, md5);
-            
-            // Disable cache.
-            response.setHeader("Pragma", "no-cache");
-            response.setDateHeader("Expires", 0);
-            response.setHeader("Cache-Control", "no-cache,no-store");
-            if (PropertyUtil.isDirectRead()) {
-                response.setDateHeader("Last-Modified", lastModified);
-            } else {
-                fis = new FileInputStream(file);
-                response.setDateHeader("Last-Modified", file.lastModified());
-            }
-            
-            if (PropertyUtil.isDirectRead()) {
-                out = response.getWriter();
-                out.print(configInfoBase.getContent());
-                out.flush();
-                out.close();
-            } else {
-                fis.getChannel()
-                        .transferTo(0L, fis.getChannel().size(), Channels.newChannel(response.getOutputStream()));
-            }
-            
-            LogUtil.PULL_CHECK_LOG.warn("{}|{}|{}|{}", groupKey, requestIp, md5, TimeUtils.getCurrentTimeStr());
-            
-            final long delayed = System.currentTimeMillis() - lastModified;
-            
-            // TODO distinguish pull-get && push-get
-            /*
-             Otherwise, delayed cannot be used as the basis of push delay directly,
-             because the delayed value of active get requests is very large.
-             */
-            ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, lastModified,
-                    ConfigTraceService.PULL_EVENT_OK, delayed, requestIp);
-            
-        } finally {
-            releaseConfigReadLock(groupKey);
-            if (null != fis) {
-                fis.close();
-            }
-        }
-    } else if (lockResult == 0) {
-        
-        // FIXME CacheItem No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
-        ConfigTraceService
-                .logPullEvent(dataId, group, tenant, requestIpApp, -1, ConfigTraceService.PULL_EVENT_NOTFOUND, -1,
-                        requestIp);
-        
-        response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-        response.getWriter().println("config data not exist");
-        return HttpServletResponse.SC_NOT_FOUND + "";
-        
-    } else {
-        
-        PULL_LOG.info("[client-get] clientIp={}, {}, get data during dump", clientIp, groupKey);
-        
-        response.setStatus(HttpServletResponse.SC_CONFLICT);
-        response.getWriter().println("requested file is being modified, please try later.");
-        return HttpServletResponse.SC_CONFLICT + "";
-        
-    }
-    
-    return HttpServletResponse.SC_OK + "";
+@Override
+public PropertySource<?> locate(Environment env) {
+   nacosConfigProperties.setEnvironment(env);
+   ConfigService configService = nacosConfigManager.getConfigService();
+	//略
 }
 ```
+
+在locate方法中会获取一个ConfigService类，我们跟进getConfigService方法,以下是源码的调用过程：
+
+```java
+public ConfigService getConfigService() {
+   if (Objects.isNull(service)) {
+      createConfigService(this.nacosConfigProperties);
+   }
+   return service;
+}
+//-------->NacosConfigManager#createConfigService
+static ConfigService createConfigService(
+			NacosConfigProperties nacosConfigProperties) {
+    //其余代码略
+    service = NacosFactory.createConfigService(nacosConfigProperties.assembleConfigServiceProperties());     
+    return service;
+}
+//-------->NacosFactory#createConfigService(...)
+public static ConfigService createConfigService(Properties properties) throws NacosException {
+    return ConfigFactory.createConfigService(properties);
+}
+//-------->ConfigFactory#createConfigService(...)
+public static ConfigService createConfigService(Properties properties) throws NacosException {
+    try {
+        //反射创建NacosConfigService
+        Class<?> driverImplClass = Class.forName("com.alibaba.nacos.client.config.NacosConfigService");
+        Constructor constructor = driverImplClass.getConstructor(Properties.class);
+        ConfigService vendorImpl = (ConfigService) constructor.newInstance(properties);
+        return vendorImpl;
+    } catch (Throwable e) {
+        throw new NacosException(NacosException.CLIENT_INVALID_PARAM, e);
+    }
+}
+```
+
+从上面可知，最终会通过反射创建NacosConfigService，因此我们跟进此类，查看其构造函数：
+
+```java
+public NacosConfigService(Properties properties) throws NacosException {
+    //其余代码略
+    //新建ClientWorker
+    this.worker = new ClientWorker(this.agent, this.configFilterChainManager, properties);
+}
+```
+
+在NacosConfigService的构造函数中会新建ClientWorker类，我们跟进此类的构造方法中：
+
+```java
+public ClientWorker(final HttpAgent agent, final ConfigFilterChainManager configFilterChainManager,
+        final Properties properties) {
+    this.agent = agent;
+    this.configFilterChainManager = configFilterChainManager;
+    // Initialize the timeout parameter
+    init(properties);
+    
+    //构建executor和executorService线程池，代码略
+    //启动了定时任务
+    this.executor.scheduleWithFixedDelay(new Runnable() {
+        @Override
+        public void run() {
+            try {
+                checkConfigInfo();
+            } catch (Throwable e) {
+                LOGGER.error("[" + agent.getName() + "] [sub-check] rotate check error", e);
+            }
+        }
+    }, 1L, 10L, TimeUnit.MILLISECONDS);
+}
+```
+
+我们发现，在ClientWorker的构造函数中启动了定时任务，于是我们应该关注此任务，此任务通过Runnable匿名内部类的方式实现，我们重点关注其中的`checkConfigInfo()`方法。
+
+```java
+public void checkConfigInfo() {
+    // Dispatch taskes.
+    int listenerSize = cacheMap.get().size();
+    // Round up the longingTaskCount.
+    int longingTaskCount = (int) Math.ceil(listenerSize / ParamUtil.getPerTaskConfigSize());
+    if (longingTaskCount > currentLongingTaskCount) {
+        for (int i = (int) currentLongingTaskCount; i < longingTaskCount; i++) {
+            // The task list is no order.So it maybe has issues when changing.
+            executorService.execute(new LongPollingRunnable(i));
+        }
+        currentLongingTaskCount = longingTaskCount;
+    }
+}
+```
+
+在这里我们可以看到此方法中会异步执行长轮询任务LongPollingRunnable。我们直接看它的run方法，由于run方法较长，这里就不全贴代码了，这里给出run方法中的关键部分代码：
+
+首先是checkUpdateDataIds方法，这个方法就是和nacos服务端进行通信，看是否有数据发生改变，如果发生改变，返回的changedGroupKeys就是发生了变化的key值，此方法的源码流程如下图：
+
+![image-20220921142429638](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921142429638.png)
+
+> cacheData的数据（debug形式）：
+>
+> cacheData存的是本地配置的相关信息，比如md5、group、tenant等信息。
+>
+> ![image-20220921142859011](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921142859011.png)
+>
+> 请求nacos服务端时的参数：
+>
+> 请求时会把cacheData的数据用分隔符分隔处理，具体处理逻辑在checkUpdateDataIDs方法中。
+>
+> ![image-20220921143028953](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921143028953.png)
+
+在上图中，可知此方法最终是将本地配置的groupKey和md5等信息传入nacos服务端进行比较，然后将发生变化的key返回。
+
+在执行完checkUpdateDataIds之后，会获取到发生变化的key即changedGroupKeys数组，然后会遍历此数组，调用getServerConfig方法，从nacos服务器端获取变化的配置，代码如下：
+
+![image-20220921152351154](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921152351154.png)
+
+最后会遍历
