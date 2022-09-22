@@ -6360,7 +6360,9 @@ public class NacosConfigBootstrapConfiguration {
 
 我们这里主要关注NacosPropertySourceLocator这个Bean。跟进方法发现此类实现了PropertySourceLocator接口，于是我们主要关注其locate方法：
 
-> PropertySourceLocator是一个Spring自定义配置接口，继承此接口spring会调用locate方法，获取自定义配置文件的配置信息，引导到上下文中。PropertySourceLocator让spring读取我们自定义的配置文件（注册到Spring Environment)，然后使用@Value注解即可读取到配置文件中的属性，这解释了为什么Nacos等配置中心可以直接使用Value注解进行配置的读取
+> PropertySourceLocator是一个Spring自定义配置接口，继承此接口spring会调用locate方法，获取自定义配置文件的配置信息，引导到上下文中。PropertySourceLocator让spring读取我们自定义的配置文件（注册到Spring Environment)，然后使用@Value注解即可读取到配置文件中的属性，这解释了为什么Nacos等配置中心可以直接使用Value注解进行配置的读取。具体入口如下：
+>
+> 在SpringApplication.run方法中会调用prepareContext方法来准备上下文，这个方法中调用了applyInitializers方法来执行实现了ApplicationContextInitializer接口的类的initialize方法。其中包括PropertySourceBootstrapConfiguration#initialize。在initialize方法中会执行locate方法将PropertySource加载进来。这里显然NacosPropertySourceLocator的locate方法会被执行。
 
 ```java
 @Override
@@ -6499,7 +6501,7 @@ private void loadNacosDataIfPresent(final CompositePropertySource composite,
     //创建NacosPropertySource
     NacosPropertySource propertySource = this.loadNacosPropertySource(dataId, group,
                                                                       fileExtension, isRefreshable);
-    //存入CompositePropertySource中
+    //存入CompositePropertySource中第一个
     this.addFirstPropertySource(composite, propertySource, false);
 }
 private NacosPropertySource loadNacosPropertySource(final String dataId,
@@ -6761,6 +6763,10 @@ public void checkConfigInfo() {
 
 ![image-20220921142429638](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921142429638.png)
 
+这里我们注意一下，这里是一个长轮询，这里参数中有超时时间。所谓长轮询，就是服务器接收到请求后，保持连接一段时间不返回消息，直到进行相关处理完毕后才返回响应信息并关闭连接，客户端接收到响应信息后，进行相关处理，处理完毕后再向服务器发送新的请求，长轮询流程如下（图片来自jsvascript.info/long-polling）：
+
+![image-20220922105444599](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220922105444599.png)
+
 > cacheData的数据（debug形式）：
 >
 > cacheData存的是本地配置的相关信息，比如md5、group、tenant等信息。
@@ -6779,4 +6785,100 @@ public void checkConfigInfo() {
 
 ![image-20220921152351154](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220921152351154.png)
 
-最后会遍历
+最后一步是重点，这一步会循环通知监听器刷新nacos数据，最后通过`executorService.execute(this)`方法继续长轮询。代码如下：
+
+![image-20220922093523122](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220922093523122.png)
+
+以上就是整个Nacos长轮询的流程。
+
+#### Nacos动态刷新配置
+
+承接上文，这里我们可以关注一下checkListenerMd5()方法，是如何通知监听器进行刷新Naocs数据的。我们跟进此方法，部分源码如下图：
+
+![image-20220922112749569](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220922112749569.png)
+
+在此方法中会遍历所有的监听器，最终执行safeNotifyListener()方法。在此方法中创建了一个Runnable的任务，然后通过监听器Listener里面的线程池执行了此任务。这个Runnable中最核心的就是这一句代码：`listener.receiveConfigInfo(contentTmp);`即接收修改的配置内容。
+
+想要弄清楚这句代码，首先我们要清楚这个Listener是哪里的实现类？我们可以通过debug的方式查看，我们打上断点最终方法会进入到AbstractSharedListener#receiveConfigInfo中，此方法是抽象方法，最终我们会发现这个实现此抽象方法的是NacosContextRefresher类中的一个匿名内部类。整体debug流程如下：
+
+![image-20220922131618038](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220922131618038.png)
+
+于是我们关注一下这个innerReceive方法：
+
+```java
+@Override
+public void innerReceive(String dataId, String group,
+      String configInfo) {
+   refreshCountIncrement();
+    //记录nacos历史变更数据
+   nacosRefreshHistory.addRefreshRecord(dataId, group, configInfo);
+   // todo feature: support single refresh for listening
+    //发布RefreshEvent事件刷新容器
+   applicationContext.publishEvent(
+         new RefreshEvent(this, null, "Refresh Nacos config"));
+   if (log.isDebugEnabled()) {
+      log.debug(String.format(
+            "Refresh Nacos config group=%s,dataId=%s,configInfo=%s",
+            group, dataId, configInfo));
+   }
+}
+```
+
+#### 扩展：Spring Cloud刷新配置文件
+
+承接上文，也就是说这里会发布一个RefreshEvent事件，我们直接搜索(IDEA 双击shift可以搜索)看一下这个事件的监听器的onApplicationEvent方法，如下：
+
+```java
+//org.springframework.cloud.endpoint.event.RefreshEventListener#onApplicationEvent
+@Override
+public void onApplicationEvent(ApplicationEvent event) {
+   if (event instanceof ApplicationReadyEvent) {
+      handle((ApplicationReadyEvent) event);
+   }
+   else if (event instanceof RefreshEvent) {
+      handle((RefreshEvent) event);
+   }
+}
+//------>handle((RefreshEvent) event)
+public void handle(RefreshEvent event) {
+    if (this.ready.get()) { // don't handle events before app is ready
+        log.debug("Event received " + event.getEventDesc());
+        Set<String> keys = this.refresh.refresh();
+        log.info("Refresh keys changed: " + keys);
+    }
+}
+//------>this.refresh.refresh()
+//org.springframework.cloud.context.refresh.ContextRefresher#refresh
+public synchronized Set<String> refresh() {
+    Set<String> keys = refreshEnvironment();
+    this.scope.refreshAll();
+    return keys;
+}
+```
+
+代码如上，最后会来到ContextRefresher#refresh中，我们跟进这两个方法：
+
+```java
+//org.springframework.cloud.context.refresh.ContextRefresher#refreshEnvironment
+public synchronized Set<String> refreshEnvironment() {
+   Map<String, Object> before = extract(
+         this.context.getEnvironment().getPropertySources());
+   addConfigFilesToEnvironment();
+   Set<String> keys = changes(before,
+         extract(this.context.getEnvironment().getPropertySources())).keySet();
+   this.context.publishEvent(new EnvironmentChangeEvent(this.context, keys));
+   return keys;
+}
+```
+
+```java
+//org.springframework.cloud.context.scope.refresh.RefreshScope#refreshAll
+public void refreshAll() {
+   super.destroy();
+   this.context.publishEvent(new RefreshScopeRefreshedEvent());
+}
+```
+
+
+
+#### Nacos 与 Spring 整合刷新配置
