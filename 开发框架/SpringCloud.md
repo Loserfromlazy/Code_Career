@@ -6988,6 +6988,8 @@ public void refreshAll() {
 
 3. 销毁容器——`super.destroy()`
 
+   此方法是在调用父类的方法，作用是清空缓存
+
    ```java
    @Override
    public void destroy() {
@@ -6998,6 +7000,7 @@ public void refreshAll() {
             Lock lock = this.locks.get(wrapper.getName()).writeLock();
             lock.lock();
             try {
+                //清空缓存
                wrapper.destroy();
             }
             finally {
@@ -7015,7 +7018,13 @@ public void refreshAll() {
    }
    ```
 
+   > 这个缓存是从何而来呢？
+   >
+   > 
+
 4. 发布RefreshScopeRefreshedEvent事件——`context.publishEvent(new RefreshScopeRefreshedEvent())`
+
+   在最后它会发一个 `RefreshScopeRefreshedEvent` 事件，我并没有找到它的事件监听器，我猜测是可能跟其他的Spring Cloud组件有关，或者是Spring Cloud给出的拓展点。如果有大佬懂这里也欢迎指正，感激不尽。
 
 #### Nacos服务端处理拉取配置请求
 
