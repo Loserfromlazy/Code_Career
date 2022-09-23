@@ -2529,7 +2529,7 @@ protected void finishBeanFactoryInitialization(ConfigurableListableBeanFactory b
 
 ![image-20220321153445961](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220321153445961.png)
 
-我们继续往下跟，直到进入到doGetBean方法（注意这里是AbstractBeanFactory类的doGetBean）（关键代码如下），在这个方法中，这一段代码就是创建bean实例的，我们可以看到在getSingleton方法中会将beanName和一个lambda表达式传入，这个lambda表达式中的createBean方法就是实际去构造Bean的方法，它会获取到bean的构造函数，然后通过反射获取这个Bean的实例（）。（关于createBean方法，时序图会在6.2.6中给出）
+我们继续往下跟，直到进入到doGetBean方法（注意这里是AbstractBeanFactory类的doGetBean）（关键代码如下），在这个方法中，这一段代码就是创建bean实例的，我们可以看到在getSingleton方法中会将beanName和一个lambda表达式传入，这个lambda表达式中的createBean方法就是实际去构造Bean的方法，它会获取到bean的构造函数，然后通过反射获取这个Bean的实例。
 
 ```java
 // Create bean instance.
@@ -2585,7 +2585,7 @@ try {
 }
 ```
 
-> initializeBean是初始化Bean的方法，这部分主要在AOP源码分析中讲解
+> **initializeBean是初始化Bean的方法，这部分主要在AOP源码分析中讲解**
 
 我们跟进populateBean方法:
 

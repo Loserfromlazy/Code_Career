@@ -6824,9 +6824,11 @@ public void innerReceive(String dataId, String group,
 }
 ```
 
+这个NacosContextRefresher可以说就是与Spring沟通的桥梁，实现了ApplicationContextAware用来获取ApplicationContext，实现了ApplicationListener用来注册监听器用来通知spring发布事件。这个类的onApplicationEvent方法就注册了nacos的监听器，而这个监听器的内部类的抽象方法实现就是上面的innerReceive方法。
+
 #### 扩展：Spring Cloud刷新配置文件
 
-承接上文，也就是说这里会发布一个RefreshEvent事件，我们直接搜索(IDEA 双击shift可以搜索)看一下这个事件的监听器的onApplicationEvent方法，如下：
+承接上文，也就是说Nacos会发布一个RefreshEvent事件，我们直接搜索(IDEA 双击shift可以搜索)看一下这个事件的监听器的onApplicationEvent方法，如下：
 
 ```java
 //org.springframework.cloud.endpoint.event.RefreshEventListener#onApplicationEvent
@@ -6861,11 +6863,15 @@ public synchronized Set<String> refresh() {
 ```java
 //org.springframework.cloud.context.refresh.ContextRefresher#refreshEnvironment
 public synchronized Set<String> refreshEnvironment() {
+    //获取未刷新前的配置
    Map<String, Object> before = extract(
          this.context.getEnvironment().getPropertySources());
+    //刷新配置环境
    addConfigFilesToEnvironment();
+    //这里Environment中是最新的值，因此这里是获取变化的值
    Set<String> keys = changes(before,
          extract(this.context.getEnvironment().getPropertySources())).keySet();
+    //发布EnvironmentChangeEvent事件
    this.context.publishEvent(new EnvironmentChangeEvent(this.context, keys));
    return keys;
 }
@@ -6874,11 +6880,142 @@ public synchronized Set<String> refreshEnvironment() {
 ```java
 //org.springframework.cloud.context.scope.refresh.RefreshScope#refreshAll
 public void refreshAll() {
+    //销毁容器
    super.destroy();
+   //发布RefreshScopeRefreshedEvent事件
    this.context.publishEvent(new RefreshScopeRefreshedEvent());
 }
 ```
 
+我们会发现这里主要有四件事：
 
+1. 刷新配置环境——`addConfigFilesToEnvironment()`
 
-#### Nacos 与 Spring 整合刷新配置
+   ![image-20220923130247525](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220923130247525.png)
+
+   此方法部分代码如上图，主要作用就是新建一个上下文获取最新配置，并替换当前配置中变化的值。简单来说就是刷新配置环境。
+
+2. 发布EnvironmentChangeEvent事件——`publishEvent(new EnvironmentChangeEvent(...))`
+
+   我们来看一下这个事件的监听器，首先他内部存储所有@ConfigurationProperties注解标注的类，然后继承了ApplicationContextAware获取了Spring的上下文对象，最后继承了ApplicationListener监听EnvironmentChangeEvent事件。
+
+   在事件监听方法中，对bean对象进行了先销毁，然后重新初始化，这样就会有处理`@ConfigurationProperties`注解的Bean去进行值的设置。
+
+   ```java
+   @Component
+   @ManagedResource
+   public class ConfigurationPropertiesRebinder
+         implements ApplicationContextAware, ApplicationListener<EnvironmentChangeEvent> {
+       //Collects references to @ConfigurationProperties beans in the context and its parent.
+       //存储所有@ConfigurationProperties注解标注的类
+       private ConfigurationPropertiesBeans beans;
+       
+       public ConfigurationPropertiesRebinder(ConfigurationPropertiesBeans beans) {
+   		this.beans = beans;
+   	}
+   
+       private ApplicationContext applicationContext;
+       //继承ApplicationContextAware，获取Spring上下文
+       @Override
+       public void setApplicationContext(ApplicationContext applicationContext)
+           throws BeansException {
+           this.applicationContext = applicationContext;
+       }
+       @Override
+       public void onApplicationEvent(EnvironmentChangeEvent event) {
+           if (this.applicationContext.equals(event.getSource())
+               // Backwards compatible
+               || event.getKeys().equals(event.getSource())) {
+               rebind();
+           }
+       }
+       @ManagedOperation
+       public void rebind() {
+           this.errors.clear();
+           for (String name : this.beans.getBeanNames()) {
+               rebind(name);
+           }
+       }
+       @ManagedOperation
+       public boolean rebind(String name) {
+           if (!this.beans.getBeanNames().contains(name)) {
+               return false;
+           }
+           if (this.applicationContext != null) {
+               try {
+                   Object bean = this.applicationContext.getBean(name);
+                   if (AopUtils.isAopProxy(bean)) {
+                       bean = ProxyUtils.getTargetObject(bean);
+                   }
+                   if (bean != null) {
+                       this.applicationContext.getAutowireCapableBeanFactory()
+                           .destroyBean(bean);
+                       this.applicationContext.getAutowireCapableBeanFactory()
+                           .initializeBean(bean, name);
+                       return true;
+                   }
+               }
+               //catch代码略。。。
+           }
+           return false;
+       }
+   }
+   ```
+
+   这里还有一个问题，ConfigurationPropertiesBeans是如何收集`@ConfigurationProperties`的组件的？
+
+   我们可以进入ConfigurationPropertiesBeans类，发现其继承了BeanPostProcessor，因此我们看一下它的postProcessBeforeInitialization方法，可以看到这里是维护了非RefreshScope并且标注了@ConfigurationProperties注解的组件。
+
+   ```java
+   @Override
+   public Object postProcessBeforeInitialization(Object bean, String beanName)
+         throws BeansException {
+       //排除掉RefreshScope的Bean
+      if (isRefreshScoped(beanName)) {
+         return bean;
+      }
+       //扫描标注了@ConfigurationProperties注解的组件
+      ConfigurationPropertiesBean propertiesBean = ConfigurationPropertiesBean
+            .get(this.applicationContext, bean, beanName);
+      if (propertiesBean != null) {
+         this.beans.put(beanName, propertiesBean);
+      }
+      return bean;
+   }
+   ```
+
+   > BeanPostProcessor可以在Bean初始化前后去进行干预，关于Bean的初始化可以看我的Spring笔记6.3.1关于Bean初始化的源码解析。
+
+3. 销毁容器——`super.destroy()`
+
+   ```java
+   @Override
+   public void destroy() {
+      List<Throwable> errors = new ArrayList<Throwable>();
+      Collection<BeanLifecycleWrapper> wrappers = this.cache.clear();
+      for (BeanLifecycleWrapper wrapper : wrappers) {
+         try {
+            Lock lock = this.locks.get(wrapper.getName()).writeLock();
+            lock.lock();
+            try {
+               wrapper.destroy();
+            }
+            finally {
+               lock.unlock();
+            }
+         }
+         catch (RuntimeException e) {
+            errors.add(e);
+         }
+      }
+      if (!errors.isEmpty()) {
+         throw wrapIfNecessary(errors.get(0));
+      }
+      this.errors.clear();
+   }
+   ```
+
+4. 发布RefreshScopeRefreshedEvent事件——`context.publishEvent(new RefreshScopeRefreshedEvent())`
+
+#### Nacos服务端处理拉取配置请求
+

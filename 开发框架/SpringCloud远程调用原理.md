@@ -734,7 +734,7 @@ FeignClient的创建详细流程：
 
 ![FeignCreate20220912](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/FeignCreate20220912.png)
 
-### 4.2 RPC动态代理容器实例的FactiryBean
+### 4.2 RPC动态代理容器实例的FactoryBean
 
 为了方便 Feign 的 RPC 客户端动态代理实例的使用，还需要将其注册到 Spring IOC 容器，以方便使用者通过@Resource 或@Autoware 注解将其注入其他的依赖属性。Feign 的 RPC 客户端动态代理 IOC 容器实例只能通过 FactoryBean 方式创建，原因有两点：
 
