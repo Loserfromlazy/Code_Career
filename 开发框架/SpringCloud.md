@@ -6964,7 +6964,7 @@ public void refreshAll() {
 
    这里还有一个问题，ConfigurationPropertiesBeans是如何收集`@ConfigurationProperties`的组件的？
 
-   我们可以进入ConfigurationPropertiesBeans类，发现其继承了BeanPostProcessor，因此我们看一下它的postProcessBeforeInitialization方法，可以看到这里是维护了非RefreshScope并且标注了@ConfigurationProperties注解的组件。
+   我们可以进入ConfigurationPropertiesBeans类，发现其继承了BeanPostProcessor(Spring的扩展机制)，因此我们看一下它的postProcessBeforeInitialization方法，可以看到这里是维护了非RefreshScope并且标注了@ConfigurationProperties注解的组件。
 
    ```java
    @Override
@@ -6974,7 +6974,7 @@ public void refreshAll() {
       if (isRefreshScoped(beanName)) {
          return bean;
       }
-       //扫描标注了@ConfigurationProperties注解的组件
+       //扫描标注了@ConfigurationProperties注解的组件，具体可跟ru
       ConfigurationPropertiesBean propertiesBean = ConfigurationPropertiesBean
             .get(this.applicationContext, bean, beanName);
       if (propertiesBean != null) {
