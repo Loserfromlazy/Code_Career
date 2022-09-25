@@ -7115,3 +7115,144 @@ public void refreshAll() {
 
 #### Nacos服务端处理拉取配置请求
 
+在上面我们也讲了，nacos客户端会长轮询去nacos服务端检测相关配置，所以我们看一下服务端的接口：
+
+```java
+@PostMapping("/listener")
+@Secured(action = ActionTypes.READ, parser = ConfigResourceParser.class)
+public void listener(HttpServletRequest request, HttpServletResponse response)
+        throws ServletException, IOException {
+    request.setAttribute("org.apache.catalina.ASYNC_SUPPORTED", true);
+    String probeModify = request.getParameter("Listening-Configs");
+    if (StringUtils.isBlank(probeModify)) {
+        throw new IllegalArgumentException("invalid probeModify");
+    }
+    
+    probeModify = URLDecoder.decode(probeModify, Constants.ENCODE);
+    
+    Map<String, String> clientMd5Map;
+    try {
+        clientMd5Map = MD5Util.getClientMd5Map(probeModify);
+    } catch (Throwable e) {
+        throw new IllegalArgumentException("invalid probeModify");
+    }
+    
+    // do long-polling 处理长轮询
+    inner.doPollingConfig(request, response, clientMd5Map, probeModify.length());
+}
+```
+
+上面方法中我们主要跟进doPollingConfig方法
+
+```java
+public String doPollingConfig(HttpServletRequest request, HttpServletResponse response,
+        Map<String, String> clientMd5Map, int probeRequestSize) throws IOException {
+    //如果是长轮询就调用addLongPollingClient
+    //判断请求头中是否有Long-Pulling-Timeout
+    if (LongPollingService.isSupportLongPolling(request)) {
+        longPollingService.addLongPollingClient(request, response, clientMd5Map, probeRequestSize);
+        return HttpServletResponse.SC_OK + "";
+    }
+    //这里是为了兼容短轮询的逻辑，首先检测出变化的Key
+    List<String> changedGroups = MD5Util.compareMd5(request, response, clientMd5Map);
+    
+    // 兼容短轮询的result
+    String oldResult = MD5Util.compareMd5OldResult(changedGroups);
+    String newResult = MD5Util.compareMd5ResultString(changedGroups);
+    
+    String version = request.getHeader(Constants.CLIENT_VERSION_HEADER);
+    if (version == null) {
+        version = "2.0.0";
+    }
+    int versionNum = Protocol.getVersionNumber(version);
+    
+    // Befor 2.0.4 version, return value is put into header.
+    if (versionNum < START_LONG_POLLING_VERSION_NUM) {
+        //短轮询直接将返回的数据放到响应头中
+        response.addHeader(Constants.PROBE_MODIFY_RESPONSE, oldResult);
+        response.addHeader(Constants.PROBE_MODIFY_RESPONSE_NEW, newResult);
+    } else {
+        request.setAttribute("content", newResult);
+    }
+    
+    Loggers.AUTH.info("new content:" + newResult);
+    
+    // Disable cache.
+    response.setHeader("Pragma", "no-cache");
+    response.setDateHeader("Expires", 0);
+    response.setHeader("Cache-Control", "no-cache,no-store");
+    response.setStatus(HttpServletResponse.SC_OK);
+    return HttpServletResponse.SC_OK + "";
+}
+```
+
+上面对短轮询的兼容逻辑就是根据clientMd5Map和服务端进行对比，如果有变化就将新老数据都放到响应头中返回给nacos客户端。我们这里主要关注长轮询的逻辑，我们跟进addLongPollingClient方法：
+
+```java
+public void addLongPollingClient(HttpServletRequest req, HttpServletResponse rsp, Map<String, String> clientMd5Map,
+        int probeRequestSize) {
+    //获取请求头
+    String str = req.getHeader(LongPollingService.LONG_POLLING_HEADER);
+    String noHangUpFlag = req.getHeader(LongPollingService.LONG_POLLING_NO_HANG_UP_HEADER);
+    String appName = req.getHeader(RequestUtil.CLIENT_APPNAME_HEADER);
+    String tag = req.getHeader("Vipserver-Tag");
+    //这里一般是500
+    int delayTime = SwitchService.getSwitchInteger(SwitchService.FIXED_DELAY_TIME, 500);
+    
+    // Add delay time for LoadBalance, and one response is returned 500 ms in advance to avoid client timeout.
+    //这里源码注释解释的也很清楚了，这里是将超时时间减500ms，防止客户端超时，所以一般是29500ms
+    long timeout = Math.max(10000, Long.parseLong(str) - delayTime);
+    if (isFixedPolling()) {
+        timeout = Math.max(10000, getFixedPollingInterval());
+        // Do nothing but set fix polling timeout.
+    } else {
+        long start = System.currentTimeMillis();
+        //对比数据检测出变化的Key
+        List<String> changedGroups = MD5Util.compareMd5(req, rsp, clientMd5Map);
+        //发生变化直接返回客户端
+        if (changedGroups.size() > 0) {
+            generateResponse(req, rsp, changedGroups);
+            LogUtil.CLIENT_LOG.info("{}|{}|{}|{}|{}|{}|{}", System.currentTimeMillis() - start, "instant",
+                    RequestUtil.getRemoteIp(req), "polling", clientMd5Map.size(), probeRequestSize,
+                    changedGroups.size());
+            return;
+        } else if (noHangUpFlag != null && noHangUpFlag.equalsIgnoreCase(TRUE_STR)) {
+            LogUtil.CLIENT_LOG.info("{}|{}|{}|{}|{}|{}|{}", System.currentTimeMillis() - start, "nohangup",
+                    RequestUtil.getRemoteIp(req), "polling", clientMd5Map.size(), probeRequestSize,
+                    changedGroups.size());
+            return;
+        }
+    }
+    String ip = RequestUtil.getRemoteIp(req);
+    
+    // Must be called by http thread, or send response.
+    //开启异步上下文，将主线程交还给Tomcat，异步上下文是保持连接不断的原因
+    final AsyncContext asyncContext = req.startAsync();
+    
+    // AsyncContext.setTimeout() is incorrect, Control by oneself
+    asyncContext.setTimeout(0L);
+    //开启ClientLongPolling线程
+    ConfigExecutor.executeLongPolling(
+            new ClientLongPolling(asyncContext, clientMd5Map, ip, probeRequestSize, timeout, appName, tag));
+}
+```
+
+> AsyncContext是Servlet 3.0的异步处理支持的特性，使Servlet 线程不再需要一直阻塞，直到业务处理完毕才能再输出响应，最后才结束该 Servlet 线程。在接收到请求之后，Servlet 线程可以将耗时的操作委派给另一个线程来完成，自己在不生成响应的情况下返回至容器。针对业务处理较耗时的情况，这将大大减少服务器资源的占用，并且提高并发处理速度。关于AsyncContext更具体的信息，请自行百度。
+>
+> 上面代码当得到AsyncContext实例之后,会先释放容器分配给请求的线程与相关资源,然后把把实例放入了一个定时任务里面;等时间到了或者有配置变更之后,调用`complete()`方法响应完成，这也是服务端保持住客户端请求不挂断的关键。
+
+上面的方法有三个关键点：
+
+1. 一是将超时时间设置为29500，防止客户端超时，关键代码为：
+
+   `long timeout = Math.max(10000, Long.parseLong(str) - delayTime);`
+
+2. 二是检测是否有发生变化的key，如果发生变化则直接返回客户端。代码流程如下图
+
+   ![image-20220925143210382](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220925143210382.png)
+
+3. 三是开启异步上下文开启ClientLongPolling线程
+
+   
+
+#### 服务端推送发生变化的配置
