@@ -6994,13 +6994,14 @@ public void refreshAll() {
    @Override
    public void destroy() {
       List<Throwable> errors = new ArrayList<Throwable>();
+       //清空缓存，当再次获取对象时
       Collection<BeanLifecycleWrapper> wrappers = this.cache.clear();
       for (BeanLifecycleWrapper wrapper : wrappers) {
          try {
             Lock lock = this.locks.get(wrapper.getName()).writeLock();
             lock.lock();
             try {
-                //清空缓存
+                //回调方法
                wrapper.destroy();
             }
             finally {
@@ -7018,9 +7019,95 @@ public void refreshAll() {
    }
    ```
 
-   > 这个缓存是从何而来呢？
+   > 这个缓存是从何而来呢？我们知道当我们想让配置自动刷新的时候需要加上**@RefreshScope**注解，那么我们就从这个注解入手：
    >
-   > 
+   > ```java
+   > @Target({ ElementType.TYPE, ElementType.METHOD })
+   > @Retention(RetentionPolicy.RUNTIME)
+   > @Scope("refresh")
+   > @Documented
+   > public @interface RefreshScope {
+   > }
+   > ```
+   >
+   > 我们可以发现此方法其实就是一个特殊的Scope注解，且Scope注解值为refresh。那么它是如何注册的呢？我们依旧从自动装配寻找答案，我们可以在Spring-Cloud-Context中的spring.factory中找到RefreshAutoConfiguration配置类，部分源码如下：
+   >
+   > ```java
+   > //注册RefreshScope
+   > @Bean
+   > @ConditionalOnMissingBean(RefreshScope.class)
+   > public static RefreshScope refreshScope() {
+   >    return new RefreshScope();
+   > }
+   > //刷新配置文件，发布事件
+   > @Bean
+   > @ConditionalOnMissingBean
+   > public ContextRefresher contextRefresher(ConfigurableApplicationContext context,
+   >       RefreshScope scope) {
+   >    return new ContextRefresher(context, scope);
+   > }
+   > //监听上下文刷新事件
+   > @Bean
+   > public RefreshEventListener refreshEventListener(ContextRefresher contextRefresher) {
+   >    return new RefreshEventListener(contextRefresher);
+   > }
+   > ```
+   >
+   > 我们进入到RefreshScope类，此类继承了GenericScope，而GenericScope继承了BeanDefinitionRegistryPostProcessor（这是Spring的扩展点），因此我们重点关注postProcessBeanFactory方法：
+   >
+   > ```java
+   > @Override
+   > public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory)
+   >       throws BeansException {
+   >    this.beanFactory = beanFactory;
+   >     //存入缓存中，底层是调用AbstractBeanFactory#registerScope
+   >    beanFactory.registerScope(this.name, this);
+   >    setSerializationId(beanFactory);
+   > }
+   > ```
+   >
+   > 而当我们获取该对象时会调用AbstractBeanFactory的getBean方法（Spring的流程），部分源码如下：
+   >
+   > ![image-20220925114603800](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220925114603800.png)
+   >
+   > get方法源码如下：
+   >
+   > ```java
+   > @Override
+   > public Object get(String name, ObjectFactory<?> objectFactory) {
+   >     //包装成BeanLifecycleWrapper存入缓存中
+   >    BeanLifecycleWrapper value = this.cache.put(name,
+   >          new BeanLifecycleWrapper(name, objectFactory));
+   >    this.locks.putIfAbsent(name, new ReentrantReadWriteLock());
+   >    try {
+   >        //调用BeanLifecycleWrapper的getBean
+   >       return value.getBean();
+   >    }
+   >    catch (RuntimeException e) {
+   >       this.errors.put(name, e);
+   >       throw e;
+   >    }
+   > }
+   > ```
+   >
+   > 先是将ObjectFactory实例对象包装成BeanLifecycleWrapper放入缓存中。这里的这个缓存我们非常熟悉也就是我们上面刷新的时候清空的缓存。
+   >
+   > 然后调用BeanLifecycleWrapper的getBean方法，源码如下：
+   >
+   > ```java
+   > public Object getBean() {
+   >    if (this.bean == null) {
+   >       synchronized (this.name) {
+   >          if (this.bean == null) {
+   >             this.bean = this.objectFactory.getObject();
+   >          }
+   >       }
+   >    }
+   >    return this.bean;
+   > }
+   > ```
+   >
+   > 如果该对象为空，则调用this.objectFactory.getObject()回到Spring的IOC流程。
 
 4. 发布RefreshScopeRefreshedEvent事件——`context.publishEvent(new RefreshScopeRefreshedEvent())`
 
