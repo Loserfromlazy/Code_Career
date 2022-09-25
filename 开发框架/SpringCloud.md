@@ -7243,7 +7243,7 @@ public void addLongPollingClient(HttpServletRequest req, HttpServletResponse rsp
 
 上面的方法有三个关键点：
 
-1. 一是将超时时间设置为29500，防止客户端超时，关键代码为：
+1. 一是将超时时间设置为29500ms也就是29.5s，防止客户端超时，关键代码为：
 
    `long timeout = Math.max(10000, Long.parseLong(str) - delayTime);`
 
@@ -7253,6 +7253,128 @@ public void addLongPollingClient(HttpServletRequest req, HttpServletResponse rsp
 
 3. 三是开启异步上下文开启ClientLongPolling线程
 
+   ```java
+   class ClientLongPolling implements Runnable {
+       @Override
+       public void run() {
+           //不立即返回，而是延迟29500ms后返回请求结果
+           //这里通过单线程池延时一段时间执行任务
+           asyncTimeoutFuture = ConfigExecutor.scheduleLongPolling(new Runnable() {
+               @Override
+               public void run() {
+                   try {
+                       getRetainIps().put(ClientLongPolling.this.ip, System.currentTimeMillis());
+                       // Delete subsciber's relations.
+                       allSubs.remove(ClientLongPolling.this);
+                       if (isFixedPolling()) {
+                           //日志代码略
+                           //比较数据的MD5，得到变化的值
+                           List<String> changedGroups = MD5Util
+                               .compareMd5((HttpServletRequest) asyncContext.getRequest(),
+                                           (HttpServletResponse) asyncContext.getResponse(), clientMd5Map);
+                           if (changedGroups.size() > 0) {
+                               //将变化的值返回给客户端
+                               sendResponse(changedGroups);
+                           } else {
+                               sendResponse(null);
+                           }
+                       } else {
+                           //日志代码略
+                           sendResponse(null);
+                       }
+                   } catch (Throwable t) {
+                       //日志代码略
+                   }
+               }
+           }, timeoutTime, TimeUnit.MILLISECONDS);
+   		//存入客户端订阅缓存，便于主动推送时使用
+           allSubs.add(this);
+       }
+       void sendResponse(List<String> changedGroups) {
+           // Cancel time out task.
+           if (null != asyncTimeoutFuture) {
+               asyncTimeoutFuture.cancel(false);
+           }
+           generateResponse(changedGroups);
+       }
+   }
+   ```
    
+   上面代码中sendResponse方法也会调用generateResponse方法，但是与关键点二中的generateResponse方法有一些不同，那就是需要调用`asyncContext.complete();`来完成响应。
 
 #### 服务端推送发生变化的配置
+
+我们知道nacos在配置发生变化时也会主动推送给客户端，那么这是怎么做到的呢？我们来到LongPollingService的构造方法中：
+
+```java
+public LongPollingService() {
+    //初始化订阅者缓存
+    allSubs = new ConcurrentLinkedQueue<ClientLongPolling>();
+    ConfigExecutor.scheduleLongPolling(new StatTask(), 0L, 10L, TimeUnit.SECONDS);
+    
+    // Register LocalDataChangeEvent to NotifyCenter.注册LocalDataChangeEvent事件
+    NotifyCenter.registerToPublisher(LocalDataChangeEvent.class, NotifyCenter.ringBufferSize);
+    
+    // Register A Subscriber to subscribe LocalDataChangeEvent.
+    //注册LocalDataChangeEvent订阅
+    NotifyCenter.registerSubscriber(new Subscriber() {
+        @Override
+        public void onEvent(Event event) {
+            if (isFixedPolling()) {
+                // Ignore.
+            } else {
+                //监听LocalDataChangeEvent事件并封装成DataChangeTask通过线程池去执行
+                if (event instanceof LocalDataChangeEvent) {
+                    LocalDataChangeEvent evt = (LocalDataChangeEvent) event;
+                    ConfigExecutor.executeLongPolling(new DataChangeTask(evt.groupKey, evt.isBeta, evt.betaIps));
+                }
+            }
+        }
+        @Override
+        public Class<? extends Event> subscribeType() {
+            return LocalDataChangeEvent.class;
+        }
+    });
+    
+}
+```
+
+其实此方法很简单，主要是注册一个LocalDataChangeEvent时间的监听，然后封装成DataChangeTask任务去处理此事件。我们接下来进入DataChangeTask看一下，我们重点关注其run方法：
+
+```java
+@Override
+public void run() {
+    try {
+        ConfigCacheService.getContentBetaMd5(groupKey);
+        //遍历之前缓存的客户端订阅
+        for (Iterator<ClientLongPolling> iter = allSubs.iterator(); iter.hasNext(); ) {
+            ClientLongPolling clientSub = iter.next();
+            //和groupKey匹配并且配置数据发生了变更则通知客户端
+            if (clientSub.clientMd5Map.containsKey(groupKey)) {
+                //略过bate和tag发布
+                // If published tag is not in the beta list, then it skipped.
+                if (isBeta && !CollectionUtils.contains(betaIps, clientSub.ip)) {
+                    continue;
+                }
+                
+                // If published tag is not in the tag list, then it skipped.
+                if (StringUtils.isNotBlank(tag) && !tag.equals(clientSub.tag)) {
+                    continue;
+                }
+                
+                getRetainIps().put(clientSub.ip, System.currentTimeMillis());
+                iter.remove(); // Delete subscribers' relationships.
+                //日志代码略
+                //返回客户端，代码与上面相同
+                clientSub.sendResponse(Arrays.asList(groupKey));
+            }
+        }
+    } catch (Throwable t) {
+        LogUtil.DEFAULT_LOG.error("data change error: {}", ExceptionUtil.getStackTrace(t));
+    }
+}
+```
+
+#### 服务端页面变更配置
+
+当我们变更配置时会调用`/nacos/v1/cs/configs`,POST请求
