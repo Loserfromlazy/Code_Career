@@ -7375,6 +7375,3 @@ public void run() {
 }
 ```
 
-#### 服务端页面变更配置
-
-当我们变更配置时会调用`/nacos/v1/cs/configs`,POST请求
