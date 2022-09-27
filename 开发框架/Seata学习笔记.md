@@ -43,11 +43,68 @@ Seata 是一款开源的分布式事务解决方案，致力于提供高性能�
 
 然后我们建出数据库表（建表语句我放在了项目sql目录下）以及相关实体类和mapper和Service，（当然也可以用mybatisplus的代码生成器）这里以order为例，最终项目结构如下：
 
-![image-20220927112122334](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220927112122334.png)
+![image-20220927131451979](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220927131451979.png)
 
-然后我们编写Client测试项目，我们的具体需求是这样的。在买东西后，会先保存订单，然后给对应的用户进行积分，然后在扣减库存，因此我们的测试接口如下：
+然后我们编写Client测试项目，我们的整体流程如下（具体各模块实现代码，比如新增订单等这种业务增删改查代码这里略，可以自行翻阅本项目的代码仓库或自行编写CURD代码）：
 
+购买-->创建订单-->用户积累积分-->扣减库存
 
+我们来看一下Client模块的测试代码，首先是Controller代码：
+
+```java
+@GetMapping("/testBuy1")
+public Result<Boolean> testBuy1() {
+    return clientService.buy(10,1,1);
+}
+
+@GetMapping("/testBuy2")
+public Result<Boolean> testBuy2() {
+    return clientService.buy(100,1,1);
+}
+```
+
+然后是Service代码：
+
+```java
+@Override
+public Result<Boolean> buy(Integer num, Integer userId, Integer goodsId) {
+    Order order = new Order();
+    order.setGoodsId(goodsId);
+    order.setName("购买商品"+goodsId);
+    order.setUserId(userId);
+    order.setNums(num);
+    order.setCreateTime(new Date());
+    Result<Boolean> result = orderFeign.addOrder(order);
+    if (!result.getResult()){
+        return ResultUtils.resultInit(0,"购买失败，原因"+result.getMsg(),false);
+    }
+    Result<Boolean> result1 = userFeign.addPoints(userId, num);
+    if (!result1.getResult()){
+        return ResultUtils.resultInit(0,"购买失败，原因"+result.getMsg(),false);
+    }
+    Result<Boolean> result2 = warehouseFeign.reduceGoods(goodsId, num);
+    if (!result2.getResult()){
+        return ResultUtils.resultInit(0,"购买失败，原因"+result.getMsg(),false);
+    }
+    return ResultUtils.successBuild(true);
+}
+```
+
+其余Feign接口及实现代码不在此粘贴，然后在数据库中造一个用户数据，一个库存为50的商品数据：
+
+![image-20220927143859496](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220927143859496.png)
+
+下面我们进行测试，首先我们调用`http://localhost:8075/test/testBuy1`,结果显示成功，数据全部正常：
+
+![image-20220927145840647](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220927145840647.png)
+
+然后我们测试`http://localhost:8075/test/testBuy2`,我们可以发现虽然购买失败了库存表没变化，但是用户表的积分已经更改了，同时订单表中该订单也进行新增了。
+
+![image-20220927151622101](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220927151622101.png)
+
+此问题就是分布式微服务下的事务问题，即使我们在ClientServiceImpl#buy方法上加上了事务注解也不能解决，因为那个事务是本地事务，但我们此场景下的事务属于分布式事务。针对此类问题，我们就需要使用seata之类的分布式事务框架来解决此问题。
+
+# 三、Seata的AT模式
 
 
 
