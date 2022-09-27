@@ -30,12 +30,24 @@ Seata 是一款开源的分布式事务解决方案，致力于提供高性能�
 > 为了方便和统一，我们在之前SpringCloud笔记中使用过的项目下创建Seata的测试项目，Seata测试项目与LearnSpringCloud没有关系仅继承了LearnSpringCloud的根pom文件，使用了一致的微服务版本，Seata测试项目全部以seata-xxx命名。
 >
 > 这里不展示全部代码，只写出思路和部分代码，请移步代码仓库自行下载查看[LearnSpringCloud](https://github.com/Loserfromlazy/LearnSpringCloud)，以seata-xxx命名全是本笔记的项目代码，数据库脚本都在该项目的路径下。
+>
+> 入门案例主要使用springboot+springcloud(openfeign+nacos)+mybatisplus+mysql8.0.18等技术实现。
 
 假设现在有业务需求，我们客户在买东西后，后台需要执行很多步骤比如需要新增订单、积分返现并扣减库存，如下图：
 
 ![image-20220926142236907](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220926142236907.png)
 
-我们现在创建项目实现此功能，首先创建我们需要的四个项目，并引入nacos、feign和mybatisplus等依赖，如下图：
+我们现在创建项目实现此功能，首先创建我们需要的四个项目，并引入nacos、feign和mybatisplus等相关依赖，如下图：
 
 ![image-20220926142859407](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220926142859407.png)
+
+然后我们建出数据库表（建表语句我放在了项目sql目录下）以及相关实体类和mapper和Service，（当然也可以用mybatisplus的代码生成器）这里以order为例，最终项目结构如下：
+
+![image-20220927112122334](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220927112122334.png)
+
+然后我们编写Client测试项目，我们的具体需求是这样的。在买东西后，会先保存订单，然后给对应的用户进行积分，然后在扣减库存，因此我们的测试接口如下：
+
+
+
+
 
