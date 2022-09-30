@@ -297,4 +297,28 @@ Seata官方的部署文档地址[Seata部署](https://seata.io/zh-cn/docs/ops/de
 
    然后我找了很久也没有解决方案，在官方的issue中[Seata 1.4.0与spring-cloud-starter-openfeign兼容问题](https://github.com/seata/seata/issues/3449)和[SeataFeignObjectWrapper 创建 feignClient 失败](https://github.com/seata/seata/issues/3115)里面也有人询问了关于这个问题，但是里面的解决方法都不好使，最后在官方博客[Spring Cloud集成Seata分布式事务-TCC模式](https://seata.io/zh-cn/blog/integrate-seata-tcc-mode-with-spring-cloud.html)里面的示例项目中我发现了它使用的是2.2.0.RELEASE的seata版本，因此我也尝试了直接引入此版本，解决了此问题。目前原因暂未进行深入分析，如果有大佬能解答此问题或者有更好的解决方法也欢迎来留言指教。
 
-### 2 
+### 2 编辑配置
+
+```yml
+seata:
+  application-id: ${spring.application.name}
+  #启动数据源 代理
+  enable-auto-data-source-proxy: true
+  #seata的配置中心和注册中心需要和seata server
+  config:
+    type: nacos
+    nacos:
+      server-addr: 127.0.0.1:8848
+      username: nacos
+      password: nacos
+      dataId: "seataServer.properties"
+  registry:
+    type: nacos
+    nacos:
+      application: seata-server
+      server-addr: 127.0.0.1:8848
+      username: nacos
+      password: nacos
+  data-source-proxy-mode: AT
+  enabled: true
+```
