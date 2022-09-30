@@ -223,13 +223,78 @@ seata:
 
 ## 3.2 业务模块引入Seata客户端（整合TM/RM）
 
-**我们这里用入门案例中的demo项目进行客户端整合**
+**我们这里用入门案例中的demo项目进行客户端整合，即通过Spring Cloud整合Seata**
 
 如果我们使用AT模式，那么需要在自己的业务库中创建UNDO_LOG表，[下载地址](https://github.com/seata/seata/tree/develop/script/client/at/db)。如下图：
 
 ![image-20220930112813585](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930112813585.png)
 
+Seata官方的部署文档地址[Seata部署](https://seata.io/zh-cn/docs/ops/deploy-guide-beginner.html)，下面是我的部署流程
 
+### 1 导入依赖
 
+先给出我导入的依赖，
 
+```xml
+<!--        seata Client-->
+<dependency>
+    <groupId>com.alibaba.cloud</groupId>
+    <artifactId>spring-cloud-starter-alibaba-seata</artifactId>
+    <version>2.2.0.RELEASE</version>
+    <exclusions>
+        <exclusion>
+            <groupId>io.seata</groupId>
+            <artifactId>seata-spring-boot-starter</artifactId>
+        </exclusion>
+    </exclusions>
+</dependency>
+<dependency>
+    <groupId>io.seata</groupId>
+    <artifactId>seata-spring-boot-starter</artifactId>
+    <version>1.5.2</version>
+</dependency>
+```
 
+我的父工程的版本是：
+
+```xml
+<parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>2.3.3.RELEASE</version>
+</parent>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-dependencies</artifactId>
+            <version>Hoxton.RELEASE</version>
+            <!-- <version>Hoxton.SR4</version> -->
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-alibaba-dependencies</artifactId>
+            <version>2.2.2.RELEASE</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+```
+
+注意点： 
+
+1. 首先spring cloud整合依赖是`spring-cloud-starter-alibaba-seata`，然后最好排除掉springboot的整合依赖`seata-spring-boot-starter`，然后引入与使用的Seata服务端相同版本的springboot版本。
+
+2. 然后默认`spring-cloud-starter-alibaba-seata`跟着spring cloud alibaba版本走即可，但是我在启动项目的时候报错，错误信息是：
+
+   ~~~
+   tried to access class org.springframework.cloud.openfeign.loadbalancer.FeignBlockingLoadBalancerClient from class com.alibaba.cloud.seata.feign.SeataFeignObjectWrapper
+   ~~~
+
+   然后我找了很久也没有解决方案，在官方的issue中[Seata 1.4.0与spring-cloud-starter-openfeign兼容问题](https://github.com/seata/seata/issues/3449)和[SeataFeignObjectWrapper 创建 feignClient 失败](https://github.com/seata/seata/issues/3115)里面也有人询问了关于这个问题，但是里面的解决方法都不好使，最后在官方博客[Spring Cloud集成Seata分布式事务-TCC模式](https://seata.io/zh-cn/blog/integrate-seata-tcc-mode-with-spring-cloud.html)里面的示例项目中我发现了它使用的是2.2.0.RELEASE的seata版本，因此我也尝试了直接引入此版本，解决了此问题。目前原因暂未进行深入分析，如果有大佬能解答此问题或者有更好的解决方法也欢迎来留言指教。
+
+### 2 
