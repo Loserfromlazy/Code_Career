@@ -106,5 +106,128 @@ public Result<Boolean> buy(Integer num, Integer userId, Integer goodsId) {
 
 # 三、Seata的AT模式
 
+首先我们先了解Seata如何使用。首先我们需要搭建Seata的服务端（TC），然后需要在业务模块引入客户端。具体步骤如下：
+
+## 3.1 Seata的服务端（TC）搭建
+
+**我们这里使用nacos作为注册和配置中心，并使用db进行存储，在Windows环境下搭建**
+
+### 1 下载配置seata
+
+首先我们要下载Seata服务端，[下载地址](https://github.com/seata/seata/releases)。我们这里以152版本进行演示（与其他版本的配置方法基本类似）。解压后我们需要修改其配置文件：
+
+![image-20220930104623860](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930104623860.png)
+
+> seata1.5.0以后的版本对配置文件进行了简化，如果是150以前的版本配置文件如下：
+>
+> ![image-20220930105505177](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930105505177.png)
+>
+> 当然只是文件类型不同，具体的配置方法是大体一致的。
+
+我们打开application.yml进行配置，如下（已标注注解）：
+
+~~~yaml
+#端口号
+server:
+  port: 7091 
+#服务名称
+spring:
+  application:
+    name: seata-server
+
+logging:
+  config: classpath:logback-spring.xml
+  file:
+    path: ${user.home}/logs/seata
+  extend:
+    logstash-appender:
+      destination: 127.0.0.1:4560
+    kafka-appender:
+      bootstrap-servers: 127.0.0.1:9092
+      topic: logback_to_logstash
+#控制台
+console:
+  user:
+    username: seata
+    password: seata
+#seata配置中心，这里以nacos为例
+seata:
+  config:
+    # support: nacos, consul, apollo, zk, etcd3
+    type: nacos
+    #配置nacos
+    nacos: 
+      server-addr: 127.0.0.1:8848
+      namespace:
+      group: SEATA_GROUP
+      username: nacos
+      password: nacos
+      #data-id: seataServer.properties 这个配置对应下面的第一种导入方法。
+  #seata注册中心，这里以nacos为例
+  registry:
+    # support: nacos, eureka, redis, zk, consul, etcd3, sofa
+    type: nacos
+    nacos:
+      application: seata-server
+      server-addr: 127.0.0.1:8848
+      group: SEATA_GROUP
+      namespace:
+      cluster: default
+      username: nacos
+      password: nacos
+  #这里不需要配置也可以，因为我们config选择了nacos，会从nacos中拉取stroe的相关配置
+  #如果使用file模式，那么这里是需要配置的
+  store:
+    # support: file 、 db 、 redis
+    mode: db
+#  server:
+#    service-port: 8091 #If not configured, the default is '${server.port} + 1000'
+  security:
+    secretKey: SeataSecretKey0c382ef121d778043159209298fd40bf3850a017
+    tokenValidityInMilliseconds: 1800000
+    ignore:
+      urls: /,/**/*.css,/**/*.js,/**/*.html,/**/*.map,/**/*.svg,/**/*.png,/**/*.ico,/console-fe/public/**,/api/v1/auth/login
+~~~
+
+### 2 配置中心添加配置信息
+
+然后我们需要去nacos上加入seata的配置。配置可以从Seata的Github的[Config-Center](https://github.com/seata/seata/tree/develop/script/config-center)进行下载。需要下载其中的`config.txt`文件。然后我们主要修改此文件其中的store的相关配置，如下图：
+
+![image-20220930110716086](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930110716086.png)
+
+> config.txt中的各个配置的意思，在nacos官方文档中可以查询到。
+
+然后我们去数据库中创建一个seata的数据库，创建出相关表，建表sql可以从Seata的Github的[SQL脚本](https://github.com/seata/seata/tree/develop/script/server/db)进行下载，我们这里下载mysql.sql，然后去执行这个脚本。
+
+![image-20220930111039199](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930111039199.png)
+
+然后我们去配置中心也就是nacos中添加seata配置，这里有两种方式：
+
+第一种是application.yml中的配置nacos的config时加上data-id配置，我在上面的配置中用注释标注了。然后我们在nacos中新建配置其data-id与我们配置的一样，然后将config.txt中的数据拷贝到这个配置中，如下图：
+
+![image-20220930112124660](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930112124660.png)
+
+第二种是去下载seata的到配置脚本，下载地址：[Naocs配置脚本](https://github.com/seata/seata/tree/1.5.2/script/config-center/nacos)我们这里下载sh脚本（如下图），将其放在config目录下，然后将刚才我们修改的config.txt放在seata根目录下。
+
+![image-20220930111304245](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930111304245.png)
+
+然后用git bash执行此脚本,命令为：`sh nacos-config.sh -h 127.0.0.1`，然后相关配置就能自动导入了：
+
+![image-20220930111515461](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930111515461.png)
+
+### 3 启动seata服务端
+
+配置完以上信息后就可以启动seata的服务端了，我们进入bin目录下启动bat脚本即可。
+
+![image-20220930112450792](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930112450792.png)
+
+## 3.2 业务模块引入Seata客户端（整合TM/RM）
+
+如果我们使用AT模式，那么需要在自己的业务库中创建UNDO_LOG表，[下载地址](https://github.com/seata/seata/tree/develop/script/client/at/db)。如下图：
+
+![image-20220930112813585](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930112813585.png)
+
+
+
 
 
