@@ -223,6 +223,8 @@ seata:
 
 ## 3.2 业务模块引入Seata客户端（整合TM/RM）
 
+**我们这里用入门案例中的demo项目进行客户端整合**
+
 如果我们使用AT模式，那么需要在自己的业务库中创建UNDO_LOG表，[下载地址](https://github.com/seata/seata/tree/develop/script/client/at/db)。如下图：
 
 ![image-20220930112813585](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220930112813585.png)
