@@ -302,9 +302,11 @@ Seata官方的部署文档地址[Seata部署](https://seata.io/zh-cn/docs/ops/de
 ```yml
 seata:
   application-id: ${spring.application.name}
-  #启动数据源 代理
+  #启动自动数据源 代理
   enable-auto-data-source-proxy: true
-  #seata的配置中心和注册中心需要和seata server
+  #事务分组，使用时必须与注册中心配置一致：service.vgroupMapping.default_tx_group
+  #tx-service-group: default_tx_group
+  #seata的配置中心和注册中心需要和seata server保持一致
   config:
     type: nacos
     nacos:
@@ -322,3 +324,210 @@ seata:
   data-source-proxy-mode: AT
   enabled: true
 ```
+
+注意点：
+
+1. 首先在配置seata时我们需要配置其注册和配置中心，这一部分需要与seata Server保持一致
+
+2. seata可以使用事务分组，这部分必须与配置中心的`service.vgroupMapping.xxx`保持一致，后面xxx的部分就是可以自定义的部分。
+
+3. seata需要配置数据源代理，默认使用自动代理即可`enable-auto-data-source-proxy: true`
+
+   当然也可以手动配置数据源代理，我们添加配置类：
+
+   ~~~java
+   @Configuration
+   public class DataSourceConfiguration {
+   	//配置数据源
+       @Bean
+       @ConfigurationProperties("spring.datasource")
+       public DataSource dataSource(){
+           return new DruidDataSource();
+       }
+   
+       //配置seata代理数据源
+       @Bean
+       @Primary//设置首选数据源
+       public DataSourceProxy dataSourceProxy(DataSource dataSource){
+           //使用DataSourceProxy包装原有的数据源
+           return new DataSourceProxy(dataSource);
+       }
+   }
+   ~~~
+
+   当然如果要使用手动数据源配置那么就需要关闭自动代理数据源即：`enable-auto-data-source-proxy: false`
+
+   最后在我们的启动类上扫描到我们的这个配置类即可。
+
+### 3 使用AT模式
+
+我们在我们入门案例中的四个项目都进行上面的配置。在上面的配置完成后，我们只要在需要事务的地方加上注解`@GlobalTransactional(rollbackFor = Exception.class)`即可。
+
+> 注意：我们在使用seata时，如果使用了fallback降级就会导致异常被全局处理，从而导致事务失效，我们需要抛出异常而不是降级：
+>
+> ```java
+> public class WarehouseFeignFallback implements FallbackFactory<WarehouseFeign> {
+> 
+>     @Override
+>     public WarehouseFeign create(Throwable cause) {
+>         return new WarehouseFeign() {
+>             @Override
+>             public Result<Boolean> reduceGoods(Integer id, Integer nums) {
+>                 throw new RuntimeException("进入到reduceGoods的降级方法，抛出异常，便于seata回滚");
+> //                return ResultUtils.resultInit(0, cause.getMessage(), false);
+>             }
+>         };
+>     }
+> }
+> ```
+>
+> 当然也可以使用seata提供的方法进行手动回滚`GlobalTransactionContext.reload(RootContext.getXID()).rollback()`
+
+我们在reduceGoods扣减库存这个方法上打上断点，再次访问`http://localhost:8075/test/testBuy2`，这次我们会发现数据并没有变化，然后我们观察seata控制台，会发现所有分支均已经回滚：
+
+![image-20221004170928918](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221004170928918.png)
+
+到此AT模式的Seata配置使用已经了解完成。
+
+## 3.3 Seata AT模式工作机制介绍
+
+Seata的AT模式整体上是两阶段提交协议的演变：
+
+- 一阶段：业务数据和回滚日志记录在同一个本地事务中提交，释放本地锁和连接资源。
+- 二阶段：
+  - 提交异步化，非常快速地完成。
+  - 回滚通过一阶段的回滚日志进行反向补偿。
+
+在官方文档中有AT模式的工作机制介绍（以下内容来自官方文档）：
+
+> **工作机制**
+>
+> 以一个示例来说明整个 AT 分支的工作过程。
+>
+> 业务表：`product`
+>
+> | Field | Type         | Key  |
+> | ----- | ------------ | ---- |
+> | id    | bigint(20)   | PRI  |
+> | name  | varchar(100) |      |
+> | since | varchar(100) |      |
+>
+> AT 分支事务的业务逻辑：
+>
+> ```sql
+> update product set name = 'GTS' where name = 'TXC';
+> ```
+>
+> **一阶段**
+>
+> 过程：
+>
+> 1. 解析 SQL：得到 SQL 的类型（UPDATE），表（product），条件（where name = 'TXC'）等相关的信息。
+> 2. 查询前镜像：根据解析得到的条件信息，生成查询语句，定位数据。
+>
+> ```sql
+> select id, name, since from product where name = 'TXC';
+> ```
+>
+> 得到前镜像：
+>
+> | id   | name | since |
+> | ---- | ---- | ----- |
+> | 1    | TXC  | 2014  |
+>
+> 1. 执行业务 SQL：更新这条记录的 name 为 'GTS'。
+> 2. 查询后镜像：根据前镜像的结果，通过 **主键** 定位数据。
+>
+> ```sql
+> select id, name, since from product where id = 1;
+> ```
+>
+> 得到后镜像：
+>
+> | id   | name | since |
+> | ---- | ---- | ----- |
+> | 1    | GTS  | 2014  |
+>
+> 1. 插入回滚日志：把前后镜像数据以及业务 SQL 相关的信息组成一条回滚日志记录，插入到 `UNDO_LOG` 表中。
+>
+> ```json
+> {
+> 	"branchId": 641789253,
+> 	"undoItems": [{
+> 		"afterImage": {
+> 			"rows": [{
+> 				"fields": [{
+> 					"name": "id",
+> 					"type": 4,
+> 					"value": 1
+> 				}, {
+> 					"name": "name",
+> 					"type": 12,
+> 					"value": "GTS"
+> 				}, {
+> 					"name": "since",
+> 					"type": 12,
+> 					"value": "2014"
+> 				}]
+> 			}],
+> 			"tableName": "product"
+> 		},
+> 		"beforeImage": {
+> 			"rows": [{
+> 				"fields": [{
+> 					"name": "id",
+> 					"type": 4,
+> 					"value": 1
+> 				}, {
+> 					"name": "name",
+> 					"type": 12,
+> 					"value": "TXC"
+> 				}, {
+> 					"name": "since",
+> 					"type": 12,
+> 					"value": "2014"
+> 				}]
+> 			}],
+> 			"tableName": "product"
+> 		},
+> 		"sqlType": "UPDATE"
+> 	}],
+> 	"xid": "xid:xxx"
+> }
+> ```
+>
+> 1. 提交前，向 TC 注册分支：申请 `product` 表中，主键值等于 1 的记录的 **全局锁** 。
+> 2. 本地事务提交：业务数据的更新和前面步骤中生成的 UNDO LOG 一并提交。
+> 3. 将本地事务提交的结果上报给 TC。
+>
+> **二阶段-回滚**
+>
+> 1. 收到 TC 的分支回滚请求，开启一个本地事务，执行如下操作。
+>
+> 2. 通过 XID 和 Branch ID 查找到相应的 UNDO LOG 记录。
+>
+> 3. 数据校验：拿 UNDO LOG 中的后镜与当前数据进行比较，如果有不同，说明数据被当前全局事务之外的动作做了修改。这种情况，需要根据配置策略来做处理，详细的说明在另外的文档中介绍。
+>
+> 4. 根据 UNDO LOG 中的前镜像和业务 SQL 的相关信息生成并执行回滚的语句：
+>
+>    `update product set name = 'TXC' where id = 1;`
+>
+> 5. 提交本地事务。并把本地事务的执行结果（即分支事务回滚的结果）上报给 TC。
+>
+> **二阶段-提交**
+>
+> 1. 收到 TC 的分支提交请求，把请求放入一个异步任务的队列中，马上返回提交成功的结果给 TC。
+> 2. 异步任务阶段的分支提交请求将异步和批量地删除相应 UNDO LOG 记录。
+
+简单的总结来说就是，Seata的一阶段会在数据库本地事务中提交，这其中会将回滚信息，分支信息存入seata的数据库表中，然后在第二阶段seata会根据提交或回滚进行不同的操作：如果是提交那么就返回提交并异步删除undo_log等表记录数据；如果是回滚，则根据之前记录的回滚日志进行回滚，然后将结果返回给TC。
+
+# 四、Seata的TCC模式
+
+## 4.1 Seata的TCC模式的使用
+
+### 1 RM端改造
+
+### 2 TM端改造
+
+## 4.2 Seata的TCC模式工作机制介绍
+
