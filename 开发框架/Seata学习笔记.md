@@ -1,6 +1,6 @@
 # Seata学习和源码剖析
 
-> 本笔记的项目地址[LearnSpringCloud](https://github.com/Loserfromlazy/LearnSpringCloud)。此项目是SpringCloud学习的统一项目，我们这篇笔记里Seata相关的项目均是seata-xxx形式的。
+> 本笔记的项目地址[LearnSpringCloud](https://github.com/Loserfromlazy/LearnSpringCloud)。此项目是我个人的SpringCloud学习的统一项目，我们这篇笔记里Seata相关的项目均是seata-xxx形式的。
 >
 > 参考资料：[Seata官方文档](https://seata.io/zh-cn/docs/overview/what-is-seata.html)
 
@@ -549,5 +549,161 @@ TCC的工作模式与AT类似，在AT模式中是基于支持本地 ACID事务 �
 
 ### 1 RM端改造
 
-### 2 TM端改造 
+在TM端我们需要手动指定Order的id，并去掉实体类中的id自增。因为我们的入门案例除了自增id以外没有一个有唯一索引的字段，这样seata在提交方法中无法获取这个订单，所以我们这里简单的通过手动设置id的方式进行处理，这是TM端即seata_client模块的改动。**注意：TCC模式依旧要使用`@GlobalTransactional`注解。**
 
+> 这里是我一开始的设计失误，为了入门案例简单而没有考虑到的情况。
+
+我们下面主要对三个作为RM端使用的项目进行改造。
+
+首先我们对接口进行改造：以seata_order模块为例，先用`@LocalTCC`标注seata接口，然后使用`@TwoPhaseBusinessAction`标注一阶段try方法。此注解可以指明二阶段提交和回滚方法，然后我们在接口声明出对应的提交和回滚方法，注意这两个方法返回值必须为boolean，代码如下：
+
+```java
+@LocalTCC//表示接口被seata管理
+public interface OrderTCCService extends IService<Order> {
+
+    //声明try方法，其中name为全局唯一属性
+    @TwoPhaseBusinessAction(name = "addOrder",commitMethod = "commitOrder",rollbackMethod = "rollbackOrder")
+    Result<Boolean> addOrder(@BusinessActionContextParameter(paramName = "order") Order order);
+
+    //这里返回值必须为boolean
+    boolean commitOrder(BusinessActionContext context);
+    //这里返回值必须为boolean
+    boolean rollbackOrder(BusinessActionContext context);
+}
+```
+
+然后我们按照逻辑实现对应的方法即可：
+
+```java
+@Override
+    public Result<Boolean> addOrder(Order order) {
+        order.setCreateTime(new Date());
+        int notUse = 0;
+        //0为不可用，事务未提交 1为可用，事务已经提交
+        order.setStatus(notUse);//预检查
+        try {
+            orderMapper.insert(order);
+        } catch (Exception e) {
+            log.error("插入订单失败，错误信息{}", e.getMessage());
+            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+            return ResultUtils.resultInit(0, e.getMessage(), false);
+        }
+        log.info("新增订单成功");
+        return ResultUtils.successBuild(true);
+    }
+
+    @Override
+    public boolean commitOrder(BusinessActionContext context) {
+        Object orderJson = context.getActionContext("order");
+        Order order = JSON.parseObject(orderJson.toString(), Order.class);
+        Order orderSelect = orderMapper.selectById(order.getId());
+        if (orderSelect!=null){
+            //二阶段提交
+            orderSelect.setStatus(1);
+            this.saveOrUpdate(orderSelect);
+        }
+        log.info("提交成功，xid={}",context.getXid());
+        //这里需要返回true，如果为false会不断的去重试，可以在配置中心配置重试策略
+        return true;
+    }
+
+    @Override
+    public boolean rollbackOrder(BusinessActionContext context) {
+        Object orderJson = context.getActionContext("order");
+        Order order = JSON.parseObject(orderJson.toString(), Order.class);
+        if (order!=null){
+            //二阶段回滚，删除订单
+            orderMapper.deleteById(order.getId());
+        }
+        log.info("回滚成功，xid={}",context.getXid());
+        //这里需要返回true，如果为false会不断的去重试，可以在配置中心配置重试策略
+        return true;
+    }
+```
+
+修改完代码后，我们可以在配置文件中关闭数据库代理，因为seata的TCC模式不需要对数据库进行代理：
+
+```yaml
+seata:
+  application-id: ${spring.application.name}
+  enable-auto-data-source-proxy: false
+  config:
+    type: nacos
+    nacos:
+      server-addr: 127.0.0.1:8848
+      username: nacos
+      password: nacos
+      dataId: "seataServer.properties"
+  registry:
+    type: nacos
+    nacos:
+      application: seata-server
+      server-addr: 127.0.0.1:8848
+      username: nacos
+      password: nacos
+  #data-source-proxy-mode: AT
+  enabled: true
+```
+
+其他两个模块跟此模块一样，这里就不贴代码了。
+
+总结TCC模式的使用流程就是：
+
+1. 首先通过@LocalTCC指定seata管理的接口
+2. 然后通过@TwoPhaseBusinessAction指明seata一、二阶段的方法，最后结合业务进行实现。
+
+### 2 测试TCC模式
+
+改造完后，我们来进行测试,首先测试能否正常购买商品，我们访问`http://localhost:8075/test/testBuy1`,然后我们可以在控制台查看三个模块都打印了我们的日志提交成功，且数据库数据均正确，日志图片如下（这里只展示一个服务的日志）：
+
+![image-20221005215945522](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221005215945522.png)
+
+然后看数据库数据，原始数据如下：
+
+![image-20221005215915027](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221005215915027.png)
+
+方法执行完后数据如下：
+
+![image-20221005220106240](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221005220106240.png)
+
+我们可以看到数据均是正常的。
+
+然后我们将数据恢复为原始数据，并访问`http://localhost:8075/test/testBuy2`
+
+我们查看日志，这里以warehouse服务为例：
+
+![image-20221005220338889](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221005220338889.png)
+
+然后在看数据库，发现数据没有变化，回滚成功。以上就是Seata的TCC模式的使用。
+
+> PS：我在使用测试seata时如果重启一部分服务，那么没重启的服务就会事务失效，比如我重启了我的client和order项目，但是没重启user和warehouse模块，那么这俩没重启的模块就不会执行事务，或者说不参与此事务，日志如下：
+>
+> order模块日志：
+>
+> ~~~
+> 2022-10-05 21:51:46.181  INFO 21048 --- [nio-8076-exec-5] c.l.service.impl.OrderTCCServiceImpl     : 新增订单成功
+> 2022-10-05 21:51:46.185  WARN 21048 --- [nio-8076-exec-5] c.a.c.seata.web.SeataHandlerInterceptor  : xid in change during RPC from 192.168.123.169:8091:2044947731123859477 to null
+> 2022-10-05 21:51:46.490  INFO 21048 --- [h_RMROLE_1_3_24] i.s.c.r.p.c.RmBranchCommitProcessor      : rm client handle branch commit process:xid=192.168.123.169:8091:2044947731123859477,branchId=2044947731123859478,branchType=TCC,resourceId=addOrder,applicationData={"actionContext":{"action-start-time":1664977906076,"useTCCFence":false,"sys::prepare":"addOrder","sys::rollback":"rollbackOrder","sys::commit":"commitOrder","host-name":"192.168.123.169","order":{"createTime":1664977906072,"goodsId":1,"id":1,"name":"购买商品1","nums":10,"userId":1},"actionName":"addOrder"}}
+> 2022-10-05 21:51:46.490  INFO 21048 --- [h_RMROLE_1_3_24] io.seata.rm.AbstractRMHandler            : Branch committing: 192.168.123.169:8091:2044947731123859477 2044947731123859478 addOrder {"actionContext":{"action-start-time":1664977906076,"useTCCFence":false,"sys::prepare":"addOrder","sys::rollback":"rollbackOrder","sys::commit":"commitOrder","host-name":"192.168.123.169","order":{"createTime":1664977906072,"goodsId":1,"id":1,"name":"购买商品1","nums":10,"userId":1},"actionName":"addOrder"}}
+> 2022-10-05 21:51:46.604  INFO 21048 --- [h_RMROLE_1_3_24] c.l.service.impl.OrderTCCServiceImpl     : 提交成功，xid=192.168.123.169:8091:2044947731123859477
+> 2022-10-05 21:51:46.604  INFO 21048 --- [h_RMROLE_1_3_24] io.seata.rm.AbstractResourceManager      : TCC resource commit result : true, xid: 192.168.123.169:8091:2044947731123859477, branchId: 2044947731123859478, resourceId: addOrder
+> 2022-10-05 21:51:46.604  INFO 21048 --- [h_RMROLE_1_3_24] io.seata.rm.AbstractRMHandler            : Branch commit result: PhaseTwo_Committed
+> ~~~
+>
+> user模块日志：
+>
+> ~~~
+> 2022-10-05 21:51:46.334  INFO 6928 --- [nio-8077-exec-4] c.learn.service.impl.UserTCCServiceImpl  : 更新积分成功
+> 2022-10-05 21:51:46.338  WARN 6928 --- [nio-8077-exec-4] c.a.c.seata.web.SeataHandlerInterceptor  : xid in change during RPC from 192.168.123.169:8091:2044947731123859477 to null
+> ~~~
+>
+> warehouse模块日志：
+>
+> ~~~
+> 2022-10-05 21:51:46.479  INFO 11600 --- [nio-8078-exec-3] c.l.service.impl.GoodsTCCServiceImpl     : 扣减库存成功
+> 2022-10-05 21:51:46.482  WARN 11600 --- [nio-8078-exec-3] c.a.c.seata.web.SeataHandlerInterceptor  : xid in change during RPC from 192.168.123.169:8091:2044947731123859477 to null
+> ~~~
+>
+> 此问题暂时未找到原因，如有大佬懂此处，请指教。我的解决办法是，全部重启服务。
+
+# 五、Seata源码xue'xi
