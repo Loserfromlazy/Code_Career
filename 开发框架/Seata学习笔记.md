@@ -706,4 +706,156 @@ seata:
 >
 > 此问题暂时未找到原因，如有大佬懂此处，请指教。我的解决办法是，全部重启服务。
 
-# 五、Seata源码xue'xi
+# 五、Seata源码学习
+
+## 5.1 seata源码工程搭建
+
+首先我们需要到[官方下载地址](https://seata.io/zh-cn/blog/download.html)下载seata源码并解压,然后导入到IDEA中，然后我们进行编译，如下图：
+
+![image-20221006095625214](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006095625214.png)
+
+**注意：seata需要在jdk1.8的环境下才能运行**
+
+编译完成后可以在seata-server模块下编辑配置文件，可以直接将上面使用的配置文件拿过来，然后启动ServerApplication的main方法(如果是以前的版本那就是Server的main方法)。启动完成后nacos能注册上即可：
+
+![image-20221006101855115](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006101855115.png)
+
+我们简单的了解一下seata各模块的作用：
+
+- seata-common：提供seata工具类、异常类等。
+- seata-core：提供RPC封装、数据模型、通信格式等。
+- seata-config：从配置中心读取配置
+- seata-discovery：用于TC注册到注册中心、TM从注册中心服务发现TC
+- seata-rm：RM的核心实现
+- seata-rm-datasource：对JDBC拓展，实现对MySQL等透明接入RM
+- seata-server：对TC的核心实现，提供了事务协调、锁、事务状态等功能。
+- seata-tm：对TM的实现，提供了全局事务管理，比如事务的提交回滚等。
+- seata-tcc：对TCC事务模式的实现
+- seata-spring：Spring对Seata集成的实现，比如@GlobalTransaction注解等
+
+## 5.2 AT模式TM/RM注册TC流程
+
+### 5.2.1 TM/RM注册流程
+
+我们依旧从自动装配的spring.factories配置文件入手，进入到SeataAutoConfiguration自动配置类（在以前的seata版本可能入口在GlobalTransactionAutoConfiguration，在spring-cloud-alibaba-seata包下），如下图：
+
+![image-20221006134659516](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006134659516.png)
+
+这个配置类中会注入一个GlobalTransactionScanner全局事务扫描器的Bean，在这里会配置一些seata的配置，源码如下图：
+
+![image-20221006140113806](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006140113806.png)
+
+同时，GlobalTransactionScanner继承了InitialzingBean接口，因此我们重点关注一下afterPropertiesSet方法，源码如下：
+
+> Spring启动后，初始化Bean时，若该Bean实现InitialzingBean接口，会自动调用afterPropertiesSet()方法，完成一些用户自定义的初始化操作
+
+```java
+@Override
+public void afterPropertiesSet() {
+    if (disableGlobalTransaction) {
+        if (LOGGER.isInfoEnabled()) {
+            LOGGER.info("Global transaction is disabled.");
+        }
+        ConfigurationCache.addConfigListener(ConfigurationKeys.DISABLE_GLOBAL_TRANSACTION,
+                (ConfigurationChangeListener)this);
+        return;
+    }
+    if (initialized.compareAndSet(false, true)) {
+        //初始化客户端
+        initClient();
+    }
+}
+```
+
+然后我们主要跟进initClient方法中：
+
+```java
+private void initClient() {
+    //。。省略部分代码
+    //init TM
+    TMClient.init(applicationId, txServiceGroup, accessKey, secretKey);
+    if (LOGGER.isInfoEnabled()) {
+        //打印日志
+    }
+    //init RM
+    RMClient.init(applicationId, txServiceGroup);
+    //。。省略部分代码
+    registerSpringShutdownHook();
+
+}
+```
+
+此方法中有两个比较重要的部分那就是TM和RM的客户端初始化，我们下面分别跟进这两个方法：
+
+1. TMClient.init
+
+   ```java
+   public static void init(String applicationId, String transactionServiceGroup, String accessKey, String secretKey) {
+       //创建Netty远程客户端
+       TmNettyRemotingClient tmNettyRemotingClient = TmNettyRemotingClient.getInstance(applicationId, transactionServiceGroup, accessKey, secretKey);
+       //初始化
+       tmNettyRemotingClient.init();
+   }
+   ```
+
+   我们先跟进getInstance方法中：
+
+   ```java
+   public static TmNettyRemotingClient getInstance(String applicationId, String transactionServiceGroup, String accessKey, String secretKey) {
+       TmNettyRemotingClient tmRpcClient = getInstance();
+       tmRpcClient.setApplicationId(applicationId);
+       tmRpcClient.setTransactionServiceGroup(transactionServiceGroup);
+       tmRpcClient.setAccessKey(accessKey);
+       tmRpcClient.setSecretKey(secretKey);
+       return tmRpcClient;
+   }
+   //---->
+   public static TmNettyRemotingClient getInstance() {
+       if (instance == null) {
+           synchronized (TmNettyRemotingClient.class) {
+               if (instance == null) {
+                   NettyClientConfig nettyClientConfig = new NettyClientConfig();
+                   final ThreadPoolExecutor messageExecutor = new ThreadPoolExecutor(
+                           nettyClientConfig.getClientWorkerThreads(), nettyClientConfig.getClientWorkerThreads(),
+                           KEEP_ALIVE_TIME, TimeUnit.SECONDS,
+                           new LinkedBlockingQueue<>(MAX_QUEUE_SIZE),
+                           new NamedThreadFactory(nettyClientConfig.getTmDispatchThreadPrefix(),
+                                   nettyClientConfig.getClientWorkerThreads()),
+                           RejectedPolicies.runsOldestTaskPolicy());
+                   //新建TmNettyRemotingClient对象
+                   instance = new TmNettyRemotingClient(nettyClientConfig, null, messageExecutor);
+               }
+           }
+       }
+       return instance;
+   }
+   ```
+
+   然后我们进入到TmNettyRemotingClient构造函数，这里会调用父类构造函数，在父类构造函数中会初始化Netty的客户端启动助手，并新增Handler处理器，源码如下图：
+
+   ![image-20221006142714073](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006142714073.png)
+
+   然后创建完TmNettyRemotingClient之后，回到`TMClient.init`方法中，接下来会调用`tmNettyRemotingClient.init()`方法：
+
+   ```java
+   @Override
+   public void init() {
+       // registry processor注册处理器
+       registerProcessor();
+       if (initialized.compareAndSet(false, true)) {
+           super.init();//调用init方法
+           if (io.seata.common.util.StringUtils.isNotBlank(transactionServiceGroup)) {
+               getClientChannelManager().reconnect(transactionServiceGroup);
+           }
+       }
+   }
+   ```
+
+   在这里会先注册处理器，然后执行init方法，我们分别来看这个两个方法：
+
+   1.  registerProcessor()
+   2. super.init()
+
+2. RMClient.init
+
+### 5.2.2 TC部分注册流程分析
