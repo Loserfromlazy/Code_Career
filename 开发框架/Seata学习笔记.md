@@ -733,7 +733,7 @@ seata:
 - seata-tcc：对TCC事务模式的实现
 - seata-spring：Spring对Seata集成的实现，比如@GlobalTransaction注解等
 
-## 5.2 AT模式TM/RM注册TC流程
+## 5.2 AT模式TM/RM注册TC
 
 ### 5.2.1 TM/RM注册流程
 
@@ -770,6 +770,7 @@ public void afterPropertiesSet() {
 然后我们主要跟进initClient方法中：
 
 ```java
+//GlobalTransactionScanner#initClient
 private void initClient() {
     //。。省略部分代码
     //init TM
@@ -785,77 +786,245 @@ private void initClient() {
 }
 ```
 
-此方法中有两个比较重要的部分那就是TM和RM的客户端初始化，我们下面分别跟进这两个方法：
+此方法中有两个比较重要的部分那就是TM和RM的客户端初始化，这俩个客户端的初始化过程类似，我们先看TM的初始化过程。
 
-1. TMClient.init
+我们先跟进`TMClient.init`方法中： 
+
+```java
+public static void init(String applicationId, String transactionServiceGroup, String accessKey, String secretKey) {
+    //创建Netty远程客户端
+    TmNettyRemotingClient tmNettyRemotingClient = TmNettyRemotingClient.getInstance(applicationId, transactionServiceGroup, accessKey, secretKey);
+    //初始化
+    tmNettyRemotingClient.init();
+}
+```
+
+我们先跟进getInstance方法中：
+
+```java
+//TmNettyRemotingClient#getInstance(...)
+public static TmNettyRemotingClient getInstance(String applicationId, String transactionServiceGroup, String accessKey, String secretKey) {
+    TmNettyRemotingClient tmRpcClient = getInstance();
+    tmRpcClient.setApplicationId(applicationId);
+    tmRpcClient.setTransactionServiceGroup(transactionServiceGroup);
+    tmRpcClient.setAccessKey(accessKey);
+    tmRpcClient.setSecretKey(secretKey);
+    return tmRpcClient;
+}
+//---->
+public static TmNettyRemotingClient getInstance() {
+    if (instance == null) {
+        synchronized (TmNettyRemotingClient.class) {
+            if (instance == null) {
+                NettyClientConfig nettyClientConfig = new NettyClientConfig();
+                final ThreadPoolExecutor messageExecutor = new ThreadPoolExecutor(
+                        nettyClientConfig.getClientWorkerThreads(), nettyClientConfig.getClientWorkerThreads(),
+                        KEEP_ALIVE_TIME, TimeUnit.SECONDS,
+                        new LinkedBlockingQueue<>(MAX_QUEUE_SIZE),
+                        new NamedThreadFactory(nettyClientConfig.getTmDispatchThreadPrefix(),
+                                nettyClientConfig.getClientWorkerThreads()),
+                        RejectedPolicies.runsOldestTaskPolicy());
+                //新建TmNettyRemotingClient对象
+                instance = new TmNettyRemotingClient(nettyClientConfig, null, messageExecutor);
+            }
+        }
+    }
+    return instance;
+}
+```
+
+然后我们进入到TmNettyRemotingClient构造函数，这里会调用父类构造函数，在父类构造函数中会初始化Netty的客户端启动助手，并新增Handler处理器，源码如下图：
+
+![image-20221006142714073](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006142714073.png)
+
+然后创建完TmNettyRemotingClient之后，回到`TMClient.init`方法中，接下来会调用`tmNettyRemotingClient.init()`方法：
+
+```java
+//TmNettyRemotingClient#init
+@Override
+public void init() {
+    // registry processor注册处理器
+    registerProcessor();
+    if (initialized.compareAndSet(false, true)) {
+        super.init();//调用init方法
+        if (io.seata.common.util.StringUtils.isNotBlank(transactionServiceGroup)) {
+            getClientChannelManager().reconnect(transactionServiceGroup);
+        }
+    }
+}
+```
+
+在这里会先注册处理器，然后执行init方法，我们分别来看这个两个方法：
+
+1. registerProcessor()
 
    ```java
-   public static void init(String applicationId, String transactionServiceGroup, String accessKey, String secretKey) {
-       //创建Netty远程客户端
-       TmNettyRemotingClient tmNettyRemotingClient = TmNettyRemotingClient.getInstance(applicationId, transactionServiceGroup, accessKey, secretKey);
-       //初始化
-       tmNettyRemotingClient.init();
+   private void registerProcessor() {
+       // 1.registry TC response processor注册TC响应处理器
+       ClientOnResponseProcessor onResponseProcessor =
+               new ClientOnResponseProcessor(mergeMsgMap, super.getFutures(), getTransactionMessageHandler());
+       super.registerProcessor(MessageType.TYPE_SEATA_MERGE_RESULT, onResponseProcessor, null);
+       super.registerProcessor(MessageType.TYPE_GLOBAL_BEGIN_RESULT, onResponseProcessor, null);
+       super.registerProcessor(MessageType.TYPE_GLOBAL_COMMIT_RESULT, onResponseProcessor, null);
+       super.registerProcessor(MessageType.TYPE_GLOBAL_REPORT_RESULT, onResponseProcessor, null);
+       super.registerProcessor(MessageType.TYPE_GLOBAL_ROLLBACK_RESULT, onResponseProcessor, null);
+       super.registerProcessor(MessageType.TYPE_GLOBAL_STATUS_RESULT, onResponseProcessor, null);
+       super.registerProcessor(MessageType.TYPE_REG_CLT_RESULT, onResponseProcessor, null);
+       super.registerProcessor(MessageType.TYPE_BATCH_RESULT_MSG, onResponseProcessor, null);
+       // 2.registry heartbeat message processor 注册心跳信息处理器
+       ClientHeartbeatProcessor clientHeartbeatProcessor = new ClientHeartbeatProcessor();
+       super.registerProcessor(MessageType.TYPE_HEARTBEAT_MSG, clientHeartbeatProcessor, null);
    }
    ```
 
-   我们先跟进getInstance方法中：
+   这里调用父类的registerProcessor方法进行注册，此方法本质上是保存到map中：
 
    ```java
-   public static TmNettyRemotingClient getInstance(String applicationId, String transactionServiceGroup, String accessKey, String secretKey) {
-       TmNettyRemotingClient tmRpcClient = getInstance();
-       tmRpcClient.setApplicationId(applicationId);
-       tmRpcClient.setTransactionServiceGroup(transactionServiceGroup);
-       tmRpcClient.setAccessKey(accessKey);
-       tmRpcClient.setSecretKey(secretKey);
-       return tmRpcClient;
-   }
-   //---->
-   public static TmNettyRemotingClient getInstance() {
-       if (instance == null) {
-           synchronized (TmNettyRemotingClient.class) {
-               if (instance == null) {
-                   NettyClientConfig nettyClientConfig = new NettyClientConfig();
-                   final ThreadPoolExecutor messageExecutor = new ThreadPoolExecutor(
-                           nettyClientConfig.getClientWorkerThreads(), nettyClientConfig.getClientWorkerThreads(),
-                           KEEP_ALIVE_TIME, TimeUnit.SECONDS,
-                           new LinkedBlockingQueue<>(MAX_QUEUE_SIZE),
-                           new NamedThreadFactory(nettyClientConfig.getTmDispatchThreadPrefix(),
-                                   nettyClientConfig.getClientWorkerThreads()),
-                           RejectedPolicies.runsOldestTaskPolicy());
-                   //新建TmNettyRemotingClient对象
-                   instance = new TmNettyRemotingClient(nettyClientConfig, null, messageExecutor);
-               }
-           }
-       }
-       return instance;
+   
+   protected final HashMap<Integer/*MessageType*/, Pair<RemotingProcessor, ExecutorService>> processorTable = new HashMap<>(32);
+   
+   @Override
+   public void registerProcessor(int requestCode, RemotingProcessor processor, ExecutorService executor) {
+       Pair<RemotingProcessor, ExecutorService> pair = new Pair<>(processor, executor);
+       this.processorTable.put(requestCode, pair);
    }
    ```
 
-   然后我们进入到TmNettyRemotingClient构造函数，这里会调用父类构造函数，在父类构造函数中会初始化Netty的客户端启动助手，并新增Handler处理器，源码如下图：
+2. super.init()
 
-   ![image-20221006142714073](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006142714073.png)
-
-   然后创建完TmNettyRemotingClient之后，回到`TMClient.init`方法中，接下来会调用`tmNettyRemotingClient.init()`方法：
+   此方法中会创建一个定时任务，主要作用是检测与server的连接是否断开，如果断开就重连并重新注册到server端。然后会启动ClientBootstrap。源码如下：
 
    ```java
    @Override
    public void init() {
-       // registry processor注册处理器
-       registerProcessor();
-       if (initialized.compareAndSet(false, true)) {
-           super.init();//调用init方法
-           if (io.seata.common.util.StringUtils.isNotBlank(transactionServiceGroup)) {
-               getClientChannelManager().reconnect(transactionServiceGroup);
+       //启动了一个定时任务，这个定时任务会判断跟server端的连接是否还有效，如果已经断开，就会重新连上，并且重新把tm注册到server
+       timerExecutor.scheduleAtFixedRate(new Runnable() {
+           @Override
+           public void run() {
+               //检测、连接netty服务器
+               clientChannelManager.reconnect(getTransactionServiceGroup());
            }
+       }, SCHEDULE_DELAY_MILLS, SCHEDULE_INTERVAL_MILLS, TimeUnit.MILLISECONDS);
+       if (this.isEnableClientBatchSendRequest()) {
+           mergeSendExecutorService = new ThreadPoolExecutor(MAX_MERGE_SEND_THREAD,
+               MAX_MERGE_SEND_THREAD,
+               KEEP_ALIVE_TIME, TimeUnit.MILLISECONDS,
+               new LinkedBlockingQueue<>(),
+               new NamedThreadFactory(getThreadPrefix(), MAX_MERGE_SEND_THREAD));
+           mergeSendExecutorService.submit(new MergedSendRunnable());
+       }
+       super.init();
+       //启动ClientBootstrap
+       clientBootstrap.start(); 
+   }
+   ```
+
+   然后我们先跟进reconnect方法中：此方法先获取server端地址，然后根据地址获取Channel，源码如下图：
+
+   ![image-20221006230715783](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006230715783.png)
+
+   主要逻辑在acquireChannel方法中，我们跟进此方法：
+
+   ```java
+   Channel acquireChannel(String serverAddress) {
+       //根据地址获取channel
+       Channel channelToServer = channels.get(serverAddress);
+       if (channelToServer != null) {
+           channelToServer = getExistAliveChannel(channelToServer, serverAddress);
+           if (channelToServer != null) {
+               //如果能取到Channel且Channel依旧alive那么就直接返回Channel
+               return channelToServer;
+           }
+       }
+       if (LOGGER.isInfoEnabled()) {
+           LOGGER.info("will connect to {}", serverAddress);
+       }
+       Object lockObj = CollectionUtils.computeIfAbsent(channelLocks, serverAddress, key -> new Object());
+       //如果取不到Channel或Channel不是alive状态，就进行连接。
+       synchronized (lockObj) {
+           return doConnect(serverAddress);
        }
    }
    ```
 
-   在这里会先注册处理器，然后执行init方法，我们分别来看这个两个方法：
+   我们跟进doConnect方法，此方法中主要逻辑就是从对象池中获取Channel，源码如下图：
 
-   1.  registerProcessor()
-   2. super.init()
+   ![image-20221006231446150](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006231446150.png)
 
-2. RMClient.init
+   我们看构造函数：
+
+   ![image-20221006231503103](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006231503103.png)
+
+   我们注意在创建对象池时会传入一个工厂，当我们调用borrowObject获取对象时如果获取不到就会调用工厂去创建。最终的连接server端是在此工厂的makeObject方法中完成的，源码流程如下：
+
+   ![image-20221006232144435](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006232144435.png)
+
+我们接下来回到`GlobalTransactionScanner#initClient`
+
+接下来我们跟进RMClient.init中看一下：
+
+```java
+public static void init(String applicationId, String transactionServiceGroup) {
+    RmNettyRemotingClient rmNettyRemotingClient = RmNettyRemotingClient.getInstance(applicationId, transactionServiceGroup);
+    rmNettyRemotingClient.setResourceManager(DefaultResourceManager.get());
+    rmNettyRemotingClient.setTransactionMessageHandler(DefaultRMHandler.get());
+    rmNettyRemotingClient.init();
+}
+```
+
+我们可以看到基本没有太大的区别，都是获取对应的XXNettyRemotingClient并调用init方法。只不过RM需要额外设置ResourceManager和TransactionMessageHandler。
+
+接下来我们跟进`rmNettyRemotingClient.init()`方法，源码如下：
+
+```java
+@Override
+public void init() {
+    // registry processor
+    //调用RmNettyRemotingClient#registerProcessor
+    registerProcessor();
+    if (initialized.compareAndSet(false, true)) {
+        super.init();
+
+        // Found one or more resources that were registered before initialization
+        if (resourceManager != null
+                && !resourceManager.getManagedResources().isEmpty()
+                && StringUtils.isNotBlank(transactionServiceGroup)) {
+            getClientChannelManager().reconnect(transactionServiceGroup);
+        }
+    }
+}
+```
+
+我们可以看到RM端也是先进行注册然后调用父类的init方法，而TM和RM端的父类都是AbstractNettyRemotingClient，他的init方法我们在上面已经介绍了，这里就不再赘述，也就是说RM和TM的注册流程基本是一样的。
+
+综上，是AT模式TM/RM注册的整体流程源码分析。
 
 ### 5.2.2 TC部分注册流程分析
+
+在seata服务端，我们是通过ServerApplication启动的（在以前的版本是通过Server.main方法启动的），此方法就是启动了springboot项目，因此实际的入口在ServerRunner类中，此方法继承了CommandLineRunner接口，因此我们主要关注其run方法：
+
+```java
+@Override
+public void run(String... args) {
+    try {
+        long start = System.currentTimeMillis();
+        Server.start(args);
+        started = true;
+
+        long cost = System.currentTimeMillis() - start;
+        LOGGER.info("seata server started in {} millSeconds", cost);
+    } catch (Throwable e) {
+        //部分代码略
+    }
+}
+```
+
+在这里主要调用了Server.start方法，此方法中主要是新建了一个NettyRemotingServer并调用了其init方法。源码如下：
+
+![image-20221006234614760](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006234614760.png)
+
+## 5.3 TM开启全局事务
+
+## 5.4 RM分支事务注册
+
+## 5.5 TM/RM处理事务提交和回滚
