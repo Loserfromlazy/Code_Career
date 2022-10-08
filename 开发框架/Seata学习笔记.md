@@ -720,6 +720,14 @@ seata:
 
 ![image-20221006101855115](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006101855115.png)
 
+> 注意：如果debug无法启动，错误信息如下：
+>
+> ![image-20221008110959787](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221008110959787.png)
+>
+> 这是新的Kotlin 1.4协程调试器中的一个错误，我们只需要在IDEA中关闭即可，如下图：
+>
+> ![image-20221008111048966](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221008111048966.png)
+
 我们简单的了解一下seata各模块的作用：
 
 - seata-common：提供seata工具类、异常类等。
@@ -955,9 +963,19 @@ public void init() {
 
    ![image-20221006231503103](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006231503103.png)
 
-   我们注意在创建对象池时会传入一个工厂，当我们调用borrowObject获取对象时如果获取不到就会调用工厂去创建。最终的连接server端是在此工厂的makeObject方法中完成的，源码流程如下：
+   我们注意在创建对象池时会传入一个工厂，当我们调用borrowObject获取对象时如果获取不到就会调用工厂去创建。最终的连接server端和注册是在此工厂的makeObject方法中完成的，源码流程如下：
 
    ![image-20221006232144435](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006232144435.png)
+   
+   我们可以debug查看注册请求的具体信息，如下图：
+   
+   ![image-20221008112033891](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221008112033891.png)
+   
+   进入到sendSyncRequest方法中，会构建消息：
+   
+   ![image-20221008112757229](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221008112757229.png)
+   
+   这里发送请求本质上是将信息写入通道，发送到Netty的Server端。
 
 我们接下来回到`GlobalTransactionScanner#initClient`
 
@@ -999,7 +1017,7 @@ public void init() {
 
 综上，是AT模式TM/RM注册的整体流程源码分析。
 
-### 5.2.2 TC部分注册流程分析
+### 5.2.2 TC注册流程分析
 
 在seata服务端，我们是通过ServerApplication启动的（在以前的版本是通过Server.main方法启动的），此方法就是启动了springboot项目，因此实际的入口在ServerRunner类中，此方法继承了CommandLineRunner接口，因此我们主要关注其run方法：
 
@@ -1019,9 +1037,271 @@ public void run(String... args) {
 }
 ```
 
-在这里主要调用了Server.start方法，此方法中主要是新建了一个NettyRemotingServer并调用了其init方法。源码如下：
+在这里主要调用了Server.start方法。源码如下：
 
 ![image-20221006234614760](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221006234614760.png)
+
+我们可以看到在Server.start方法中主要是新建了一个NettyRemotingServer并调用了其init方法。我们先来看一下NettyRemotingServer的构造函数：
+
+```java
+//NettyRemotingServer extends AbstractNettyRemotingServer
+public NettyRemotingServer(ThreadPoolExecutor messageExecutor) {
+    super(messageExecutor, new NettyServerConfig());
+}
+//------> AbstractNettyRemotingServer构造函数：
+public AbstractNettyRemotingServer(ThreadPoolExecutor messageExecutor, NettyServerConfig nettyServerConfig) {
+    super(messageExecutor);
+    //新建服务端Netty启动助手包装类
+    serverBootstrap = new NettyServerBootstrap(nettyServerConfig);
+    //设置服务端处理器
+    serverBootstrap.setChannelHandlers(new ServerHandler());
+}
+```
+
+我们可以看到新建NettyRemotingServer时，会将Netty的启动助手完成创建并配置服务端的通道处理器。
+
+然后我们关注其init方法，代码如下：
+
+```java
+@Override
+public void init() {
+    // registry processor
+    registerProcessor();
+    if (initialized.compareAndSet(false, true)) {
+        super.init();
+    }
+}
+```
+
+这个方法很眼熟，可以说和客户端的init方法几乎没有区别，在`registerProcessor()`方法中，还是注册了一些请求和心跳处理器。然后我们进入super.init()方法，代码如下：
+
+```java
+//AbstractNettyRemotingServer#init
+@Override
+public void init() {
+    super.init();
+    serverBootstrap.start();
+}
+//----->NettyServerBootstrap#start
+@Override
+    public void start() {
+        this.serverBootstrap.group(this.eventLoopGroupBoss, this.eventLoopGroupWorker)
+            .channel(NettyServerConfig.SERVER_CHANNEL_CLAZZ)
+            .option(ChannelOption.SO_BACKLOG, nettyServerConfig.getSoBackLogSize())
+            .option(ChannelOption.SO_REUSEADDR, true)
+            .childOption(ChannelOption.SO_KEEPALIVE, true)
+            .childOption(ChannelOption.TCP_NODELAY, true)
+            .childOption(ChannelOption.SO_SNDBUF, nettyServerConfig.getServerSocketSendBufSize())
+            .childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketResvBufSize())
+            .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                new WriteBufferWaterMark(nettyServerConfig.getWriteBufferLowWaterMark(),
+                    nettyServerConfig.getWriteBufferHighWaterMark()))
+            .localAddress(new InetSocketAddress(getListenPort()))
+            .childHandler(new ChannelInitializer<SocketChannel>() {
+                @Override
+                public void initChannel(SocketChannel ch) {
+                    ch.pipeline().addLast(new IdleStateHandler(nettyServerConfig.getChannelMaxReadIdleSeconds(), 0, 0))
+                        .addLast(new ProtocolV1Decoder())
+                        .addLast(new ProtocolV1Encoder());
+                    if (channelHandlers != null) {
+                        addChannelPipelineLast(ch, channelHandlers);
+                    }
+
+                }
+            });
+
+        try {
+            this.serverBootstrap.bind(getListenPort()).sync();
+            XID.setPort(getListenPort());
+            LOGGER.info("Server started, service listen port: {}", getListenPort());
+            RegistryFactory.getInstance().register(new InetSocketAddress(XID.getIpAddress(), XID.getPort()));
+            initialized.set(true);
+        } catch (SocketException se) {
+            throw new RuntimeException("Server start failed, the listen port: " + getListenPort(), se);
+        } catch (Exception exx) {
+            throw new RuntimeException("Server start failed", exx);
+        }
+    }
+```
+
+我们可以看到在这里会将Netty服务端进行启动。
+
+在5.2.1中也讲过，TM/RM会连接Netty服务端发送注册请求，也就是将数据通过通道发送到Netty的Server端。因此我们回到TC的AbstractNettyRemotingServer类的构造函数中：在这里设置了netty的handler处理器ServerHandler。我们进入此类查看器channelRead方法：
+
+```java
+@Override
+public void channelRead(final ChannelHandlerContext ctx, Object msg) throws Exception {
+    if (!(msg instanceof RpcMessage)) {
+        return;
+    }
+    processMessage(ctx, (RpcMessage) msg);
+}
+```
+
+这里会将RpcMessage的消息交给processMessage方法进行处理，我们跟进此方法：
+
+```java
+protected void processMessage(ChannelHandlerContext ctx, RpcMessage rpcMessage) throws Exception {
+    if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug(String.format("%s msgId:%s, body:%s", this, rpcMessage.getId(), rpcMessage.getBody()));
+    }
+    Object body = rpcMessage.getBody();
+    if (body instanceof MessageTypeAware) {
+        //将消息强制转换成MessageTypeAware，此接口中有一个getTypeCode方法，获取当前请求的类型
+        MessageTypeAware messageTypeAware = (MessageTypeAware) body;
+        //根据type类型，调用不同的处理器进行处理，这里的处理器就是上面注册处理器时注册的
+        final Pair<RemotingProcessor, ExecutorService> pair = this.processorTable.get((int) messageTypeAware.getTypeCode());
+        if (pair != null) {
+            if (pair.getSecond() != null) {
+                try {
+                    pair.getSecond().execute(() -> {
+                        try {
+                            pair.getFirst().process(ctx, rpcMessage);
+                        } catch (Throwable th) {
+                            LOGGER.error(FrameworkErrorCode.NetDispatch.getErrCode(), th.getMessage(), th);
+                        } finally {
+                            MDC.clear();
+                        }
+                    });
+                } catch (RejectedExecutionException e) {
+                    //省略部分代码
+                }
+            } else {
+                try {
+                    pair.getFirst().process(ctx, rpcMessage);
+                } catch (Throwable th) {
+                    //省略日志代码
+                }
+            }
+        } else {
+            //省略日志代码
+        }
+    } else {
+        //省略日志代码
+    }
+}
+```
+
+在此方法中根据type调用不同的处理器进行处理，TC端处理注册的主要是下面两个处理器：
+
+![image-20221008131831870](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221008131831870.png)
+
+我们这里以RM为例，我们跟进RegRmProcessor的process方法，此方法中核心代码就是`ChannelManager.registerRMChannel()`方法，在此方法中完成了RM的注册处理，注册完后会创建响应消息并回写给客户端，源码如下：
+
+```java
+@Override
+public void process(ChannelHandlerContext ctx, RpcMessage rpcMessage) throws Exception {
+    onRegRmMessage(ctx, rpcMessage);
+}
+
+private void onRegRmMessage(ChannelHandlerContext ctx, RpcMessage rpcMessage) {
+    //获取消息内容
+    RegisterRMRequest message = (RegisterRMRequest) rpcMessage.getBody();
+    String ipAndPort = NetUtil.toStringAddress(ctx.channel().remoteAddress());
+    boolean isSuccess = false;
+    String errorInfo = StringUtils.EMPTY;
+    try {
+        if (null == checkAuthHandler || checkAuthHandler.regResourceManagerCheckAuth(message)) {
+            //注册处理消息
+            ChannelManager.registerRMChannel(message, ctx.channel());
+            Version.putChannelVersion(ctx.channel(), message.getVersion());
+            isSuccess = true;
+            if (LOGGER.isDebugEnabled()) {
+                //日志代码省略
+            }
+        } else {
+            if (LOGGER.isWarnEnabled()) {
+                //日志代码省略
+            }
+        }
+    } catch (Exception exx) {
+        isSuccess = false;
+        errorInfo = exx.getMessage();
+        //日志代码省略
+    }
+    //新建响应消息
+    RegisterRMResponse response = new RegisterRMResponse(isSuccess);
+    if (StringUtils.isNotEmpty(errorInfo)) {
+        response.setMsg(errorInfo);
+    }
+    //写回响应消息
+    remotingServer.sendAsyncResponse(rpcMessage, ctx.channel(), response);
+    if (isSuccess && LOGGER.isInfoEnabled()) {
+        //日志代码省略
+    }
+}
+```
+
+然后我们主要跟进registerRMChannel方法：
+
+```java
+public static void registerRMChannel(RegisterRMRequest resourceManagerRequest, Channel channel)
+    throws IncompatibleVersionException {
+    //校验版本
+    Version.checkVersion(resourceManagerRequest.getVersion());
+    Set<String> dbkeySet = dbKeytoSet(resourceManagerRequest.getResourceIds());
+    RpcContext rpcContext;
+    if (!IDENTIFIED_CHANNELS.containsKey(channel)) {
+        //新建RpcContext对象
+        rpcContext = buildChannelHolder(NettyPoolKey.TransactionRole.RMROLE, resourceManagerRequest.getVersion(),
+            resourceManagerRequest.getApplicationId(), resourceManagerRequest.getTransactionServiceGroup(),
+            resourceManagerRequest.getResourceIds(), channel);
+        //此方法将rpcContext和IDENTIFIED_CHANNELS绑定，并将当前channel和rpcContext绑定
+        //IDENTIFIED_CHANNELS是一个Map，维护着channel与RpcContext之间的关系，所以通过RpcContext对象可以查看到所有的连接以及对应的RpcContext。
+        rpcContext.holdInIdentifiedChannels(IDENTIFIED_CHANNELS);
+    } else {
+        rpcContext = IDENTIFIED_CHANNELS.get(channel);
+        rpcContext.addResources(dbkeySet);
+    }
+    if (dbkeySet == null || dbkeySet.isEmpty()) { return; }
+    //遍历注册数据库资源
+    for (String resourceId : dbkeySet) {
+        String clientIp;
+        ConcurrentMap<Integer, RpcContext> portMap = CollectionUtils.computeIfAbsent(RM_CHANNELS, resourceId, key -> new ConcurrentHashMap<>())
+                .computeIfAbsent(resourceManagerRequest.getApplicationId(), key -> new ConcurrentHashMap<>())
+                .computeIfAbsent(clientIp = ChannelUtil.getClientIpFromChannel(channel), key -> new ConcurrentHashMap<>());
+		//此方法将端口和RpcContext的关系保存进portMap中。
+        rpcContext.holdInResourceManagerChannels(resourceId, portMap);
+        //更新RM的资源信息
+        updateChannelsResource(resourceId, clientIp, resourceManagerRequest.getApplicationId());
+    }
+}
+//更新资源的原因是如果与RM的连接断开了，可以使用其他通道与RM进行通讯，因为RM与分支事务有关，比如通知分支事务回滚，而此时与RM的连接断开了，那么seata会选择同一个IP上同一个应用的不同端口的连接进行通知，以此来保证事务的一致性
+private static void updateChannelsResource(String resourceId, String clientIp, String applicationId) {
+    ConcurrentMap<Integer, RpcContext> sourcePortMap = RM_CHANNELS.get(resourceId).get(applicationId).get(clientIp);
+    for (ConcurrentMap.Entry<String, ConcurrentMap<String, ConcurrentMap<String, ConcurrentMap<Integer,RpcContext>>>> rmChannelEntry : RM_CHANNELS.entrySet()) {
+        //判断如果资源已经注册过则跳过
+        if (rmChannelEntry.getKey().equals(resourceId)) { continue; }
+        ConcurrentMap<String, ConcurrentMap<String, ConcurrentMap<Integer,
+        RpcContext>>> applicationIdMap = rmChannelEntry.getValue();
+        //如果应用不同则跳过
+        if (!applicationIdMap.containsKey(applicationId)) { continue; }
+        ConcurrentMap<String, ConcurrentMap<Integer,
+        RpcContext>> clientIpMap = applicationIdMap.get(applicationId);
+        //如果ip不同则跳过
+        if (!clientIpMap.containsKey(clientIp)) { continue; }
+        ConcurrentMap<Integer, RpcContext> portMap = clientIpMap.get(clientIp);
+        //遍历资源信息
+        for (ConcurrentMap.Entry<Integer, RpcContext> portMapEntry : portMap.entrySet()) {
+            Integer port = portMapEntry.getKey();
+            //如果新资源不包含旧资源的端口
+            if (!sourcePortMap.containsKey(port)) {
+                //将旧资源的端口和RpcContext保存进sourcePortMap（sourcePortMap就是新资源）
+                RpcContext rpcContext = portMapEntry.getValue();
+                sourcePortMap.put(port, rpcContext);
+                //将新资源保存到旧资源的RpcContext上
+                rpcContext.holdInResourceManagerChannels(resourceId, port);
+            }
+        }
+    }
+}
+```
+
+以上就是TC处理RM注册的流程，而TM的大体流程与RM类似，这里就不再赘述，感兴趣请自行跟踪源码。
+
+### 5.2.3 AT模式TM/RM注册TC的整体流程
+
+
 
 ## 5.3 TM开启全局事务
 
