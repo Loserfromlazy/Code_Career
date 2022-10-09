@@ -1017,7 +1017,7 @@ public void init() {
 
 综上，是AT模式TM/RM注册的整体流程源码分析。
 
-### 5.2.2 TC注册流程分析
+### 5.2.2 注册TC流程分析
 
 在seata服务端，我们是通过ServerApplication启动的（在以前的版本是通过Server.main方法启动的），此方法就是启动了springboot项目，因此实际的入口在ServerRunner类中，此方法继承了CommandLineRunner接口，因此我们主要关注其run方法：
 
@@ -1301,9 +1301,92 @@ private static void updateChannelsResource(String resourceId, String clientIp, S
 
 ### 5.2.3 AT模式TM/RM注册TC的整体流程
 
-
+![Seata TM_RM注册TC](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/Seata%20TM_RM%E6%B3%A8%E5%86%8CTC.png)
 
 ## 5.3 TM开启全局事务
+
+我们依旧从自动装配入手，然后我们来到GlobalTransactionScanner类：
+
+```java
+public class GlobalTransactionScanner extends AbstractAutoProxyCreator
+        implements ConfigurationChangeListener, InitializingBean, ApplicationContextAware, DisposableBean
+```
+
+我们看这里它继承了AbstractAutoProxyCreator，这是Spring的自动创建动态代理的类，它继承了BeanPostProcessor，当Bean初始化后会调用postProcessAfterInitialization方法进行自动代理相关的操作，而其中就有AbstractAutoProxyCreator的postProcessAfterInitialization方法，此方法最终会进入到wrapIfNecessary判断是否需要代理，如果需要则创建并返回代理类（更具体的原理可以看我的Spring的博客：[Spring学习和源码解析](https://www.cnblogs.com/yhr520/p/12554829.html)）。
+
+而GlobalTransactionScanner主要通过复写wrapIfNecessary方法，来创建并返回代理对象（如果需要进行代理的话）。此方法源码如下：
+
+```java
+@Override
+protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) {
+    // do checkers做检查，比如此类是否已经生成了代理
+    if (!doCheckers(bean, beanName)) {
+        return bean;
+    }
+
+    try {
+        //对已经被代理过的集合加锁
+        synchronized (PROXYED_SET) {
+            //如果已经被自动代理过则直接返回
+            if (PROXYED_SET.contains(beanName)) {
+                return bean;
+            }
+            interceptor = null;
+            //check TCC proxy 检查是否是TCC模式
+            if (TCCBeanParserUtils.isTccAutoProxy(bean, beanName, applicationContext)) {
+                // init tcc fence clean task if enable useTccFence
+                TCCBeanParserUtils.initTccFenceCleanTask(TCCBeanParserUtils.getRemotingDesc(beanName), applicationContext);
+                //TCC interceptor, proxy bean of sofa:reference/dubbo:reference, and LocalTCC
+                interceptor = new TccActionInterceptor(TCCBeanParserUtils.getRemotingDesc(beanName));
+                ConfigurationCache.addConfigListener(ConfigurationKeys.DISABLE_GLOBAL_TRANSACTION,
+                        (ConfigurationChangeListener)interceptor);
+            } else {
+                //获取当前类的接口
+                Class<?> serviceInterface = SpringProxyUtils.findTargetClass(bean);
+                Class<?>[] interfacesIfJdk = SpringProxyUtils.findInterfaces(bean);
+				//通过检查类或方法上是否有GlobalTransactional注解判断是否需要动态代理
+                if (!existsAnnotation(new Class[]{serviceInterface})
+                    && !existsAnnotation(interfacesIfJdk)) {
+                    return bean;
+                }
+				
+                if (globalTransactionalInterceptor == null) {
+                    //创建全局事务方法拦截器
+                    globalTransactionalInterceptor = new GlobalTransactionalInterceptor(failureHandlerHook);
+                    ConfigurationCache.addConfigListener(
+                            ConfigurationKeys.DISABLE_GLOBAL_TRANSACTION,
+                            (ConfigurationChangeListener)globalTransactionalInterceptor);
+                }
+                interceptor = globalTransactionalInterceptor;
+            }
+
+            LOGGER.info("Bean[{}] with name [{}] would use interceptor [{}]", bean.getClass().getName(), beanName, interceptor.getClass().getName());
+            //如果当前Bean没有被AOP代理
+            if (!AopUtils.isAopProxy(bean)) {
+                //则通过Spring AOP生成代理对象
+                bean = super.wrapIfNecessary(bean, beanName, cacheKey);
+            } else {
+                AdvisedSupport advised = SpringProxyUtils.getAdvisedSupport(bean);
+                Advisor[] advisor = buildAdvisors(beanName, getAdvicesAndAdvisorsForBean(null, null, null));
+                int pos;
+                for (Advisor avr : advisor) {
+                    // Find the position based on the advisor's order, and add to advisors by pos
+                    //找到seata切面的位置
+                    pos = findAddSeataAdvisorPosition(advised, avr);
+                    advised.addAdvisor(pos, avr);
+                }
+            }
+            //存入已经被代理的类的集合中
+            PROXYED_SET.add(beanName);
+            return bean;
+        }
+    } catch (Exception exx) {
+        throw new RuntimeException(exx);
+    }
+}
+```
+
+
 
 ## 5.4 RM分支事务注册
 
