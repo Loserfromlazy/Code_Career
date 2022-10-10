@@ -1305,6 +1305,8 @@ private static void updateChannelsResource(String resourceId, String clientIp, S
 
 ## 5.3 TM开启全局事务
 
+### 5.3.1 客户端（TM端）流程
+
 我们依旧从自动装配入手，然后我们来到GlobalTransactionScanner类：
 
 ```java
@@ -1312,7 +1314,7 @@ public class GlobalTransactionScanner extends AbstractAutoProxyCreator
         implements ConfigurationChangeListener, InitializingBean, ApplicationContextAware, DisposableBean
 ```
 
-我们看这里它继承了AbstractAutoProxyCreator，这是Spring的自动创建动态代理的类，它继承了BeanPostProcessor，当Bean初始化后会调用postProcessAfterInitialization方法进行自动代理相关的操作，而其中就有AbstractAutoProxyCreator的postProcessAfterInitialization方法，此方法最终会进入到wrapIfNecessary判断是否需要代理，如果需要则创建并返回代理类（更具体的原理可以看我的Spring的博客：[Spring学习和源码解析](https://www.cnblogs.com/yhr520/p/12554829.html)）。
+我们看这里它继承了AbstractAutoProxyCreator，这是Spring的自动创建动态代理的类，它继承了BeanPostProcessor，当Bean初始化后会调用postProcessAfterInitialization方法进行自动代理相关的操作，而其中就有AbstractAutoProxyCreator的postProcessAfterInitialization方法，此方法最终会进入到wrapIfNecessary判断是否需要代理，（其`getAdvicesAndAdvisorsForBean()`方法用于给子类实现，由子类决定一个Bean是否需要被代理（是否存在切面））如果需要则创建并返回代理类（更具体的原理可以看我的Spring的博客：[Spring学习和源码解析](https://www.cnblogs.com/yhr520/p/12554829.html)）。
 
 而GlobalTransactionScanner主要通过复写wrapIfNecessary方法，来创建并返回代理对象（如果需要进行代理的话）。此方法源码如下：
 
@@ -1386,8 +1388,354 @@ protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) 
 }
 ```
 
+上述方法关键流程如下：
 
+1. 首先对当前bean做检查，判断当前bean是否允许被代理等相关检查。
+
+2. 对PROXYED_SET（存放已经被代理过的对象）集合加锁，判断当前bean是否在其中，如果当前bean已经被代理过，那么就直接返回。
+
+3. 判断是否是TCC模式，主要根据@TwoPhaseBusinessAction等注解判断，部分关键代码如下完整代码可自行查看：
+
+   ![image-20221010084217433](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010084217433.png)
+
+4. 如果不是TCC模式那么就获取当前bean的接口等信息，根据是否有GlobalTransactional注解判断是否需要动态代理，部分关键代码如下：
+
+   ![image-20221010084312239](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010084312239.png)
+
+   > 这里有个问题如果一个类上只有一个方法有GlobalTransactional注解，那么其他方法怎么办？在方法拦截器中的invoke方法中会再次判断是否有该注解，如果没有则直接执行原方法。原理见下面GlobalTransactionalInterceptor的讲解。
+
+5. 如果需要自动代理就**创建全局事务方法拦截器**
+
+6. 如果当前Bean没有被AOP代理，直接通过Spring AOP生成代理对象，原理是jdk代理或cglib代理。
+
+   `bean = super.wrapIfNecessary(bean, beanName, cacheKey);`
+
+   那么父类是如何判断是否需要代理呢？原理就是GlobalTransactionScanner实现了AbstractAutoProxyCreator的getAdvicesAndAdvisorsForBean方法，此方法是GlobalTransactionScanner提供给子类的，由子类决定一个Bean是否需要被代理。
+
+   在GlobalTransactionScanner中直接将创建的全局事务方法拦截器进行返回，表示需要进行代理：
+
+   ```java
+   @Override
+   protected Object[] getAdvicesAndAdvisorsForBean(Class beanClass, String beanName, TargetSource customTargetSource)
+           throws BeansException {
+       return new Object[]{interceptor};
+   }
+   ```
+
+7. 存入已经被代理的类的集合中
+    `PROXYED_SET.add(beanName);`
+
+然后我们看一下全局事务方法拦截器：
+
+```java
+public class GlobalTransactionalInterceptor implements ConfigurationChangeListener, MethodInterceptor, SeataInterceptor
+```
+
+此类继承了MethodInterceptor，因此每次执行添加了 `GlobalTransactionalInterceptor`拦截器的Bean的方法时，都会进入到`GlobalTransactionalInterceptor`类覆写`MethodInterceptor`接口的`invoke()`方法，源码如下：
+
+```java
+@Override
+public Object invoke(final MethodInvocation methodInvocation) throws Throwable {
+    Class<?> targetClass =
+        methodInvocation.getThis() != null ? AopUtils.getTargetClass(methodInvocation.getThis()) : null;
+    Method specificMethod = ClassUtils.getMostSpecificMethod(methodInvocation.getMethod(), targetClass);
+    if (specificMethod != null && !specificMethod.getDeclaringClass().equals(Object.class)) {
+        final Method method = BridgeMethodResolver.findBridgedMethod(specificMethod);
+        //获取GlobalTransactional注解
+        final GlobalTransactional globalTransactionalAnnotation =
+            getAnnotation(method, targetClass, GlobalTransactional.class);
+        final GlobalLock globalLockAnnotation = getAnnotation(method, targetClass, GlobalLock.class);
+        boolean localDisable = disable || (degradeCheck && degradeNum >= degradeCheckAllowTimes);
+        if (!localDisable) {
+            //再次进行判断，判断方法是否有GlobalTransactional注解
+            if (globalTransactionalAnnotation != null || this.aspectTransactional != null) {
+                AspectTransactional transactional;
+                if (globalTransactionalAnnotation != null) {
+                    transactional = new AspectTransactional(globalTransactionalAnnotation.timeoutMills(),
+                        globalTransactionalAnnotation.name(), globalTransactionalAnnotation.rollbackFor(),
+                        globalTransactionalAnnotation.rollbackForClassName(),
+                        globalTransactionalAnnotation.noRollbackFor(),
+                        globalTransactionalAnnotation.noRollbackForClassName(),
+                        globalTransactionalAnnotation.propagation(),
+                        globalTransactionalAnnotation.lockRetryInterval(),
+                        globalTransactionalAnnotation.lockRetryTimes());
+                } else {
+                    transactional = this.aspectTransactional;
+                }
+                //全局事务处理
+                return handleGlobalTransaction(methodInvocation, transactional);
+            } else if (globalLockAnnotation != null) {//判断方法是否有GlobalLock注解
+                return handleGlobalLock(methodInvocation, globalLockAnnotation);
+            }
+        }
+    }
+    //如果没有注解，则直接执行原方法
+    return methodInvocation.proceed();
+}
+```
+
+这里会再次进行判断判断方法是否有GlobalTransactional注解，如果没有就直接执行原方法。处理全局事务的具体逻辑在handleGlobalTransaction中，我们跟进handleGlobalTransaction中：
+
+![image-20221010094215242](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010094215242.png)
+
+此方法会调用事务模板类的execute方法，并传入一个TransactionalExecutor对象：我们进入execute方法，此方法主要逻辑如下，其中business就是我们上面传进来的TransactionalExecutor：
+
+![image-20221010094952948](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010094952948.png)
+
+我们这里主要跟进beginTransaction方法，流程如下：
+
+```java
+//TransactionalTemplate#beginTransaction
+private void beginTransaction(TransactionInfo txInfo, GlobalTransaction tx) throws TransactionalExecutor.ExecutionException {
+    try {
+        triggerBeforeBegin();
+        //开启事务
+        tx.begin(txInfo.getTimeOut(), txInfo.getName());
+        triggerAfterBegin();
+    } catch (TransactionException txe) {
+        throw new TransactionalExecutor.ExecutionException(tx, txe,
+            TransactionalExecutor.Code.BeginFailure);
+    }
+}
+//------>
+//DefaultGlobalTransaction#begin(int, java.lang.String)
+@Override
+public void begin(int timeout, String name) throws TransactionException {
+    if (role != GlobalTransactionRole.Launcher) {
+        assertXIDNotNull();
+        //日志代码略
+        return;
+    }
+    assertXIDNull();
+    String currentXid = RootContext.getXID();
+    if (currentXid != null) {
+        //抛出异常，代码略
+    }
+    //开启事务
+    xid = transactionManager.begin(null, null, name, timeout);
+    status = GlobalStatus.Begin;
+    RootContext.bind(xid);
+    //日志代码略
+}
+//------>
+//DefaultTransactionManager#begin
+@Override
+public String begin(String applicationId, String transactionServiceGroup, String name, int timeout)
+    throws TransactionException {
+    GlobalBeginRequest request = new GlobalBeginRequest();
+    request.setTransactionName(name);
+    request.setTimeout(timeout);
+    //向Netty服务端发送信息
+    GlobalBeginResponse response = (GlobalBeginResponse) syncCall(request);
+    if (response.getResultCode() == ResultCode.Failed) {
+        throw new TmTransactionException(TransactionExceptionCode.BeginFailed, response.getMsg());
+    }
+    return response.getXid();
+}
+```
+
+我们可以看到，这里开启事务最终会向TC端发送开启事务的请求，即将消息通过Netty通道写入对端，发送的消息如下（也可以自行debug查看）：
+
+![image-20221010101054919](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010101054919.png)
+
+### 5.3.2 服务端（TC端）流程
+
+我们来到TC端，TC端的启动我们在5.2.2中已经了解了，因此我们直接去找该处理器：
+
+![image-20221010104452427](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010104452427.png)
+
+我们来到
+
+```java
+//ServerOnRequestProcessor#process
+@Override
+public void process(ChannelHandlerContext ctx, RpcMessage rpcMessage) throws Exception {
+    if (ChannelManager.isRegistered(ctx.channel())) {
+        //跟进此方法
+        onRequestMessage(ctx, rpcMessage);
+    } else {
+        //省略部分代码
+    }
+}
+```
+
+我们来到此方法ServerOnRequestProcessor#onRequestMessage，其主要逻辑如下：
+
+![image-20221010104805743](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010104805743.png)
+
+因此我们跟进onRequest方法，流程如下：
+
+```java
+//DefaultCoordinator#onRequest
+@Override
+public AbstractResultMessage onRequest(AbstractMessage request, RpcContext context) {
+    if (!(request instanceof AbstractTransactionRequestToTC)) {
+        throw new IllegalArgumentException();
+    }
+    AbstractTransactionRequestToTC transactionRequest = (AbstractTransactionRequestToTC) request;
+    transactionRequest.setTCInboundHandler(this);
+	//处理请求
+    return transactionRequest.handle(context);
+}
+//---------->
+//GlobalBeginRequest#handle
+@Override
+public AbstractTransactionResponse handle(RpcContext rpcContext) {
+    return handler.handle(this, rpcContext);
+}
+//---------->
+//AbstractTCInboundHandler#handle(...)
+@Override
+public GlobalBeginResponse handle(GlobalBeginRequest request, final RpcContext rpcContext) {
+    GlobalBeginResponse response = new GlobalBeginResponse();
+    //此方法内部会调用我们传入的callback的execute方法，因此最终会调用下面的doGlobalBegin方法
+    exceptionHandleTemplate(new AbstractCallback<GlobalBeginRequest, GlobalBeginResponse>() {
+        @Override
+        public void execute(GlobalBeginRequest request, GlobalBeginResponse response) throws TransactionException {
+            try {
+                doGlobalBegin(request, response, rpcContext);
+            } catch (StoreException e) {
+                throw new TransactionException(TransactionExceptionCode.FailedStore,
+                                               String.format("begin global request failed. xid=%s, msg=%s", response.getXid(), e.getMessage()),
+                                               e);
+            }
+        }
+    }, request, response);
+    return response;
+}
+```
+
+我们来到doGlobalBegin方法
+
+```java
+@Override
+protected void doGlobalBegin(GlobalBeginRequest request, GlobalBeginResponse response, RpcContext rpcContext)
+        throws TransactionException {
+        //设置相应的Xid
+    response.setXid(core.begin(rpcContext.getApplicationId(), rpcContext.getTransactionServiceGroup(),
+            request.getTransactionName(), request.getTimeout()));
+    if (LOGGER.isInfoEnabled()) {
+        LOGGER.info("Begin new global transaction applicationId: {},transactionServiceGroup: {}, transactionName: {},timeout:{},xid:{}",
+                rpcContext.getApplicationId(), rpcContext.getTransactionServiceGroup(), request.getTransactionName(), request.getTimeout(), response.getXid());
+    }
+}
+```
+
+此方法具体的逻辑在core.begin中，这里会处理事务相关操作并返回xid。我们跟进此方法：
+
+```java
+//io.seata.server.coordinator.DefaultCore#begin
+@Override
+public String begin(String applicationId, String transactionServiceGroup, String name, int timeout)
+    throws TransactionException {
+    //创建会话，其中xid创建规则是ip+端口+事务id。事务id在此seata版本中是UUID生成的。可以自行跟进此方法查看
+    GlobalSession session = GlobalSession.createGlobalSession(applicationId, transactionServiceGroup, name,
+        timeout);
+    MDC.put(RootContext.MDC_KEY_XID, session.getXid());
+    session.addSessionLifecycleListener(SessionHolder.getRootSessionManager());
+    //开启会话,我们跟进此方法
+    session.begin();
+    MetricsPublisher.postSessionDoingEvent(session, false);
+    return session.getXid();
+}
+//------>
+//io.seata.server.session.GlobalSession#begin
+@Override
+public void begin() throws TransactionException {
+    this.status = GlobalStatus.Begin;
+    this.beginTime = System.currentTimeMillis();
+    this.active = true;
+    //这里有一个DataBaseSessionManager一个监听器
+    for (SessionLifecycleListener lifecycleListener : lifecycleListeners) {
+        //我们跟进此方法
+        lifecycleListener.onBegin(this);
+    }
+}
+//------>
+//io.seata.server.session.AbstractSessionManager#onBegin
+@Override
+public void onBegin(GlobalSession globalSession) throws TransactionException {
+    addGlobalSession(globalSession);
+}
+//io.seata.server.storage.db.session.DataBaseSessionManager#addGlobalSession
+@Override
+public void addGlobalSession(GlobalSession session) throws TransactionException {
+    if (StringUtils.isBlank(taskName)) {
+        boolean ret = transactionStoreManager.writeSession(LogOperation.GLOBAL_ADD, session);
+        if (!ret) {
+            throw new StoreException("addGlobalSession failed.");
+        }
+    } else {
+        boolean ret = transactionStoreManager.writeSession(LogOperation.GLOBAL_UPDATE, session);
+        if (!ret) {
+            throw new StoreException("addGlobalSession failed.");
+        }
+    }
+}
+```
+
+到这里为止会进入到writeSession方法，而此方法会根据我们传入的操作执行，我们现在是TM开启事务，操作为LogOperation.GLOBAL_ADD，因此会进入到`logStore.insertGlobalTransactionDO`方法，源码如下：
+
+```java
+@Override
+public boolean writeSession(LogOperation logOperation, SessionStorable session) {
+    if (LogOperation.GLOBAL_ADD.equals(logOperation)) {
+        return logStore.insertGlobalTransactionDO(SessionConverter.convertGlobalTransactionDO(session));
+    } else if (LogOperation.GLOBAL_UPDATE.equals(logOperation)) {
+        return logStore.updateGlobalTransactionDO(SessionConverter.convertGlobalTransactionDO(session));
+    } else if (LogOperation.GLOBAL_REMOVE.equals(logOperation)) {
+        return logStore.deleteGlobalTransactionDO(SessionConverter.convertGlobalTransactionDO(session));
+    } else if (LogOperation.BRANCH_ADD.equals(logOperation)) {
+        return logStore.insertBranchTransactionDO(SessionConverter.convertBranchTransactionDO(session));
+    } else if (LogOperation.BRANCH_UPDATE.equals(logOperation)) {
+        return logStore.updateBranchTransactionDO(SessionConverter.convertBranchTransactionDO(session));
+    } else if (LogOperation.BRANCH_REMOVE.equals(logOperation)) {
+        return logStore.deleteBranchTransactionDO(SessionConverter.convertBranchTransactionDO(session));
+    } else {
+        throw new StoreException("Unknown LogOperation:" + logOperation.name());
+    }
+}
+```
+
+我们进入到insertGlobalTransactionDO，这里会通过JDBC将我们的事务相关信息存入数据库，如下：
+
+```java
+@Override
+public boolean insertGlobalTransactionDO(GlobalTransactionDO globalTransactionDO) {
+    String sql = LogStoreSqlsFactory.getLogStoreSqls(dbType).getInsertGlobalTransactionSQL(globalTable);
+    Connection conn = null;
+    PreparedStatement ps = null;
+    try {
+        int index = 1;
+        conn = logStoreDataSource.getConnection();
+        conn.setAutoCommit(true);
+        ps = conn.prepareStatement(sql);
+        ps.setString(index++, globalTransactionDO.getXid());
+        ps.setLong(index++, globalTransactionDO.getTransactionId());
+        ps.setInt(index++, globalTransactionDO.getStatus());
+        ps.setString(index++, globalTransactionDO.getApplicationId());
+        ps.setString(index++, globalTransactionDO.getTransactionServiceGroup());
+        String transactionName = globalTransactionDO.getTransactionName();
+        transactionName = transactionName.length() > transactionNameColumnSize ?
+            transactionName.substring(0, transactionNameColumnSize) :
+            transactionName;
+        ps.setString(index++, transactionName);
+        ps.setInt(index++, globalTransactionDO.getTimeout());
+        ps.setLong(index++, globalTransactionDO.getBeginTime());
+        ps.setString(index++, globalTransactionDO.getApplicationData());
+        return ps.executeUpdate() > 0;
+    } catch (SQLException e) {
+        throw new StoreException(e);
+    } finally {
+        IOUtil.close(ps, conn);
+    }
+}
+```
+
+到此我们的TM开启全局事务的整理流程结束了。
 
 ## 5.4 RM分支事务注册
+
+
 
 ## 5.5 TM/RM处理事务提交和回滚
