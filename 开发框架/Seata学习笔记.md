@@ -741,7 +741,7 @@ seata:
 - seata-tcc：对TCC事务模式的实现
 - seata-spring：Spring对Seata集成的实现，比如@GlobalTransaction注解等
 
-## 5.2 AT模式TM/RM注册TC
+## 5.2 TM/RM注册TC
 
 ### 5.2.1 TM/RM注册流程
 
@@ -1735,6 +1735,282 @@ public boolean insertGlobalTransactionDO(GlobalTransactionDO globalTransactionDO
 到此我们的TM开启全局事务的整理流程结束了。
 
 ## 5.4 RM分支事务注册
+
+### 5.4.1 数据源自动代理
+
+我们配置seata客户端时需要配置代理数据源，RM主要通过代理数据源来完成一系列操作。微服务环境下一般我们直接使用`enable-auto-data-source-proxy: true`自动数据源配置即可。因此我们从seata数据源自动配置入手，来进行学习。
+
+首先我们还是从springboot自动装配入手，在spring.factory中有一个SeataDataSourceAutoConfiguration。这个配置里注入了一个SeataAutoDataSourceProxyCreator的Bean，我们跟进去发现此类继承了AbstractAutoProxyCreator类，因此我们主要关注wrapIfNecessary：
+
+```java
+//SeataAutoDataSourceProxyCreator#wrapIfNecessary
+@Override
+protected Object wrapIfNecessary(Object bean, String beanName, Object cacheKey) {
+    // 只对DataSource进行处理
+    if (!(bean instanceof DataSource)) {
+        return bean;
+    }
+
+    // 当这个bean是数据源但不是SeataDataSourceProxy
+    if (!(bean instanceof SeataDataSourceProxy)) {
+        //调用父类先包装一次
+        Object enhancer = super.wrapIfNecessary(bean, beanName, cacheKey);
+        //如果包装前后bean相等，说明这个bean已经被包装过了，或者SeataDataSourceProxy被排除了
+        if (bean == enhancer) {
+            return bean;
+        }
+        //如果是正常的DataSource对象的话，那么就会被构建成SeataDataSourceProxy，并返回，同时存入DataSourceProxyHolder
+        DataSource origin = (DataSource) bean;
+        SeataDataSourceProxy proxy = buildProxy(origin, dataSourceProxyMode);
+        DataSourceProxyHolder.put(origin, proxy);
+        return enhancer;
+    }
+
+    /*
+     * things get dangerous when you try to register SeataDataSourceProxy bean by yourself!
+     * if you insist on doing so, you must make sure your method return type is DataSource,
+     * because this processor will never return any subclass of SeataDataSourceProxy
+     */
+    //Seata是不建议用户自己构建SeataDataSourceProxy对象的，即使用户自己构建了SeataDataSourceProxy对象，Seata也会重新处理
+    LOGGER.warn("Manually register SeataDataSourceProxy(or its subclass) bean is discouraged! bean name: {}", beanName);
+    SeataDataSourceProxy proxy = (SeataDataSourceProxy) bean;
+    DataSource origin = proxy.getTargetDataSource();
+    Object originEnhancer = super.wrapIfNecessary(origin, beanName, cacheKey);
+    // this mean origin is either excluded by user or had been proxy before
+    if (origin == originEnhancer) {
+        return origin;
+    }
+    // else, put <origin, proxy> to holder and return originEnhancer
+    DataSourceProxyHolder.put(origin, proxy);
+    return originEnhancer;
+}
+//SeataAutoDataSourceProxyCreator#buildProxy
+SeataDataSourceProxy buildProxy(DataSource origin, String proxyMode) {
+    if (BranchType.AT.name().equalsIgnoreCase(proxyMode)) {
+        return new DataSourceProxy(origin);
+    }
+    if (BranchType.XA.name().equalsIgnoreCase(proxyMode)) {
+        return new DataSourceProxyXA(origin);
+    }
+    throw new IllegalArgumentException("Unknown dataSourceProxyMode: " + proxyMode);
+}
+```
+
+我们可以看到数据源会被自动代理成DataSourceProxy，因此我们在执行SQL语句时，就会通过Seata代理的数据源执行。
+
+### 5.4.2 客户端（RM端）流程
+
+下面我们来看一下数据源DataSourceProxy，我们在使用JDBC时的流程为获取连接、获取PreparedStatement对象，执行Sql。因此我们首先应该获取数据库连接，所以我们查看此方法：
+
+```java
+//io.seata.rm.datasource.DataSourceProxy#getConnection()
+@Override
+public ConnectionProxy getConnection() throws SQLException {
+    Connection targetConnection = targetDataSource.getConnection();
+    return new ConnectionProxy(this, targetConnection);
+}
+```
+
+这里会获取一个ConnectionProxy对象，我们查看此对象的prepareStatement方法：
+
+```java
+@Override
+public PreparedStatement prepareStatement(String sql) throws SQLException {
+    String dbType = getDbType();
+    // support oracle 10.2+
+    PreparedStatement targetPreparedStatement = null;
+    if (BranchType.AT == RootContext.getBranchType()) {
+        List<SQLRecognizer> sqlRecognizers = SQLVisitorFactory.get(sql, dbType);
+        if (sqlRecognizers != null && sqlRecognizers.size() == 1) {
+            SQLRecognizer sqlRecognizer = sqlRecognizers.get(0);
+            if (sqlRecognizer != null && sqlRecognizer.getSQLType() == SQLType.INSERT) {
+                TableMeta tableMeta = TableMetaCacheFactory.getTableMetaCache(dbType).getTableMeta(getTargetConnection(),
+                        sqlRecognizer.getTableName(), getDataSourceProxy().getResourceId());
+                String[] pkNameArray = new String[tableMeta.getPrimaryKeyOnlyName().size()];
+                tableMeta.getPrimaryKeyOnlyName().toArray(pkNameArray);
+                targetPreparedStatement = getTargetConnection().prepareStatement(sql,pkNameArray);
+            }
+        }
+    }
+    if (targetPreparedStatement == null) {
+        targetPreparedStatement = getTargetConnection().prepareStatement(sql);
+    }
+    return new PreparedStatementProxy(this, targetPreparedStatement, sql);
+}
+```
+
+可以看到这里会返回一个PreparedStatementProxy代理，然后我们进入这个代理，查看其execute方法（用于执行sql语句）：
+
+```java
+@Override
+public boolean execute() throws SQLException {
+    return ExecuteTemplate.execute(this, (statement, args) -> statement.execute());
+}
+```
+
+我们跟进这个方法，主要源码如下：
+
+```java
+//ExecuteTemplate#execute(...)
+public static <T, S extends Statement> T execute(StatementProxy<S> statementProxy,
+                                                 StatementCallback<T, S> statementCallback,
+                                                 Object... args) throws SQLException {
+    return execute(null, statementProxy, statementCallback, args);
+}
+```
+
+我们跟进execute方法，此方法关键代码如下：
+
+![image-20221010152226850](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010152226850.png)
+
+我们继续跟进：
+
+~~~java
+//io.seata.rm.datasource.exec.BaseTransactionalExecutor#execute
+@Override
+public T execute(Object... args) throws Throwable {
+    //获取XID
+    String xid = RootContext.getXID();
+    if (xid != null) {
+        //绑定xid
+        statementProxy.getConnectionProxy().bind(xid);
+    }
+
+    statementProxy.getConnectionProxy().setGlobalLockRequire(RootContext.requireGlobalLock());
+    return doExecute(args);
+}
+//跟进doExecute方法----->
+//io.seata.rm.datasource.exec.AbstractDMLBaseExecutor#doExecute
+@Override
+public T doExecute(Object... args) throws Throwable {
+    AbstractConnectionProxy connectionProxy = statementProxy.getConnectionProxy();
+    if (connectionProxy.getAutoCommit()) {
+        //进入到自动提交方法
+        return executeAutoCommitTrue(args);
+    } else {
+        return executeAutoCommitFalse(args);
+    }
+}
+~~~
+
+然后我们跟进executeAutoCommitTrue方法，源码如下：
+
+```java
+protected T executeAutoCommitTrue(Object[] args) throws Throwable {
+    ConnectionProxy connectionProxy = statementProxy.getConnectionProxy();
+    try {
+        //此方法changeAutoCommit会关闭自动代理
+        connectionProxy.changeAutoCommit();
+        //创建锁重试策略，我们这里重点只关注其execute传入的lambda表达式，最终会执行此lambda表达式的内容，在这里会进行执行sql和提交事务
+        return new LockRetryPolicy(connectionProxy).execute(() -> {
+            //执行sql
+            T result = executeAutoCommitFalse(args);
+            //提交事务
+            connectionProxy.commit();
+            return result;
+        });
+    } catch (Exception e) {
+        //代码略
+    } finally {
+        connectionProxy.getContext().reset();
+        connectionProxy.setAutoCommit(true);
+    }
+}
+```
+
+我们分别来看这两部分：
+
+1. 首先进入到executeAutoCommitFalse方法：
+
+   ```java
+   protected T executeAutoCommitFalse(Object[] args) throws Exception {
+       if (!JdbcConstants.MYSQL.equalsIgnoreCase(getDbType()) && isMultiPk()) {
+           throw new NotSupportYetException("multi pk only support mysql!");
+       }
+       //创建执行sql前的数据
+       TableRecords beforeImage = beforeImage();
+       //执行sql
+       T result = statementCallback.execute(statementProxy.getTargetStatement(), args);
+       int updateCount = statementProxy.getUpdateCount();
+       if (updateCount > 0) {
+           //创建执行sql后的数据
+           TableRecords afterImage = afterImage(beforeImage);
+           //保存undo_log数据，最终会存入connectionProxy中，在下面执行到保存undo_log数据时也会从这里取数据
+           prepareUndoLog(beforeImage, afterImage);
+       }
+       return result;
+   }
+   ```
+
+   > 我们可以debug查看其执行sql前后的数据变化，比如我们这里调用入门案例中的addOrder的feign接口，因为是新增订单，所以新增前beforeImage是0，然后当我们执行完sql后afterImage变成了1。
+   >
+   > ![image-20221010160059266](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010160059266.png)
+
+2. 然后我们跟进commit方法，这里会继续执行doCommit方法：
+
+   ![image-20221010152932487](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010152932487.png)
+
+   doCommit源码如下：
+
+   ~~~java
+   private void doCommit() throws SQLException {
+       //判断是否是全局事务，这里根据xid是否为空进行判断
+       if (context.inGlobalTransaction()) {
+           //处理全局事务提交
+           processGlobalTransactionCommit();
+       } else if (context.isGlobalLockRequire()) {
+           processLocalCommitWithGlobalLocks();
+       } else {
+           //不是全局事务直接提交事务即可
+           targetConnection.commit();
+       }
+   }
+   ~~~
+
+   我们跟进processGlobalTransactionCommit方法：
+
+   ```java
+   private void processGlobalTransactionCommit() throws SQLException {
+       try {
+           //注册RM分支事务到TC
+           register();
+       } catch (TransactionException e) {
+           recognizeLockKeyConflictException(e, context.buildLockKeys());
+       }
+       try {
+           //刷新保存undo_log表，数据是在上面prepareUndoLog方法中保存的
+           UndoLogManagerFactory.getUndoLogManager(this.getDbType()).flushUndoLogs(this);
+           //提交事务
+           targetConnection.commit();
+       } catch (Throwable ex) {
+           LOGGER.error("process connectionProxy commit error: {}", ex.getMessage(), ex);
+           report(false);
+           throw new SQLException(ex);
+       }
+       if (IS_REPORT_SUCCESS_ENABLE) {
+           report(true);
+       }
+       context.reset();
+   }
+   ```
+
+   上面方法register()方法最终会发送一个BranchRegisterRequest请求到Netty服务端,这里略过跟踪流程，最终发送信息方法如下：
+
+   ![image-20221010154801757](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010154801757.png)
+
+   然后会调用flushUndoLogs刷新保存undo_log表，这里略过跟踪流程，最终会调用jdbc将数据插入undo_log表中:
+
+   ![image-20221010155223817](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221010155223817.png)
+
+到这里客户端RM分支事务注册、undo_log数据保存的整体流程基本结束了。这里有一点需要注意，那就是在doCommit方法中会判断当前的sql语句是不是分布式全局事务，而判断的依据就是根据xid是否为空来进行判断的。在5.3中已经介绍了，xid是TM开启全局事务后，TC生成并返回的。那么xid如何在微服务进行传递呢？本质上是Seata代理的Feign的Client实现的。这部分内容我们在5.4.4中进行介绍。
+
+### 5.4.3 服务端（TC端）流程
+
+TC端的启动等我们都已经在5.2.2中了解了，因此我们直接来到`ServerOnRequestProcessor#onRequestMessage`方法
+
+
+
+### 5.4.4 XID的传递
 
 
 
