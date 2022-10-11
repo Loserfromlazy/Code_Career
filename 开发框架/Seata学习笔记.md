@@ -2006,9 +2006,7 @@ protected T executeAutoCommitTrue(Object[] args) throws Throwable {
 
 ### 5.4.3 服务端（TC端）流程
 
-TC端的启动等我们都已经在5.2.2中了解了，因此我们直接来到`ServerOnRequestProcessor#onRequestMessage`方法
-
-
+未完结
 
 ### 5.4.4 XID的传递
 
