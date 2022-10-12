@@ -933,19 +933,99 @@ HTTP1.1并没有使用HTTP1.0的KeepAlive扩展协议，而是自己实现了连
 
 2. 内嵌部署的Tomcat
 
-   针对内嵌式Tomcat，其长连接配置可以通过一个自动配置类完成。在自动配置类中，可以配置一个TomcatServletWebServerFactory容器工厂Bean实例，SpringBoot将通过该工厂实例，在运行时获取内嵌式Tomcat容器实例。
+   针对内嵌式Tomcat，其长连接配置可以通过一个自动配置类完成。在自动配置类中，可以配置一个TomcatServletWebServerFactory容器工厂Bean实例，SpringBoot将通过该工厂实例，在运行时获取内嵌式Tomcat容器实例。内置tomcat配置长连接方式（配置方式来自[官方文档](https://docs.spring.io/spring-boot/docs/current/reference/html/web.html#web.servlet.embedded-container.customizing.programmatic)）：
 
+   ```java
+   @Component
+   public class MyTomcatWebServerFactoryCustomizer implements WebServerFactoryCustomizer<TomcatServletWebServerFactory> {
    
-
-3. 
-
-
+       @Override
+       public void customize(TomcatServletWebServerFactory server) {
+           server.addConnectorCustomizers((connector) -> {
+               Http11NioProtocol protocolHandler = (Http11NioProtocol) connector.getProtocolHandler();
+               //设置keepAliveTimeout，长连接保持时间
+               protocolHandler.setKeepAliveTimeout(60000);
+               //当客户端发送超过1000个会话则强制关闭socket连接
+               protocolHandler.setMaxKeepAliveRequests(1000);
+               //设置最大连接数
+               protocolHandler.setMaxConnections(3000);
+               connector.setAsyncTimeout(Duration.ofSeconds(20).toMillis());
+           });
+       }
+   
+   }
+   ```
 
 ### 2.5.2 Nginx的长连接配置
 
-### 2.5.3 服务吨长连接的注意事项
+反向代理的Nginx存在两种角色，对于下游客户端来说，Nginx是服务端；对于上游的WEB服务来说，Nginx是客户端。Ngixn作为服务端时，其长连接配置如下：
 
-## 2.6 客户端HTTP长连接技术
+~~~nginx
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    
+
+    sendfile        on;
+	#长连接保持时长
+    keepalive_timeout  65s;
+	#长连接最大处理请求数
+	keepalive_requests 1000;
+
+    #gzip  on;
+
+    server {
+        listen       80;
+        server_name  localhost;
+		
+		#长连接保持时长
+		keepalive_timeout  10s;
+		#长连接最大处理请求数
+		keepalive_requests 10;
+		
+		location / {
+			root html;
+		}
+    }
+
+}
+~~~
+
+1. keepalive_requests指令用于设置一个长连接上可服务的最大请求数量，nginx默认100。一个长连接建立之后，Nginx就会为这个连接设置一个计数器，记录这个长连接上已经接收并处理的客户端请求的数量。如果达到这个参数设置的最大值时，则Nginx会强行关闭这个长连接，让客户端重新建立新的长连接。
+2. keepalive_timeout用于设置客户端的长连接在服务器端保持的最长时间，如果设置为0则禁用长连接。
+
+### 2.5.3 服务端长连接的注意事项
+
+1. 当单个客户端请求数较多时
+
+   当客户端不是普通用户而是下游的代理服务器时，客户端数量是很少的，但是单个客户端的请求数是非常多的。
+
+   在此场景下，选项keepalive_timeout可以配置一个较大的值，但是对于Nginx来说，不能对单个连接的处理请求数不做限制，必须定期关闭连接，才能释放每个连接的所分配的内存。由于过大的请求数会导致内存占用过大，因此不建议keepalive_requests设置过大，当然也不能不设置。
+
+2. 当单个客户端请求数较少时
+
+   当客户但是普通用户时，比如浏览器等，其单个客户端请求数是有限的，如果我们配置为以下方式：
+
+   ~~~nginx
+   #长连接保持时长
+   keepalive_timeout  65s;
+   #长连接最大处理请求数
+   keepalive_requests 1000;
+   ~~~
+
+   那么大量的长连接由于达不到1000的请求数量，导致一直在空闲等待，需要等到65s结束后才能被关闭，所以需要减少最大请求处理数和长连接保持时长：
+
+   ~~~nginx
+   #长连接保持时长
+   keepalive_timeout  10s;
+   #长连接最大处理请求数
+   keepalive_requests 100;
+   ~~~
+
+   但是也不能配置的太极端，比如keepalive_requests如果配置成10，就会造成大量连接被关闭。比如假如有100个用户，单客户端每秒100个请求，如果keepalive_requests配置成10，所以每秒100个请求就需要10个连接，如果100个用户就是1000个连接。
+
+## 2.6 客户端HTTP长连接技术todo
 
 ### 2.6.1 HttpURLConnection
 
