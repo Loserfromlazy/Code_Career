@@ -1,4 +1,4 @@
-## Java高并发原理篇HTTP原理
+# Java高并发原理篇HTTP原理
 
 转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。
 
@@ -1025,21 +1025,101 @@ http {
 
    但是也不能配置的太极端，比如keepalive_requests如果配置成10，就会造成大量连接被关闭。比如假如有100个用户，单客户端每秒100个请求，如果keepalive_requests配置成10，所以每秒100个请求就需要10个连接，如果100个用户就是1000个连接。
 
-## 2.6 客户端HTTP长连接技术todo
+## 2.6 客户端HTTP长连接技术
 
 ### 2.6.1 HttpURLConnection
 
-### 2.6.2 Apache HTTPClient
+这是Java内置的HTTP通信技术。Java默认是支持长连接的，当我们完成读取响应体，jdk的http处理程序会尝试清理连接，如果成功就将其放入连接缓存中，以便将来的HTTP请求重用。具体请参见[文档](https://docs.oracle.com/javase/8/docs/technotes/guides/net/http-keepalive.html)。我们简单编写一个案例：
 
-### 2.6.3 Nginx承担客户端角色
+```java
+public static void httpUrlConnectionFun() {
+    HttpURLConnection connection = null;
+    InputStream inputStream = null;
+    try {
+        URL url = new URL("http://IP地址:端口号");
+        connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod("GET");
+        connection.setRequestProperty("Accept","application/json");
+        connection.connect();
+        if (connection.getResponseCode() != 200){
+            throw new RuntimeException("请求失败");
+        }
+        System.out.println(connection.getResponseMessage());
+        inputStream = connection.getInputStream();
+        byte [] bytes = new byte[1024];
+        int length =-1;
+        StringBuilder result = new StringBuilder();
+        while ((length =inputStream.read(bytes))!=-1){
+            result.append(new String(bytes,0,length));
+        }
+        System.out.println(result);
+    }catch (Exception e){
+        e.printStackTrace();
+    }finally {
+        try {
+            inputStream.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        connection.disconnect();
+    }
+}
+```
+
+然后我们将1.4的回显web服务器放到linux服务器上运行，然后我们用这段代码进行测试：
+
+```java
+public static void main(String[] args) throws Exception {
+    int count = 10000;
+    ExecutorService service = Executors.newFixedThreadPool(10);
+    while (--count >0){
+        service.submit(TestHTTP::httpUrlConnectionFun);
+    }
+    Thread.sleep(Integer.MAX_VALUE);
+}
+```
+
+然后我们在linux服务器上通过netstat命令查看当前连接状态。命令如下：
+
+`while [ 1 -eq 1 ]; do netstat -anpt|grep 端口号;sleep 2;echo; done`
+
+> 这里在shell编程中 -eq是等于的意思。上面命令基本是每隔两秒输出我们输入的端口号的网络连接状态。
+
+### 2.6.2 Nginx承担客户端角色
+
+Nginx有自己的类似客户端TCP连接池的连接管理组件，对于池中单个TCP连接可以通过upstream区域的keepalive指令完成，如下：
+
+~~~nginx
+upstream test {
+    server 192.168.0.1:8080;
+    server 192.168.0.2:8080;
+    #连接池里面最大的空闲连接数量
+    keepalive 300; 
+
+}
+server {
+
+    location / {
+        proxy_pass http://test;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header REMOTE-HOST $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_http_version 1.1;              # 设置http版本为1.1
+        proxy_set_header Connection "";      # 设置Connection为长连接（默认为no）
+    }
+}
+~~~
+
+我们在使用时还需要指定http版本为1.1，并且为了保证反向代理到其上游之间的TCP连接能复用请求头Connection为空，需要将下游客户端发送过来的HTTP请求头“Connection:close”重置掉，将其值重置成空白字符串。
 
 # 三、WebSocket原理
 
-### 3.1 WebSocket简介
+## 3.1 WebSocket简介
 
 WebSocket是一种全双工通信的协议，其通信在TCP连接上进行，所以属于应用层协议。WebSocket使得客户端和服务器之间的数据交换变得更加简单，允许服务端主动向客户端推送数据。在WebSocket编程中，浏览器和服务器只需要完成一次升级握手，两者之间就直接可以创建持久性的连接，并进行双向数据传输。
 
-#### Ajax短轮询和LongPoll长轮询原理
+### 3.1.1 Ajax短轮询和LongPoll长轮询原理
 
 在WebSocket技术之前，浏览器和服务器之间的双向通信主要分为Ajax短轮询和LongPoll长轮询。
 
@@ -1049,7 +1129,7 @@ Long Poll长轮询在原理上跟Ajax短轮询差不多，都是采用轮询的�
 
 无论是Ajax短轮询还是Long Poll长轮询，都不是最好的双向通信方式，都需要很多资源。而WebSocket则不同，该协议只需要经过一次HTTP 请求，就可以做到源源不断的信息传送了，当传输协议完成HTTP到WebSocket协议升级后，服务端就可以主动推送信息给客户端，高效率的实现双向通信。
 
-#### WebSocket与HTTP关系
+### 3.1.2 WebSocket与HTTP关系
 
 WebSocket的最大特点就是，是全双工通信，服务器可以主动向客户端推送信息，客户端也可以主动向服务器发送信息。WebSocket与HTTP之间的关系是：WebSocket其实是一个新协议，通信过程与跟HTTP协议基本没有关系，只是为了兼容现有浏览器，所以在握手阶段使用了HTTP协议，如下图：
 
@@ -1057,11 +1137,15 @@ WebSocket的最大特点就是，是全双工通信，服务器可以主动向�
 
 WebSocket与HTTP协议都处于TCP/IP协议栈的应用层，都是TCP/IP协议的子集。HTTP协议是单向通信协议，只有客户端发起HTTP请求，服务端才会返回数据；而WebSocket协议是双向通信协议，在建立连接之后，客户端和服务器都可以主动向对方发送或接受数据。WebSocket的通信连接建立的前提需要借助HTTP协议，完成通信连接建立之后，通信连接上的双向通信就与HTTP协议无关了。
 
-### 3.2 WebSocket示例
+## 3.2 Netty处理WebSocket
+
+WebSocket协议中大致包含了五种类型的数据帧，与之对应Netty中包含了它们的封装类型，这些都是WebSocketFrame的子类，如下：
+
+## 3.3 WebSocket示例
 
 
 
-### 3.3 WebSocket原理
+## 3.4 WebSocket原理
 
 # 四、SSL/TLS核心原理
 
