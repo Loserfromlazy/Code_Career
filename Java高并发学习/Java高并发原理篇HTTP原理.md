@@ -1141,6 +1141,9 @@ WebSocket与HTTP协议都处于TCP/IP协议栈的应用层，都是TCP/IP协议�
 
 WebSocket协议中大致包含了五种类型的数据帧，与之对应Netty中包含了它们的封装类型，这些都是WebSocketFrame的子类，如下：
 
+- BinaryWebSocketFrame
+- 
+
 ## 3.3 WebSocket示例
 
 
