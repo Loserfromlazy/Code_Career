@@ -65,7 +65,7 @@ InnoDB，是MySQL的数据库引擎之一，现为MySQL的默认存储引擎，�
 
 InnoDB 给 MySQL 提供了具有[事务](https://baike.baidu.com/item/事务?fromModule=lemma_inlink)(transaction)、[回滚](https://baike.baidu.com/item/回滚?fromModule=lemma_inlink)(rollback)和崩溃修复能力(crash recovery capabilities)、多版本[并发控制](https://baike.baidu.com/item/并发控制?fromModule=lemma_inlink)(multi-versioned concurrency control)的事务安全(transaction-safe (ACID compliant))型表。InnoDB 提供了行级锁(locking on row level)，提供与 Oracle 类似的不加锁读取(non-locking read in SELECTs)。InnoDB锁定在行级并且也在[SELECT语句](https://baike.baidu.com/item/SELECT语句/15652895?fromModule=lemma_inlink)提供一个Oracle风格一致的非锁定读。这些特色增加了多用户部署和性能。没有在InnoDB中扩大锁定的需要，因为在InnoDB中行级锁定适合非常小的空间。InnoDB也支持FOREIGN KEY强制。在SQL查询中，你可以自由地将InnoDB类型的表与其它MySQL的表的类型[混合](https://baike.baidu.com/item/混合?fromModule=lemma_inlink)起来，甚至在同一个查询中也可以混合。这些特性均提高了多用户并发操作的性能表现。在InnoDB表中不需要扩大锁定(lock escalation)，因为 InnoDB 的行级锁定(row level locks)适宜非常小的空间。InnoDB 是 MySQL 上第一个提供[外键](https://baike.baidu.com/item/外键?fromModule=lemma_inlink)约束(FOREIGN KEY constraints)的表引擎。
 
-### 1.4 InnoDB体系概述
+### 1.4 InnoDB体系
 
 InnoDb存储引擎有多个内存块，这些内存块组成了一个大的内存池，负责以下工作：
 
@@ -119,15 +119,49 @@ InnoDB内存数据对象如下：
 
 2. LRU List、FreeList和Flush List
 
-   一般来说数据库缓冲池是通过LRU（最近最少使用算法）来进行管理的。最频繁使用的页在LRU的前端，最少使用的页在LRU的尾端。当缓冲池不能存放新读取的页时，应先释放LRU尾部的页。在InnoDB中，缓冲池页大小默认为16KB，且InnoDB对传统LRU算法进行了优化，加入了midpoint位置。
+   一般来说数据库缓冲池是通过LRU（最近最少使用算法）来进行管理的。最频繁使用的页在LRU的前端，最少使用的页在LRU的尾端。当缓冲池不能存放新读取的页时，应先释放LRU尾部的页。在InnoDB中，缓冲池页大小默认为16KB，且InnoDB对传统LRU算法进行了优化，加入了midpoint位置。即新读取的页，并不是放入LRU列表的首部，而是在midpoint位置。默认配置下，该位置在LRU列表长度的5/8处，midpoint由参数`innodb_old_blocks_pct`控制，如下：
+
+   ![image-20221014135127892](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221014135127892.png)
+
+   该值默认为37，也就是在LRU列表尾端的37%左右的位置，在InnoDB中，在midpoint之后的列表是old列表，在midpoint之前的列表是new列表，可以简单理解为活跃数据端。
+
+   MySQL这么改进的原因主要是想解决缓存污染的问题。那么什么是缓存污染的问题呢？比如我有一条sql`select * from tb_XXX where name like"%张%"`，这条sql会扫描了大量的数据时，在缓冲池空间比较有限的情况下，可能会将缓冲池里的所有页都替换出去，导致大量热数据被淘汰了，等这些热数据又被再次访问的时候，由于缓存未命中，就会产生大量的磁盘 I/O，MySQL 性能就会急剧下降。而这些不常用的数据又占据着当前的缓冲池，造成缓存污染。
+
+   而MySQL为了解决此问题又引入了另一个参数进一步管理LRU列表`innodb_old_blocks_time`，用于表示页读取到mid位置后需要等待多久才会被加入到LRU列表的热端。如果第二次的访问时间与第一次访问的时间在 1 秒内（默认值），那么该页就不会被从 old 区域升级到 new区域；如果第二次的访问时间与第一次访问的时间超过 1 秒，那么该页就会从 old 区域升级到 young 区域。这是为了防止某些不常用的页（如全表扫描的页）在短时间（如1秒内）内被多次访问，让系统误以为它是热数据从而将其放入了热端区域。
+
+   LRU列表用来管理已经读取的页，但数据库刚启动时，LRU列表是空的，这时页都存放在Free列表中，当需要缓冲池分页时，首先从Free表中查找是否有可用的空闲页，若有则将该页从Free列表中删除，当如LRU列表。否则淘汰LRU末尾的页。当页从old加入到new部分时，称为page made young，反之因为innodb_old_blocks_time导致没有移动到new 被称为page not made young，可以通过`SHOW ENGINE INNODB STATUS来观察`：
+
+   ![image-20221014154035205](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221014154035205.png)
+
+   > 这里还有个变量 Buffer poll hit rate 表示缓冲池命中率，一般该值不低于95%
+
+   在LRU中的页没修改后，该页为脏页，这时数据库就会通过CHECKPOINT机制将数据刷新回磁盘。Flush列表中的页就是脏页，但是脏页即存在LRU列表又存在于Flush列表。
+
+   InnoDB从1.0.x版本开始支持压缩页，即将16K的页压缩为1、2、4、8KB，对于非16K的页，是通过unzip_LRU管理的。
 
 3. 重做日志缓冲
 
+   InnoDB除了有缓冲池外，还有 重做日志缓冲(redo log buffer) 。lnnoDB首先将重做日志信息先放入到这个缓冲区，然后按一定频率将其刷新到重做日志文件。一般默认为8M，可通过`innodb_log_buffer_size控制`：
+
+   ![image-20221014155227355](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221014155227355.png)
+
+   重做日志在下列三种情况下会将重做日志缓冲中的内容刷新到外部磁盘的重做日志文件中
+
+   - Master Thread 每一秒将重做日志缓冲刷新到重做日志文件；
+   - 每个事务提交时 会将重做日志缓冲刷新到重做日志文件；
+   - 当重做日志缓冲池剩余空间小于1/2 时， 重做日志缓冲刷新到重做日志文件。
+
 4. 额外的内存池
+
+   在InnoDB 存储引擎中，对内存的管理是通过一种称为 内存堆（heap）的方式 进行的。在对一些数据结构本身的内存进行分配时， 需要从额外的内存池中进行申请，当该区域的内存不够时，会从缓冲池中进行申请。例如，分配了缓冲池(innodb_buffer _pool), 但是每个缓冲池中的帧缓冲(frame buffer) 还有对应的缓冲控制对象(buffer control block), 这些对象记录了一些诸如LRU 、锁、等待等信息，而这个对象的内存需要从额外内存池中申请。因此，在申请了很大的InnoDB 缓冲池时，也应考虑相应地增加这个值。
 
 ### 1.5 Checkpoint技术
 
+
+
 ### 1.6 Master Thread工作方式
+
+
 
 ### 1.7 InnoDB关键特性
 
