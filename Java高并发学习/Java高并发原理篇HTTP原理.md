@@ -1029,7 +1029,7 @@ http {
 
 ### 2.6.1 HttpURLConnection
 
-这是Java内置的HTTP通信技术。Java默认是支持长连接的，当我们完成读取响应体，jdk的http处理程序会尝试清理连接，如果成功就将其放入连接缓存中，以便将来的HTTP请求重用。具体请参见[文档](https://docs.oracle.com/javase/8/docs/technotes/guides/net/http-keepalive.html)。我们简单编写一个案例：
+这是Java内置的HTTP通信技术。Java默认是支持长连接的，当我们完成读取响应体，jdk的http处理程序会尝试清理连接，如果成功就将其放入连接缓存中，以便将来的HTTP请求重用。具体请参见[官方文档](https://docs.oracle.com/javase/8/docs/technotes/guides/net/http-keepalive.html)。我们简单编写一个案例：
 
 ```java
 public static void httpUrlConnectionFun() {
@@ -1141,8 +1141,21 @@ WebSocket与HTTP协议都处于TCP/IP协议栈的应用层，都是TCP/IP协议�
 
 WebSocket协议中大致包含了五种类型的数据帧，与之对应Netty中包含了它们的封装类型，这些都是WebSocketFrame的子类，如下：
 
-- BinaryWebSocketFrame
-- 
+- BinaryWebSocketFrame：封装二进制数据的WebSocketFrame数据帧
+- TextWebSocketFrame：封装文本数据的WebSocketFrame数据帧
+- CloseWebSocketFrame：表示一个Close结束请求，数据帧中包含结束的状态和原因，此帧是控制帧
+- ContinuationWebSocketFrame：当发送的内容多于一个数据帧时，消息被拆分成多个WebSocketFrame数据帧发送，剩余的内容就由此数据帧发送。ContinuationWebSocketFrame可以发送后续的文本或二进制数据帧
+- PingWebSocketFrame：Ping、Pong是WebSocket通信中的心跳帧，用来保证客户端是在线的，一般来说只有服务端给客户端发送Ping、然后客户端回复Pong，表明自己仍在线。PingWebSocketFrame属于控制帧，其对应协议报文中的操作码opcode值为0x9
+- PongWebSocketFrame：PongWebSocketFrame是对PingWebSocketFrame的响应帧，也是控制帧，对应的协议报文中的操作码opcode值为0xA
+
+在Netty中内置的WebSocket的处理器主要如下：
+
+- WebSocketServerProtocolHandler：负责协议开始升级时的请求处理，也就是开启握手处理。另外，在协议升级握手完成后的WebSocket通信过程中，此处理器还负责对Close、Ping、Pong进行处理。
+- WebSocketServerProtocolHandshakeHandler：此处理器负责进行协议升级握手处理，在握手完成后，此处理器会触发HANDSHAKE_COMPLETE用户事件，表示握手完成。
+- WebSocketFrameEncoder：WebSocketFrame数据帧编码器，负责WebSocket数据帧编码。在握手时，针对不同的WebSocket协议版本，握手处理器会在流水线上装配对应的编码器子表。
+- WebSocketFrameDecoder：WebSocketFrame数据帧解码器，负责WebSocket数据帧解码。在握手时，针对不同的WebSocket协议版本，握手处理器会在流水线上装配对应的解码器子表。
+
+其中WebSocketServerProtocolHandler是非常关键的处理器，负责开始升级握手和控制帧的处理，可以理解为握手处理器。握手完成后，双方的通信协议会从HTTP升级到WebSocket协议，老的HTTP协议处理器会被该握手处理器替换掉，新的与WebSocket相关的解码器会被成功添加到流水线上。
 
 ## 3.3 WebSocket示例
 
