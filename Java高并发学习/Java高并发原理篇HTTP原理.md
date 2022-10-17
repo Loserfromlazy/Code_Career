@@ -1159,6 +1159,47 @@ WebSocket协议中大致包含了五种类型的数据帧，与之对应Netty中
 
 ## 3.3 WebSocket示例
 
+~~~html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <input type="text" id="in"><button onclick="send()">发送</button>
+    <br/>
+    <textarea id = "response"></textarea>
+</body>
+<script>
+webSocket = new WebSocket("ws://127.0.0.1:9092/ws","echo");
+webSocket.onmessage = function(event){
+    var result = document.getElementById("response");
+    result.value = result.value +'\n' +event.data;
+}
+webSocket.onopen = function(event){
+    var result = document.getElementById("response");
+    result.value = "连接已经开启";
+}
+webSocket.omclose = function(event){
+    var result = document.getElementById("response");
+    result.value = "连接已经断开";
+}
+function send(){
+    var message = document.getElementById("in");
+    if(webSocket.readyState == WebSocket.OPEN){
+        console.log(message.value)
+        webSocket.send(message.value)
+    }else{
+        alert("连接未打开")
+    }
+}
+</script>
+</html>
+~~~
+
 
 
 ## 3.4 WebSocket原理
