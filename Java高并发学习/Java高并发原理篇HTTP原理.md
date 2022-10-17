@@ -1200,9 +1200,107 @@ function send(){
 </html>
 ~~~
 
+```java
+@Component
+@Slf4j
+public class ServerStart implements CommandLineRunner {
 
+    private static int PORT;
+
+    @Value("${websocket.port}")
+    public void setPort(int port) {
+        PORT = port;
+    }
+
+    static class MyInitializer extends ChannelInitializer<NioSocketChannel> {
+
+        @Override
+        protected void initChannel(NioSocketChannel channel) throws Exception {
+            channel.pipeline().addLast(new HttpRequestDecoder());
+            channel.pipeline().addLast(new HttpResponseEncoder());
+            channel.pipeline().addLast(new HttpObjectAggregator(65535));
+            //设置websocket服务监听URL为/ws，子协议为echo，最大WebSocket传输帧为1024*10
+            //当服务端收到客户端的URL为/ws，子协议为echo的HTTP连接时，自动升级为WebSocket协议
+            channel.pipeline().addLast(new WebSocketServerProtocolHandler("/ws","echo",true,1024*10));
+            channel.pipeline().addLast(new EchoHandler());
+            channel.pipeline().addLast(new MyWebSocketHandler());
+        }
+    }
+
+    private final ServerBootstrap serverBootStrap = new ServerBootstrap();
+    private final EventLoopGroup bossGroup = new NioEventLoopGroup();
+    private final EventLoopGroup workerGroup = new NioEventLoopGroup();
+
+    @Override
+    public void run(String... args) throws Exception {
+        try {
+            ServerBootstrap bootstrap = serverBootStrap
+                    .group(bossGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new MyInitializer());
+            Channel channel = bootstrap.bind(PORT).sync().channel();
+            log.info("WebSocket回显服务启动，端口号{}",PORT);
+            channel.closeFuture().sync();
+        }finally {
+            bossGroup.shutdownGracefully();
+            workerGroup.shutdownGracefully();
+        }
+    }
+}
+```
+
+```java
+@Slf4j
+public class MyWebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
+    @Override
+    protected void channelRead0(ChannelHandlerContext channelHandlerContext, WebSocketFrame webSocketFrame) throws Exception {
+        //Ping和Pong已经被WebSocketServerProtocolHandler处理过了，我们只需要处理文本和二进制数据帧即可
+        if (webSocketFrame instanceof TextWebSocketFrame){
+            String text = ((TextWebSocketFrame) webSocketFrame).text();
+            log.info("收到数据{}",text);
+            String result = new Date() +"："+ text;
+            TextWebSocketFrame resultFrame = new TextWebSocketFrame(result);
+            channelHandlerContext.channel().writeAndFlush(resultFrame);
+        }else if (webSocketFrame instanceof BinaryWebSocketFrame){
+            log.error("这里暂不处理二进制数据");
+        }
+    }
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        if (evt instanceof WebSocketServerProtocolHandler.HandshakeComplete){
+            ctx.pipeline().remove(EchoHandler.class);
+            log.info("握手成功");
+            log.info("新的WebSocket客户端加入,通道为{}",ctx.channel());
+        }
+        super.userEventTriggered(ctx, evt);
+    }
+}
+```
 
 ## 3.4 WebSocket原理
+
+![image-20221017170439084](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221017170439084.png)
+
+图片来源网络：
+
+![image-20221017171039334](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221017171039334.png)
+
+- FIN，占用1bit，如果其值为1，表示该帧是消息的最后一帧，如果是0，则不是消息的最后一帧。
+- RSV1-3，默认是0 (必须是0)，除非有扩展定义了非零值的意义。
+- Opcode，WebSocket的操作码，占4bit位。其值决定了后续如何解析Data Payload。具体如下：
+                  0x00 denotes a continuation frame
+                  0x01 表示一个text frame
+                  0x02 表示一个binary frame
+                  0x03 ~~ 0x07 are reserved for further non-control frames,为将来的非控制消息片段保留测操作码
+                  0x08 表示连接关闭
+                  0x09 表示 ping (心跳检测相关)
+                  0x0a 表示 pong (心跳检测相关)
+                  0x0b ~~ 0x0f are reserved for further control frames,为将来的控制消息片段保留的操作码
+- Mask，一个bit位（值为1时抓包会显示为true），表示是否要对数据载荷进行掩码操作。客户端向服务端发送数据时，需要对数据进行掩码操作；从服务端向客户端发送数据时，不需要对数据进行掩码操作，如果服务端接收到的数据没有进行掩码操作，服务器需要断开连接。所有的客户端发送到服务端的数据帧，Mask值都是1。
+- Payload len，通信报文中Payload data的长度。
+- Masking-key，掩码键，如果Mask值为1，需要用这个掩码键来对数据进行反掩码，才能获取到真实的通信数据。为了避免被网络代理服务器误认为是HTTP请求，从而招致代理服务器被恶意脚本的攻击，WebSocket客户端必需掩码所有送给服务器的数据帧。
+- Payload data，帧真正要发送的数据，可以是任意长度，但尽管理论上帧的大小没有限制，但发送的数据不能太大，否则会导致无法高效利用网络带宽。
 
 # 四、SSL/TLS核心原理
 
