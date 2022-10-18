@@ -1304,11 +1304,29 @@ public class MyWebSocketHandler extends SimpleChannelInboundHandler<WebSocketFra
 
 # 四、SSL/TLS核心原理
 
-4.1 SSL/TLS简介
+### 4.1 SSL/TLS简介
 
-4.2 加密算法原理
+HTTP协议中，信息是明文传输的，因此就有了HTTPS协议。HTTPS就是在HTTP协议中加入了SSL/TLS协议，SSL/TLS依靠证书来验证服务端身份，并为浏览器和服务端之间的通信加密。使用HTTPS的主要目的是提供对网站的服务端的身份认证，同时保护交换数据的隐私与完整性。
 
-4.3 SSL/TLS运行过程
+那么什么是SSL/TLS协议呢？SSL全拼是“Secure Sockets Layer”，中文可翻译为安全套接层，它是由Netscape公司设计和研发的安全传输技术。它是在传输通信协议（TCP/IP）上实现的一种安全协议，采用公开密钥技术。TLS是SSL的升级版，是更新更安全的SSL协议版本。TLS由两层组成：TLS记录协议和TLS握手协议。1999年，SSL 因为应用广泛，已经成为互联网上的事实标准。IETF就在那年把SSL标准化，完成标准化之后，SSL协议名称被改为TLS（Transport Layer Security)，中文叫做“传输层安全协议”。
+
+SSL/TLS位于应用层和传输层之间，除HTTP外，它可以为任何基于TCP传输层以上的应用层协议提供安全性保障。在理论上SSL/TLS属于传输层，但是在实现上他表现在应用层上。目前使用最广泛的是SSL3.0、TLS1.0(SSL3.1)、TLS1.1(SSL3.2)、TLS1.2(SSL3.3)这四个协议。SSL/TLS的版本如下：
+
+| 版本   | 发布时间 | 说明                                                         |
+| ------ | -------- | ------------------------------------------------------------ |
+| SSL1.0 |          | 存在漏洞，未发布                                             |
+| SSL2.0 | 1995     | 网景公司发布了SSL2.0版本                                     |
+| SSL3.0 | 1996     | 网景公司重新设计了SSL3.0版本。IETF通过互联网标准RFC6101文件发表了SSL3.0版本 |
+| TLS1.0 | 1999     | IETF通过互联网标准RFC2246文件发表了TLS1.0版本，TLS1.0与SSL3.0差异微小 |
+| TLS1.1 | 2006     | IETF通过互联网标准RFC4346文件发表了TLS1.1版本                |
+| TLS1.2 | 2008     | IETF通过互联网标准RFC5246文件发表了TLS1.2版本                |
+| TLS1.3 | 2018     | IETF通过互联网标准RFC8446文件发表了TLS1.3版本                |
+
+### 4.2 加密算法原理
+
+### 4.3 SSL/TLS运行过程
+
+
 
 4.4 Keytool工具
 
