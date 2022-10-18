@@ -1,6 +1,6 @@
 # MySql深入学习
 
-> 参考文档：Mysql技术内幕InnoDB存储引擎第二版及部分互联网资源
+> 参考文档：Mysql技术内幕InnoDB存储引擎第二版、高性能Mysql第三版及部分互联网资源
 
 ## 一、Mysql体系结构和存储引擎
 
@@ -167,5 +167,19 @@ InnoDB内存数据对象如下：
 
 在InnoDB中，通过LSN来标记版本。LSN是8字节。在每个页、重做日志中都有LSN。
 
+可以通过`show engine innodb status\G`命令查看
 
+![image-20221018130741464](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221018130741464.png)
+
+在innodb中，checkpoint发生的时间、条件和脏页的选择都非常复杂，而checkpoint所做的事无外乎是将缓冲池中的脏页刷回磁盘，不同之处在于每次刷多少页，从哪刷，什么时间刷新。在innodb中一般有两种checkpoint，分别是：
+
+- Sharp Checkpoint
+- Fuzzy Checkpoint
+
+发生在数据库关闭时，将所有的脏页刷新回磁盘，这是默认的方式，参数为`innodb_fast_shutdown=1`。但如果运行时使用，则数据库可用性就会受到影响，因此在innodb中使用了fuzzy checkpoint，只刷新一部分脏页。一般可能会发生以下几种情况的Fuzzy Checkpoint：
+
+- Master Thread Checkpoint
+- FLUSH_LRU_LIST Checkpoint
+- Async/Sync Flush Checkpoint
+- 
 
