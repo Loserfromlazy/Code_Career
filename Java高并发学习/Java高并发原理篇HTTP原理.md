@@ -1304,7 +1304,7 @@ public class MyWebSocketHandler extends SimpleChannelInboundHandler<WebSocketFra
 
 # 四、SSL/TLS核心原理
 
-### 4.1 SSL/TLS简介
+## 4.1 SSL/TLS简介
 
 HTTP协议中，信息是明文传输的，因此就有了HTTPS协议。HTTPS就是在HTTP协议中加入了SSL/TLS协议，SSL/TLS依靠证书来验证服务端身份，并为浏览器和服务端之间的通信加密。使用HTTPS的主要目的是提供对网站的服务端的身份认证，同时保护交换数据的隐私与完整性。
 
@@ -1322,18 +1322,78 @@ SSL/TLS位于应用层和传输层之间，除HTTP外，它可以为任何基于
 | TLS1.2 | 2008     | IETF通过互联网标准RFC5246文件发表了TLS1.2版本                |
 | TLS1.3 | 2018     | IETF通过互联网标准RFC8446文件发表了TLS1.3版本                |
 
-### 4.2 加密算法原理
+## 4.2 加密算法原理
 
-### 4.3 SSL/TLS运行过程
+暂略
 
+## 4.3 SSL/TLS运行过程
 
+SSL/TLS基本流程如下：
 
-4.4 Keytool工具
+1. 客户端向服务端索要验证公钥
+2. 双方生成对话密钥
+3. 双方采用对话密钥进行加密通信
 
-4.5 Java程序管理密钥和证书
+前两步一般称为握手阶段，每个TLS连接都会以握手开始。握手阶段涉及到四次通信，且握手阶段通信是明文的，握手过程客户端和服务端的四个流程如下：
 
-4.6 OIO中使用SSL/TLS
+1. 交换各自支持的加密套件和参数，经过协商后，双方就加密套件和参数达成一致
+2. 验证对方（主要是服务端）的证书，或是用其他方式进行服务端身份验证
+3. 对将用于保护会话的共享主密钥达成一致
+4. 验证握手消息是否被第三方修改
 
-4.7 单向和双向认证
+### 4.3.1 第一阶段握手
 
-4.8 Netty中使用SSL/TLS
+TCP三次握手建立传输层连接后，通信双方需要交换各自支持的加密套件和参数，经过协商后，目的是使双方的加密套件和参数保持一致。SSL/TLS握手的第一阶段工作为：客户端发一个Client Hello报文给服务端，并且第一个阶段只有这一个数据帧。Client Hello中主要包含以下信息：
+
+1. 客户端支持的SSL/TLS协议版本
+2. 客户端生成的随机数，这里成为Random_C
+3. 客户端支持的签名算法、加密方法、摘要算法
+4. 客户端支持的压缩方法
+
+通过抓包软件抓取的信息如下：
+
+![image-20221019161101679](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221019161101679.png)
+
+### 4.3.2 第二阶段握手
+
+SSL/TLS握手的第二阶段工作为服务端对客户端的Client Hello请求进行响应，在收到客户端请求后，服务端向客户端发出回应，这个阶段的服务端回应帧一般包含四个回复帧：Server Hello帧、Certificate帧、Server Key Exchange帧和Server Hello Done帧。我们依次来看一下：
+
+1. Server Hello
+
+   Server Hello中主要包含：回复服务端使用的加密通信协议版本，比如TLS1.2；回复一个服务端生成的随机数，这是握手阶段的第二个随机数记为Random_S,后面用于对话密钥的生成；回复确认使用的加密方法；回复服务端的证书。通过抓包软件抓取的信息如下：
+
+   ![image-20221019163335770](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221019163335770.png)
+
+2. Certificate
+
+   Certificate帧用于返回服务端证书，该证书中含有服务端的证书清单（包括服务端公钥），用于身份验证和密钥协商。服务器一般不需要验证客户端的身份，但如果要求较高还是会验证的。只要服务端需要验证客户端的身份，服务端会发一个Certificate Request证书请求给客户端。
+
+3. Server Key Exchange
+
+   Sever Key Exchange帧的目的是携带密钥交换的额外数据，其消息内容对于不同的协商算法套件都会存在差异。在某些场景中，服务端不需要发送Server Key Exchange握手消息。如果在Server Hello消息中使用DHE/ECDHE非对称密钥协商算法来进行SSL握手，将发送该类型握手消息。对于使用RSA算法的SSL握手，不会发送该类型握手消息。
+
+4. Server Hello Done
+
+   Sever Hello Done帧是第二阶段的最后一个帧，标记服务端对客户端的Client Hello请求帧的所有响应报文发送完毕，Sever Hello Done帧的长度为0。
+
+Certificate、Server Key Exchange、Server Hello Done的抓包信息如下：
+
+![image-20221019164146545](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221019164146545.png)
+
+### 4.2.3 第三阶段握手
+
+SSL/TLS握手的第三阶段工作为：客户端进行回应，这个阶段一般包含三个数据帧
+
+### 4.2.4 第四阶段握手
+
+## 4.4 Keytool工具
+
+未完结
+
+## 4.5 Java程序管理密钥和证书
+
+## 4.6 OIO中使用SSL/TLS
+
+## 4.7 单向和双向认证
+
+## 4.8 Netty中使用SSL/TLS
