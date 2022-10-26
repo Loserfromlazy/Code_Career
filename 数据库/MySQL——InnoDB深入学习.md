@@ -376,5 +376,5 @@ InnoDB的Page Header中有以下几个部分来保存插入的顺序信息：
 - Index_type：索引的类型》InnoDB只支持B+树索引
 - Comment注释
 
-其中Cardinality值很重要，优化器会根据这个值判断是否使用索引。
+其中Cardinality值很重要，优化器会根据这个值判断是否使用索引。在生产环境中，数据
 
