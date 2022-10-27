@@ -914,7 +914,7 @@ Java线程的创建非常昂贵，需要JVM和OS（操作系统）配合完成�
 
 2. ExecutorService
 
-   继承于Executor，是Java异步异步执行目标任务的执行者服务接口，对外提供异步任务的接收服务。它提供了接收异步任务转交给执行者的方法，如submit、invokeAll等方法。
+   继承于Executor，是Java异步执行目标任务的执行者服务接口，对外提供异步任务的接收服务。它提供了接收异步任务转交给执行者的方法，如submit、invokeAll等方法。
 
 3. AbstractExecutorService
 
