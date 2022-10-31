@@ -934,5 +934,3 @@ WaitStrategy 决定了消费者以何种方式等待生产者将 Event 放进 Di
 ## 3.2 Sequence
 
 Sequence
-
-![image-20221031161602887](C:\Users\yhr\AppData\Roaming\Typora\typora-user-images\image-20221031161602887.png)
