@@ -6,6 +6,7 @@
 >
 > - https://www.cnblogs.com/crazymakercircle/p/13909235.html
 > - 《Disruptor 红宝书》》尼恩
+> - https://jitwxs.cn/a7ed43af.html
 > - https://lmax-exchange.github.io/disruptor/user-guide/index.html#_getting_started
 > - https://www.jianshu.com/p/d2d50cf6d887
 
@@ -160,16 +161,17 @@ public class LongEventProducerWithTranslator {
     public LongEventProducerWithTranslator(RingBuffer<LongEvent> ringBuffer) {
         this.ringBuffer = ringBuffer;
     }
-	//事件转换器
+
     public static final EventTranslatorOneArg<LongEvent,Long> TRANSLATOR = new EventTranslatorOneArg<LongEvent, Long>() {
         @Override
         public void translateTo(LongEvent longEvent, long sequence, Long data) {
-            longEvent.setValue(data);      
+            longEvent.setValue(data);
         }
     };
 
     public void onData(long data){
         //通过序号将事件对象发布出现
+        System.out.println(Thread.currentThread().getName()+" 生产者生产数据 "+data);
         ringBuffer.publishEvent(TRANSLATOR,data);
     }
 }
@@ -194,7 +196,8 @@ public void testSimpleDisruptorWithLambda() throws InterruptedException {
     int bufferSize = 1024;
     //构造分裂者，及事件分发器
     Disruptor<LongEvent> disruptor = new Disruptor<LongEvent>(LongEvent::new,bufferSize,executor);
-    //连接消费者处理器
+    //连接消费者处理器，
+    //这里也可以将function抽取出来比如抽取成Test类的静态方法，然后使用Test::handler可以更加简便
     disruptor.handleEventsWith((longEvent, sequence, b) -> System.out.println(longEvent.getValue()));
     //事件分发
     disruptor.start();
@@ -262,33 +265,32 @@ public void testSimpleDisruptorWithLambda() throws InterruptedException {
 Disruptor是一个优秀的并发框架，可以使用在生产者消费者的多个场景，主要如下：
 
 - 单生产者多消费者并行
-- 多生产者多消费者
-- 多消费者单生产者
+- 多生产者单消费者
+- 单生产者多消费者竞争
+- 单生产者多消费者串行
 - 菱形方式执行
 - 链式并行执行
 - 多组消费者相互隔离
 - 多组消费者航道执行
+- 六边形场景
 
-### 单生产者多消费者并行
+## 单生产者多消费者并行
 
-并发系统中提升性能最好的方式就是单一写者原则，对Disruptor也适用。如果在需求中只有一个事件生产者，那么可设置为单一生产者模式来提高系统的性能，在Disruptor的构造函数中指定ProducerType即可，例子如下
+并发系统中提升性能最好的方式就是单一写者原则，对Disruptor也适用。
+
+- 如果在需求中只有一个事件生产者，那么可设置为单一生产者模式来提高系统的性能，在Disruptor的构造函数中指定ProducerType为SINGLE即可。
+- 如果在需求中需要多消费者并行，那么需要在handleEventsWith方法中传入需要并行的消费者
+
+例子如下：
 
 ```java
-public static void handleEvent(LongEvent longEvent, long l, boolean b){
-    System.out.println(longEvent.getValue());
-}
-
 @Test
 public void SingleProducer(){
-    Executor executor = Executors.newCachedThreadPool();
     int bufferSize = 1024;
-    //构造事件分发器，参数：事件，队列长度，线程池，生产者类型（多生产者还是单生产者），等待策略
-    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, executor, ProducerType.SINGLE, new YieldingWaitStrategy());
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.SINGLE, new BlockingWaitStrategy());
     disruptor.handleEventsWith(TestScene::handleEvent,TestScene::handleEvent,TestScene::handleEvent);
-    //开启事件分发
     disruptor.start();
     RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
-    //事件生产者
     LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
     Thread thread = new Thread(() -> {
         for (int i = 0; true; i++) {
@@ -300,6 +302,205 @@ public void SingleProducer(){
             }
         }
     });
+    thread.setName("producer");
+    thread.start();
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+//TestScene::handleEvent
+public static void handleEvent(LongEvent longEvent, long l, boolean b){
+    System.out.println(Thread.currentThread().getName()+" "+longEvent.getValue());
+}
+```
+
+运行结果：
+
+~~~
+producer 生产者生产数据 0
+pool-1-thread-1 0
+pool-1-thread-2 0
+pool-1-thread-3 0
+producer 生产者生产数据 1
+pool-1-thread-1 1
+pool-1-thread-2 1
+pool-1-thread-3 1
+producer 生产者生产数据 2
+pool-1-thread-1 2
+pool-1-thread-2 2
+pool-1-thread-3 2
+producer 生产者生产数据 3
+pool-1-thread-1 3
+pool-1-thread-3 3
+pool-1-thread-2 3
+producer 生产者生产数据 4
+pool-1-thread-1 4
+pool-1-thread-3 4
+pool-1-thread-2 4
+~~~
+
+这里我们可以清晰地看到，多个消费者并行的消费单个生产者生产的数据，运行流程如下：
+
+![image-20221031135551500](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031135551500.png)
+
+## 多生产者单消费者
+
+Disruptor中的生产者是不受Disruptor框架控制的，而是我们用户自己控制，因此如果想使用多生产者，需要将ProducerType设置为MULTI，然后自己多线程生产即可。例子如下：
+
+```java
+@Test
+public void SingleConsumer(){
+    int bufferSize = 1024;
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.MULTI, new BlockingWaitStrategy());
+    disruptor.handleEventsWith(TestScene::handleEvent);
+    disruptor.start();
+    RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
+    LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
+    for (int i = 0; i < 3; i++) {
+        Thread thread = new Thread(() -> {
+            for (int j= 0; true; j++) {
+                producer.onData(j);
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+        thread.setName("producer"+i);
+        thread.start();
+    }
+    try {
+
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+```
+
+运行结果：
+
+~~~
+producer0 生产者生产数据 0
+producer2 生产者生产数据 0
+producer1 生产者生产数据 0
+pool-1-thread-1 0
+pool-1-thread-1 0
+pool-1-thread-1 0
+producer1 生产者生产数据 1
+producer0 生产者生产数据 1
+producer2 生产者生产数据 1
+pool-1-thread-1 1
+pool-1-thread-1 1
+pool-1-thread-1 1
+producer1 生产者生产数据 2
+producer0 生产者生产数据 2
+producer2 生产者生产数据 2
+pool-1-thread-1 2
+pool-1-thread-1 2
+pool-1-thread-1 2
+producer0 生产者生产数据 3
+producer2 生产者生产数据 3
+producer1 生产者生产数据 3
+pool-1-thread-1 3
+pool-1-thread-1 3
+pool-1-thread-1 3
+producer0 生产者生产数据 4
+producer1 生产者生产数据 4
+producer2 生产者生产数据 4
+pool-1-thread-1 4
+pool-1-thread-1 4
+pool-1-thread-1 4
+~~~
+
+这里我们可以看到，有多个生产者生产数据，有单个消费者对数据进行消费，运行流程如下：
+![image-20221031135712495](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031135712495.png)
+
+## 单生产者多消费者竞争
+
+多消费者竞争的意思是多个消费者竞争同一个事件，最终只有一个消费者可以执行事件。想要做到这种地步，事件处理器需要继承`WorkHandler`接口而不是`EventHandler`接口。然后调用disruptor的handleEventsWithWorkerPool方法绑定处理器。例子如下：
+
+```java
+@Test
+public void MultiConsumerContend() {
+    int bufferSize = 1024;
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.SINGLE, new BlockingWaitStrategy());
+    disruptor.handleEventsWithWorkerPool(TestScene::workerHandlerEvent, TestScene::workerHandlerEvent, TestScene::workerHandlerEvent);
+    disruptor.start();
+    RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
+    LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
+    Thread thread = new Thread(() -> {
+        for (int j = 0; true; j++) {
+            producer.onData(j);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    });
+    thread.setName("producer");
+    thread.start();
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+
+public static void workerHandlerEvent(LongEvent event) throws Exception {
+    System.out.println(Thread.currentThread().getName() + " " + event.getValue());
+}
+```
+
+运行结果：
+
+~~~
+producer 生产者生产数据 0
+pool-1-thread-1 0
+producer 生产者生产数据 1
+pool-1-thread-2 1
+producer 生产者生产数据 2
+pool-1-thread-3 2
+producer 生产者生产数据 3
+pool-1-thread-1 3
+producer 生产者生产数据 4
+pool-1-thread-2 4
+~~~
+
+这里我们可以看到生产数据每次由不同的线程或者说是竞争胜利的线程执行该事件，运行流程如下：
+
+![image-20221031141836416](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031141836416.png)
+
+## 单生产者多消费者串行
+
+多消费者串行表示消费者互相依赖，当前一个消费者不消费完后一个消费者不能消费，如果想实现这样的话，需要在disruptor绑定处理器后调用then方法执行依赖。例子如下：
+
+```java
+@Test
+public void MultiConsumerSerial() {
+    int bufferSize = 1024;
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.SINGLE, new BlockingWaitStrategy());
+    disruptor.handleEventsWith(TestScene::handleEvent)
+            .then(TestScene::handleEvent)
+            .then(TestScene::handleEvent);
+    disruptor.start();
+    RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
+    LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
+    Thread thread = new Thread(() -> {
+        for (int j = 0; true; j++) {
+            producer.onData(j);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    });
+    thread.setName("producer");
     thread.start();
     try {
         Thread.sleep(5000);
@@ -309,9 +510,426 @@ public void SingleProducer(){
 }
 ```
 
-### 多生产者单消费者
+运行结果：
 
+~~~
+producer 生产者生产数据 0
+pool-1-thread-1 0
+pool-1-thread-2 0
+pool-1-thread-3 0
+producer 生产者生产数据 1
+pool-1-thread-1 1
+pool-1-thread-2 1
+pool-1-thread-3 1
+producer 生产者生产数据 2
+pool-1-thread-1 2
+pool-1-thread-2 2
+pool-1-thread-3 2
+producer 生产者生产数据 3
+pool-1-thread-1 3
+pool-1-thread-2 3
+pool-1-thread-3 3
+producer 生产者生产数据 4
+pool-1-thread-1 4
+pool-1-thread-2 4
+pool-1-thread-3 4
+~~~
 
+这里我们可以看到消费者消费的顺序是按照我们指定的依赖关系进行消费的，运行流程如下：
 
+![image-20221031142834833](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031142834833.png)
 
+## 菱形方式执行
+
+菱形方式也可以说是先并行在串行。例子如下：
+
+```java
+@Test
+public void MultiConsumerRhombus() {
+    int bufferSize = 1024;
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.SINGLE, new BlockingWaitStrategy());
+    disruptor.handleEventsWith(TestScene::handleEvent, TestScene::handleEvent)
+        //这里handleEvent1的区别就是手动设置了线程名称便于区分
+        .then(TestScene::handleEvent1);
+    disruptor.start();
+    RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
+    LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
+    Thread thread = new Thread(() -> {
+        for (int j = 0; true; j++) {
+            producer.onData(j);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    });
+    thread.setName("producer");
+    thread.start();
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+```
+
+运行结果：
+
+~~~
+producer 生产者生产数据 0
+pool-1-thread-1 0
+pool-1-thread-2 0
+consumer1 0
+producer 生产者生产数据 1
+pool-1-thread-1 1
+pool-1-thread-2 1
+consumer1 1
+producer 生产者生产数据 2
+pool-1-thread-1 2
+pool-1-thread-2 2
+consumer1 2
+producer 生产者生产数据 3
+pool-1-thread-1 3
+pool-1-thread-2 3
+consumer1 3
+producer 生产者生产数据 4
+pool-1-thread-1 4
+pool-1-thread-2 4
+consumer1 4
+~~~
+
+这里我们可以看到我们consumer1消费者一定是在依赖的两个消费者消费完后才去消费，菱形流程如下：
+
+![image-20221031143917835](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031143917835.png)
+
+## 链式并行执行
+
+链式并行流程如下：
+
+![image-20221031145047396](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031145047396.png)
+
+disruptor实现也比较简单，例子如下：
+
+```java
+@Test
+public void MultiConsumerParallel() {
+    int bufferSize = 1024;
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.SINGLE, new BlockingWaitStrategy());
+    disruptor.handleEventsWith(TestScene::handleEvent1).then(TestScene::handleEvent2);
+    disruptor.handleEventsWith(TestScene::handleEvent3).then(TestScene::handleEvent4);
+    disruptor.start();
+    RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
+    LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
+    Thread thread = new Thread(() -> {
+        for (int j = 0; true; j++) {
+            producer.onData(j);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    });
+    thread.setName("producer");
+    thread.start();
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+```
+
+运行结果如下：
+
+~~~
+producer 生产者生产数据 0
+consumer1 0
+consumer3 0
+consumer2 0
+consumer4 0
+producer 生产者生产数据 1
+consumer1 1
+consumer3 1
+consumer4 1
+consumer2 1
+producer 生产者生产数据 2
+consumer1 2
+consumer3 2
+consumer4 2
+consumer2 2
+producer 生产者生产数据 3
+consumer1 3
+consumer2 3
+consumer3 3
+consumer4 3
+producer 生产者生产数据 4
+consumer1 4
+consumer3 4
+consumer2 4
+consumer4 4
+~~~
+
+这里我们可以看到在消费者消费的过程中消费者1一定在2前面，3一定在4前面，因为2依赖于1而4也依赖于3.
+
+## 多组消费者相互隔离
+
+这个场景可以说是组内互相竞争，组外互相并行，在Disruptor中写法如下：
+
+```java
+@Test
+public void MultiConsumerIsolate () {
+    int bufferSize = 1024;
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.SINGLE, new BlockingWaitStrategy());
+    disruptor.handleEventsWithWorkerPool(TestScene::workerHandlerEvent1,TestScene::workerHandlerEvent2);
+    disruptor.handleEventsWithWorkerPool(TestScene::workerHandlerEvent3,TestScene::workerHandlerEvent4);
+    disruptor.start();
+    RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
+    LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
+    Thread thread = new Thread(() -> {
+        for (int j = 0; true; j++) {
+            producer.onData(j);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    });
+    thread.setName("producer");
+    thread.start();
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+```
+
+运行结果如下：
+
+~~~
+producer 生产者生产数据 0
+consumer4 0
+consumer2 0
+producer 生产者生产数据 1
+consumer3 1
+consumer1 1
+producer 生产者生产数据 2
+consumer4 2
+consumer2 2
+producer 生产者生产数据 3
+consumer3 3
+consumer1 3
+producer 生产者生产数据 4
+consumer4 4
+consumer2 4
+~~~
+
+我们可以看到结果也符合我们的预期，运行流程如下：
+
+![image-20221031145635581](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031145635581.png)
+
+## 多组消费者航道执行
+
+这种场景与上面类似，即组内互相竞争，组外相互依赖，例子如下：
+
+```java
+@Test
+public void MultiConsumerParallelDepend() {
+    int bufferSize = 1024;
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.SINGLE, new BlockingWaitStrategy());
+    disruptor.handleEventsWithWorkerPool(TestScene::workerHandlerEvent1, TestScene::workerHandlerEvent2)
+            .thenHandleEventsWithWorkerPool(TestScene::workerHandlerEvent3, TestScene::workerHandlerEvent4);
+    disruptor.start();
+    RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
+    LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
+    Thread thread = new Thread(() -> {
+        for (int j = 0; true; j++) {
+            producer.onData(j);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    });
+    thread.setName("producer");
+    thread.start();
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+```
+
+运行结果如下：
+
+~~~
+producer 生产者生产数据 0
+consumer1 0
+consumer3 0
+producer 生产者生产数据 1
+consumer2 1
+consumer4 1
+producer 生产者生产数据 2
+consumer1 2
+consumer3 2
+producer 生产者生产数据 3
+consumer2 3
+consumer4 3
+producer 生产者生产数据 4
+consumer1 4
+consumer3 4
+~~~
+
+流程如下：
+
+![image-20221031150803953](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031150803953.png)
+
+## 六边形场景
+
+场景流程或者消费者依赖如下：
+
+![image-20221031151021499](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221031151021499.png)
+
+这种情况disruptor可以使用after方法进行设置，例子如下：
+
+```java
+@Test
+public void MultiConsumerHexagon() {
+    int bufferSize = 1024;
+    Disruptor<LongEvent> disruptor = new Disruptor<>(LongEvent::new, bufferSize, Executors.defaultThreadFactory(), ProducerType.SINGLE, new BlockingWaitStrategy());
+    LongEventHandlerWithThreadName handler1 = new LongEventHandlerWithThreadName("consumer1");
+    LongEventHandlerWithThreadName handler2 = new LongEventHandlerWithThreadName("consumer2");
+    LongEventHandlerWithThreadName handler3 = new LongEventHandlerWithThreadName("consumer3");
+    LongEventHandlerWithThreadName handler4 = new LongEventHandlerWithThreadName("consumer4");
+    LongEventHandlerWithThreadName handler5 = new LongEventHandlerWithThreadName("consumer5");
+    disruptor.handleEventsWith(handler1, handler2);
+    disruptor.after(handler1).handleEventsWith(handler3);
+    disruptor.after(handler2).handleEventsWith(handler4);
+    disruptor.after(handler3,handler4).handleEventsWith(handler5);
+    disruptor.start();
+    RingBuffer<LongEvent> ringBuffer = disruptor.getRingBuffer();
+    LongEventProducerWithTranslator producer = new LongEventProducerWithTranslator(ringBuffer);
+    Thread thread = new Thread(() -> {
+        for (int j = 0; true; j++) {
+            producer.onData(j);
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    });
+    thread.setName("producer");
+    thread.start();
+    try {
+        Thread.sleep(5000);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+}
+```
+
+运行结果如下：
+
+~~~
+producer 生产者生产数据 0
+consumer1 0
+consumer2 0
+consumer3 0
+consumer4 0
+consumer5 0
+producer 生产者生产数据 1
+consumer1 1
+consumer2 1
+consumer3 1
+consumer4 1
+consumer5 1
+producer 生产者生产数据 2
+consumer2 2
+consumer1 2
+consumer4 2
+consumer3 2
+consumer5 2
+producer 生产者生产数据 3
+consumer2 3
+consumer1 3
+consumer4 3
+consumer3 3
+consumer5 3
+producer 生产者生产数据 4
+consumer2 4
+consumer1 4
+consumer3 4
+consumer4 4
+consumer5 4
+~~~
+
+从运行结果总我们也可以看到1一定在3前面，2一定在4前面，5一定在最后面。
+
+# 三、Disruptor源码分析
+
+> 这里使用3.4版本的disruptor源码
+
+## 3.1 核心组件
+
+### 3.1.1 Disruptor
+
+持有 RingBuffer、消费者线程池 Executor、消费者集合 CounsumerRepository 等引用。
+
+### 3.1.2 RingBuffer 环形缓冲
+
+RingBuffer 在 3.0 版本之前被认为是 Disruptor 的主要概念。但从 Diruptor 3.0 开始，RingBuffer 只负责存储和更新 Disruptor 的数据，在一些高级的使用场景中用户也可以自定义它。
+
+RingBuffer 是基于数组的缓存实现，存储生产和消费的 Event，它实现了阻塞队列的语义，也是创建 sequencer 与定义 WaitStartegy 的入口。**如果 RingBuffer 满了，则生产者会阻塞等待；如果 RingBuffer 空了，则消费者会阻塞等待**。
+
+### 3.1.3 Sequence 序列
+
+Disruptor 使用 Sequence 来标记特定组件的处理进度，通过顺序递增的序号来编号，管理进行交换的 Event。一个 Sequence 用于跟踪标识某个特定的事件处理者（RingBuffer、Producer、Consumer）的处理进度。
+
+Sequence 具有许多 AtomicLong 的特征，虽然使用 AtomicLong 也可以用于标识进度，但它可以防止不同的 Sequence 之间的 CPU 缓存伪共享(Flase Sharing)问题。
+
+### 3.1.4 Sequencer 序列器
+
+Sequencer 是 Disruptor 中的真正核心，主要实现生产者和消费者之间快速、正确地传递数据的并发算法。
+
+它具有 `SingleProducerSequencer` 和 `MultiProducerSequencer` 这两个实现。
+
+### 3.1.5 Sequence Barrier 序列屏障
+
+Sequence Barrier 由 Sequencer 创建，它包含了来自 Sequencer 的已经发布的主要 sequence 的引用，或者包含了依赖的消费者的 sequence。
+
+用于保持对 RingBuffer 的 Main Published Sequence(Producer) 和 Consumer 之间的平衡关系，它决定了 Consumer 是否还有可处理的 Event 的逻辑。
+
+### 3.1.6 WaitStrategy 等待策略
+
+WaitStrategy 决定了消费者以何种方式等待生产者将 Event 放进 Disruptor 中。
+
+### 3.1.7 Event 事件
+
+从生产者传到消费者的数据单元叫做 Event。它不是一个被 Disruptor 定义的特定类型，而是由 Disruptor 的使用者自行定义。
+
+### 3.1.8 Event Processor 事件处理器
+
+持有特定的消费者的 Sequence，并且拥有一个主事件循环（main event loop）用于处理 Disruptor 的 Event。
+
+其中 BatchEventProcessor 是其具体实现，实现了事件循环（event loop），并且会回调到实现了 EventHandler 的接口对象中。
+
+### 3.1.9 EventHandler 事件处理逻辑
+
+由用户实现并且代表了 Disruptor 中的一个消费者的接口，消费者相关的逻辑都需要写在这里。
+
+### 3.1.10 Producer 生产者
+
+生产者，泛指调用 Disruptor 发布事件的用户代码，它不是一个被 Disruptor 定义的特定类型，而是由 Disruptor 的使用者自行定义。
+
+### 3.1.11 WorkProcessor
+
+确保每个 sequence 只被一个 processor 消费，在同一个 WorkPool 中处理多个 WorkProcessor 不会消费同样的 sequence。
+
+## 3.2 Sequence
 
