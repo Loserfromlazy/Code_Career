@@ -28,7 +28,7 @@ Disruptor主要是用在对性能要求高，低延迟的场景中，它通过�
 
 - 无锁设计，通过CAS无锁的方式保证线程安全，CAS的性能比Java隐式锁等性能高。
 
-- 元素位置属性进行了缓存行数据填充，避免了伪共享问题
+- 元素位置属性进行了缓存行数据填充，避免了伪共享问题（伪共享问题后续会介绍）
 
   > Java8提供了`@sun.misc.Contended`，此注解可以解决伪共享问题，在变量前后增加128字节的填充数据，使用时需要使用JVM参数`-XX:-RestrictContended`
 
@@ -873,7 +873,7 @@ consumer5 4
 
 # 三、Disruptor源码分析
 
-> 这里使用3.4版本的disruptor源码
+> 这里使用3.4版本的disruptor源码，源码使用Gradle构建，如果构建过程中出现Gradle下载失败，请自行下载对应的版本然后将gradle地址手动指定到本地文件系统的地址上
 
 ## 3.1 核心组件
 
@@ -933,4 +933,79 @@ WaitStrategy 决定了消费者以何种方式等待生产者将 Event 放进 Di
 
 ## 3.2 Sequence
 
-Sequence
+Sequence是Disruptor的序号类也可以理解为id类，核心属性只有一个long类型的value属性，它是被填充过缓存行的，这么做的目的就是为了解决伪共享(false sharing)的问题。我们下面来一步步了解这个类。
+
+首先此类的继承关系如下：
+
+![image-20221101084622419](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221101084622419.png)
+
+我们看到Sequence类真正的属性再Value类中，而Value类的父类和子类都填充了7个long类型的字段，最终Sequence类继承RhsPadding类完成缓存行填充。那么为什么要填充7个long类型的字节呢？因为一个long是8个字节，现在的计算机CPU缓存行一般为64字节，这样的话就能保证CPU的每一个缓存行我们的value数据都能被填充数据所包裹，如下图：
+
+![cachelineproblem](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/cachelineproblem.gif)
+
+> linux 查看缓存行大小命令
+>
+> `cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size`
+
+然后我们看一下它的静态代码块，在这里会获取unsafe类和value对象便于其他方法调用：
+
+```java
+static
+{
+    //反射获取unsafe类
+    UNSAFE = Util.getUnsafe();
+    try
+    {
+        //获取value对象的内存偏移量
+        VALUE_OFFSET = UNSAFE.objectFieldOffset(Value.class.getDeclaredField("value"));
+    }
+    catch (final Exception e)
+    {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+然后此类为value提供了各种写入方法：
+
+```java
+/**
+* Perform an ordered write of this sequence.  The intent is
+* a Store/Store barrier between this write and any previous
+* store.
+*/
+public void set(final long value)
+{
+    //这里调用unsafe类的putOrderedLong方法进行写入数据，此方法会插入一个SS内存屏障，延迟写入数据
+    UNSAFE.putOrderedLong(this, VALUE_OFFSET, value);
+}
+/**
+* Performs a volatile write of this sequence.  The intent is
+* a Store/Store barrier between this write and any previous
+* write and a Store/Load barrier between this write and any
+* subsequent volatile read.
+*/
+public void setVolatile(final long value)
+{
+    //此方法符合JMM规范，会在前面插入SS屏障，后面插入Sl屏障
+    UNSAFE.putLongVolatile(this, VALUE_OFFSET, value);
+}
+public boolean compareAndSet(final long expectedValue, final long newValue)
+{
+    //此方法是通过CAS进行写入
+    return UNSAFE.compareAndSwapLong(this, VALUE_OFFSET, expectedValue, newValue);
+}
+```
+
+这里我们重点看一下`UNSAFE.putOrderedLong`延迟写入方法，因为我们的字段是volatile字段，因此根据JMM规范需要插入SS和Sl屏障，但是SL屏障开销很大，可以理解为需要保证当前写入对所有CPU可见，所以`putOrderedLong`延迟写入方法只使用了SS屏障，这样可能会造成写后结果并不会被其他线程立即看到，但是可以提升性能，且延迟一般在纳秒级别，因此此方法可以提升写入性能。关于JVM内存屏障可以看我的笔记[CAS和原子类以及有序性和可见性](https://github.com/Loserfromlazy/Code_Career/blob/master/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E5%AD%A6%E4%B9%A0/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B%E7%AF%87%E4%B8%89CAS%E5%92%8C%E5%8E%9F%E5%AD%90%E7%B1%BB%E4%BB%A5%E5%8F%8A%E6%9C%89%E5%BA%8F%E6%80%A7%E5%92%8C%E5%8F%AF%E8%A7%81%E6%80%A7.md#45-jmm)
+
+## 3.3 Sequencer
+
+继承关系如下
+
+![image-20221101124108393](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221101124108393.png)
+
+我们这里主要以SingleProducerSequencer为例来了解Disruptor的这个组件，先来看它的父类：
+
+![image-20221101130626547](C:\Users\yhr\AppData\Roaming\Typora\typora-user-images\image-20221101130626547.png)
+
