@@ -1123,18 +1123,21 @@ ConsumerRepository可以理解为消费者仓库，主要保存消费者的映�
 
 ## 3.5 事件处理器
 
-然后我们看看消费者具体的执行线程，也可以叫做事件处理器或消费者处理器，注意与Handler的处理器相区分，Handler是事务处理器，是用户自定的事务，Processor可以看作是流程，是disruptor框架的执行流程。
+### 3.5.1 BatchEventProcessor
+
+然后我们看看消费者具体的执行线程，也可以叫做事件处理器或消费者处理器，注意与XXXHandler的处理器相区分，Handler是事务处理器，是用户自定的事务，Processor可以看作是流程，是disruptor框架的执行流程。
 
 事件处理器或消费者处理器有很多，如下图：
 
 ![image-20221102153230999](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102153230999.png)
 
-我们这里只拿BatchEventProcessor来举例：
+我们这里只拿BatchEventProcessor(这个是我们之前举例中的不竞争的消费者处理器)来举例，因为继承了Runnable接口，所以我们主要关注一下其run方法：
 
 ```java
 @Override
 public void run()
 {
+    //CAS修改状态
     if (running.compareAndSet(IDLE, RUNNING))
     {
         sequenceBarrier.clearAlert();
@@ -1142,8 +1145,10 @@ public void run()
         notifyStart();
         try
         {
+            //当前状态为启动时
             if (running.get() == RUNNING)
             {
+                //处理事件
                 processEvents();
             }
         }
@@ -1170,7 +1175,117 @@ public void run()
 }
 ```
 
+我们通过上面的方法可以看到这里关键方法是`processEvents`，因此我们重点关注一下：
 
+```java
+private void processEvents()
+{
+    T event = null;
+    //获取下次消费的序号值
+    long nextSequence = sequence.get() + 1L;
+	//这里使用了死循环，所以基本上一个线程绑定一个消费者
+    while (true)
+    {
+        try
+        {
+            //调用序号屏障的waitFor方法获取依赖的消费者的序号或者是生产者的序号，内部是调用等待策略的waitFor方法
+            final long availableSequence = sequenceBarrier.waitFor(nextSequence);
+            if (batchStartAware != null)
+            {
+                batchStartAware.onBatchStart(availableSequence - nextSequence + 1);
+            }
+			//这里进行判断只有当依赖的消费者序号大于当前消费者序号，我们才能进行消费
+            //如果依赖的消费者序号小于消费者序号说明我们依赖的消费者还没消费完呢，因此我们不能进行消费
+            while (nextSequence <= availableSequence)
+            {
+                //获取该序号位置上的环形队列的值
+                event = dataProvider.get(nextSequence);
+                //调用业务处理器进行消费
+                eventHandler.onEvent(event, nextSequence, nextSequence == availableSequence);
+                nextSequence++;
+            }
+			//保存当前消费者的序号即当前消费者消费到了哪里
+            sequence.set(availableSequence);
+        }
+        catch (final TimeoutException e)
+        {
+            notifyTimeout(sequence.get());
+        }
+        catch (final AlertException ex)
+        {
+            if (running.get() != RUNNING)
+            {
+                break;
+            }
+        }
+        catch (final Throwable ex)
+        {
+            handleEventException(ex, nextSequence, event);
+            sequence.set(nextSequence);
+            nextSequence++;
+        }
+    }
+}
+```
+
+### 3.5.2 事件处理器组
+
+当我们调用`disruptor.handleEventsWith(TestScene::handleEvent)`等方法时，handleEventsWith返回的是一个消费者组EventHandlerGroup，这个类表示了一组消费者，其内部持有disruptor实例，其主要属性如下：
+
+![image-20221102224049373](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102224049373.png)
+
+当我们调用handleEventsWith等方法时就会返回一个EventHandlerGroup，方法如下：
+
+```java
+public final EventHandlerGroup<T> handleEventsWith(final EventHandler<? super T>... handlers)
+{
+    return createEventProcessors(new Sequence[0], handlers);
+}
+//-->
+EventHandlerGroup<T> createEventProcessors(
+        final Sequence[] barrierSequences,
+        final EventHandler<? super T>[] eventHandlers)
+{
+    checkNotStarted();
+	//根据eventHandlers长度创建序号数组
+    final Sequence[] processorSequences = new Sequence[eventHandlers.length];
+    //创建SequenceBarrierxu'hao
+    final SequenceBarrier barrier = ringBuffer.newBarrier(barrierSequences);
+
+    for (int i = 0, eventHandlersLength = eventHandlers.length; i < eventHandlersLength; i++)
+    {
+        final EventHandler<? super T> eventHandler = eventHandlers[i];
+
+        final BatchEventProcessor<T> batchEventProcessor =
+            new BatchEventProcessor<>(ringBuffer, barrier, eventHandler);
+
+        if (exceptionHandler != null)
+        {
+            batchEventProcessor.setExceptionHandler(exceptionHandler);
+        }
+
+        consumerRepository.add(batchEventProcessor, eventHandler, barrier);
+        processorSequences[i] = batchEventProcessor.getSequence();
+    }
+
+    updateGatingSequencesForNextInChain(barrierSequences, processorSequences);
+
+    return new EventHandlerGroup<>(this, consumerRepository, processorSequences);
+}
+//-->
+private void updateGatingSequencesForNextInChain(final Sequence[] barrierSequences, final Sequence[] processorSequences)
+{
+    if (processorSequences.length > 0)
+    {
+        ringBuffer.addGatingSequences(processorSequences);
+        for (final Sequence barrierSequence : barrierSequences)
+        {
+            ringBuffer.removeGatingSequence(barrierSequence);
+        }
+        consumerRepository.unMarkEventProcessorsAsEndOfChain(barrierSequences);
+    }
+}
+```
 
 ## 3.6 SequenceBarrier
 
@@ -1178,4 +1293,3 @@ public void run()
 
 ## 3.8 WaitStrategy
 
-# 四、Disruptor底层核心原理
