@@ -1228,20 +1228,29 @@ private void processEvents()
 }
 ```
 
-### 3.5.2 事件处理器组
+### 3.5.2 事件处理器创建流程和处理器组
 
 当我们调用`disruptor.handleEventsWith(TestScene::handleEvent)`等方法时，handleEventsWith返回的是一个消费者组EventHandlerGroup，这个类表示了一组消费者，其内部持有disruptor实例，其主要属性如下：
 
 ![image-20221102224049373](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102224049373.png)
 
-当我们调用handleEventsWith等方法时就会返回一个EventHandlerGroup，方法如下：
+在继续学习之前，我们先了解一下消费者(ConsumerInfo)、序号、序号屏障、序号屏障中的依赖序号、序号管理器(Sequencer)、Sequencer中的门禁序号，这些类或属性的关系，这里我们可以这样理解，见下图：
+
+![image-20221103002513922](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221103002513922.png)
+
+每一个消费者中都保存着自己的序号和序号屏障（将在下一节介绍），然后序号屏障中保存着该消费者依赖的消费者的序号，如果没有依赖的消费者，那么保存的就是Sequencer的序号。然后Sequencer中门禁序号保存的就是所有消费者的序号数组，注意实际这里的门禁序号只保留整个依赖关系最末端的（比如上图我们先调用handleEventsWith将消费者1和2加入到门禁序号中，然后调用then使消费者3依赖1和2，这时门禁序号会更新只保存消费者3的序号）。因为3的序号在队列中实际上是小于1和2的，即序号是最小的。
+
+然后我们再来看当我们调用disruptor#handleEventsWith等方法时就会返回一个EventHandlerGroup，方法如下：
 
 ```java
+//此方法有很多重载，这里只是拿其中一个在这里作为例子
 public final EventHandlerGroup<T> handleEventsWith(final EventHandler<? super T>... handlers)
 {
+    //创建EventHandlerGroup，此方法应该传入依赖的序号和业务处理器，这里传入new Sequence[0]是因为此方法是最开始调用的，因此此时的消费者依赖的是生产者序号
     return createEventProcessors(new Sequence[0], handlers);
 }
 //-->
+//此方法参数是依赖的序号和业务处理器
 EventHandlerGroup<T> createEventProcessors(
         final Sequence[] barrierSequences,
         final EventHandler<? super T>[] eventHandlers)
@@ -1249,13 +1258,14 @@ EventHandlerGroup<T> createEventProcessors(
     checkNotStarted();
 	//根据eventHandlers长度创建序号数组
     final Sequence[] processorSequences = new Sequence[eventHandlers.length];
-    //创建SequenceBarrierxu'hao
+    //创建SequenceBarrier,这里最终会调用构造函数创建一个SequenceBarrier，这里传入的是依赖的序号
     final SequenceBarrier barrier = ringBuffer.newBarrier(barrierSequences);
 
+    //遍历创建BatchEventProcessor，并保存到consumerRepository
     for (int i = 0, eventHandlersLength = eventHandlers.length; i < eventHandlersLength; i++)
     {
         final EventHandler<? super T> eventHandler = eventHandlers[i];
-
+		
         final BatchEventProcessor<T> batchEventProcessor =
             new BatchEventProcessor<>(ringBuffer, barrier, eventHandler);
 
@@ -1265,9 +1275,10 @@ EventHandlerGroup<T> createEventProcessors(
         }
 
         consumerRepository.add(batchEventProcessor, eventHandler, barrier);
+        //为序号数组每一个成员赋值赋值
         processorSequences[i] = batchEventProcessor.getSequence();
     }
-
+	//更新门禁序号，这里的逻辑主要见上面图中，在上图中假设我们先将消费者1和2加入到门禁序号中，这时加入消费者3，而消费者3依赖于1和2，这是就将门禁序号从1和2更新为3，如果还不理解可以尝试弄懂上面的图，在debug验证
     updateGatingSequencesForNextInChain(barrierSequences, processorSequences);
 
     return new EventHandlerGroup<>(this, consumerRepository, processorSequences);
@@ -1285,6 +1296,13 @@ private void updateGatingSequencesForNextInChain(final Sequence[] barrierSequenc
         consumerRepository.unMarkEventProcessorsAsEndOfChain(barrierSequences);
     }
 }
+```
+
+其实在EventHandlerGroup中的方法大多数都是封装的disruptor的方法（源码略），也就是说EventHandlerGroup主要作为disruptor的辅助类使用。比如以下这种情况：
+
+```java
+EventHandlerGroup<LongEvent> group = disruptor.handleEventsWith(TestScene::handleEvent, TestScene::handleEvent, TestScene::handleEvent);
+group.then(TestScene::handleEvent);
 ```
 
 ## 3.6 SequenceBarrier
