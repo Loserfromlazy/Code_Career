@@ -5,7 +5,7 @@
 > 参考资料：
 >
 > - https://www.cnblogs.com/crazymakercircle/p/13909235.html
-> - 《Disruptor 红宝书》》尼恩
+> - 《Disruptor 红宝书》尼恩
 > - https://jitwxs.cn/a7ed43af.html
 > - https://lmax-exchange.github.io/disruptor/user-guide/index.html#_getting_started
 > - https://www.jianshu.com/p/d2d50cf6d887
@@ -1023,7 +1023,159 @@ public boolean compareAndSet(final long expectedValue, final long newValue)
 
 ![image-20221101124108393](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221101124108393.png)
 
-我们这里主要以SingleProducerSequencer为例来了解Disruptor的这个组件，先来看它的父类：
+我们这里主要以SingleProducerSequencer为例来了解Disruptor的这个组件（因为Disruptor更适合于单生产者的场景，*MPSC*更适合多生产者场景），先来看它的父类：
 
-![image-20221101130626547](C:\Users\yhr\AppData\Roaming\Typora\typora-user-images\image-20221101130626547.png)
+![image-20221101130626547](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221101130626547.png)
 
+![image-20221102135125039](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102135125039.png)
+
+我们可以看到Sequencer序号管理器跟Sequence一样也进行了缓存行填充。在Sequencer中有几个重要属性：
+
+- nextValue：序号的当前值
+- cacheValue：缓存的门禁序号值
+- gatingSequences：门禁序号数组，主要用于防止过多生产覆盖未消费的信息
+- cursor：游标，即当前生产者生产到了哪个序号
+
+下面我们来结合方法一起看一下上面的属性的作用，作为序号管理器最重要的就是next方法预定序号和publish方法发布序号。下面我们分别来看：
+
+```java
+@Override
+public long next(int n)
+{
+    if (n < 1)
+    {
+        throw new IllegalArgumentException("n must be > 0");
+    }
+	//获取当前序号值
+    long nextValue = this.nextValue;
+	//获取要预定的序号值
+    long nextSequence = nextValue + n;
+    //计算wrapPoint
+    long wrapPoint = nextSequence - bufferSize;
+    //获取缓存的门禁序号值
+    long cachedGatingSequence = this.cachedValue;
+	//这句判断的意思是判断是否生产者的序号是否已经大于消费者的一环或者说一圈，下面详解
+    if (wrapPoint > cachedGatingSequence || cachedGatingSequence > nextValue)
+    {
+        //保障有序性的Volatile写
+        cursor.setVolatile(nextValue);  // StoreLoad fence
+
+        long minSequence;
+        //阻塞等待 直到wrapPoint大于最小门禁序号
+        while (wrapPoint > (minSequence = Util.getMinimumSequence(gatingSequences, nextValue)))
+        {
+            //阻塞当前线程1纳秒，注意sequencer主要是生产者持有，也就是说生产者的等待并未使用disruptor的等待策略，但是源码右面有todo注释表明开发者有意在以后的版本使用等待策略去自旋等待
+            LockSupport.parkNanos(1L); // TODO: Use waitStrategy to spin?
+        }
+		//缓存最小门禁序号值
+        this.cachedValue = minSequence;
+    }
+
+    this.nextValue = nextSequence;
+
+    return nextSequence;
+}
+```
+
+上面方法中最重要的就是这两个判断了，我们上面介绍过disruptor是使用的环形队列，且序号不断自增不设限制，但是环形队列是有长度的，我们如何保证生产者的数据不会覆盖掉消费者未消费的数据呢？disruptor就使用了gatingSequences门禁序号来解决此问题。**门禁序号保存的是消费者的sequence，每个消费者都会维护一个自己的Sequence对象，来记录自己的已消费的位置，每增加一个消费者，都会将引用添加到gatingSequences**。在计算时，我们取消费在最末尾的消费者的序号，当生产者序号减去最末尾的消费者序号只要小于环形队列一圈或一环的长度即可，算式为`生产者序号-消费者序号<环形队列长度`，否则表示生产者已经生产到了最末尾的消费者的位置，则进行自旋等待。
+
+那么warpPoint是什么意思呢？其实这里只是不等式变换，即`warpPoint=生产者序号-环形队列长度<消费者序号`。到这里我们已经能明白上面方法的大概意思了，当调用next方法时，我们计算是否生产者的序号是否已经大于最末端消费者的一环或者说一圈，如果大于那么就自旋阻塞等待。
+
+然后我们看一下publis方法，此方法就很简单，先设置游标即当前生产者发布的序号然后调用等待策略唤醒消费者：
+
+```java
+@Override
+public void publish(long sequence)
+{
+    //这里使用的是unsafe的有序写入
+    cursor.set(sequence);
+    waitStrategy.signalAllWhenBlocking();
+}
+```
+
+## 3.4 ConsumerRepository和ConsumerInfo
+
+ConsumerRepository可以理解为消费者仓库，主要保存消费者的映射关系，其内部有三个Map分别保存的是：
+
+- 业务事务处理器和消费者信息
+- 序号和消费者信息，这里ConsumerInfo和Sequence是一对多的关系，一个ConsumerInfo可能有多个Sequence，但是一个Sequence只属于一个ConsumerInfo
+- 消费者集合
+
+![image-20221102150303379](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102150303379.png)
+
+当我们调用disruptor的handleEventsWith等绑定方法时，最终会调用ConsumerRepository的add方法，然后去维护这些集合，源码略可自行翻阅。
+
+然后我们去看一下ConsumerInfo消费者信息类，其实ConsumerInfo是一个接口，实现类如下：
+
+![image-20221102150934640](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102150934640.png)
+
+我们先看一下EventProcessorInfo，其主要属性如下：
+
+![image-20221102151058249](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102151058249.png)
+
+然后我们再看一下WorkerPoolInfo：
+
+![image-20221102151419715](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102151419715.png)
+
+![image-20221102151426825](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102151426825.png)
+
+这里我们可以看到EventProcessorInfo中，只有一个EventProcessor，是一个单线程的消费者，然后再WorkerPoolInfo中，WorkPool整体是一个消费者，是一个多线程消费者，每个生产者的事件只会被WorkPool中的某一个WorkProcessor消费，也就是竞争消费。
+
+## 3.5 事件处理器
+
+然后我们看看消费者具体的执行线程，也可以叫做事件处理器或消费者处理器，注意与Handler的处理器相区分，Handler是事务处理器，是用户自定的事务，Processor可以看作是流程，是disruptor框架的执行流程。
+
+事件处理器或消费者处理器有很多，如下图：
+
+![image-20221102153230999](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221102153230999.png)
+
+我们这里只拿BatchEventProcessor来举例：
+
+```java
+@Override
+public void run()
+{
+    if (running.compareAndSet(IDLE, RUNNING))
+    {
+        sequenceBarrier.clearAlert();
+
+        notifyStart();
+        try
+        {
+            if (running.get() == RUNNING)
+            {
+                processEvents();
+            }
+        }
+        finally
+        {
+            notifyShutdown();
+            running.set(IDLE);
+        }
+    }
+    else
+    {
+        // This is a little bit of guess work.  The running state could of changed to HALTED by
+        // this point.  However, Java does not have compareAndExchange which is the only way
+        // to get it exactly correct.
+        if (running.get() == RUNNING)
+        {
+            throw new IllegalStateException("Thread is already running");
+        }
+        else
+        {
+            earlyExit();
+        }
+    }
+}
+```
+
+
+
+## 3.6 SequenceBarrier
+
+## 3.7 RingBuffer
+
+## 3.8 WaitStrategy
+
+# 四、Disruptor底层核心原理
