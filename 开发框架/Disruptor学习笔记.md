@@ -931,6 +931,24 @@ WaitStrategy 决定了消费者以何种方式等待生产者将 Event 放进 Di
 
 确保每个 sequence 只被一个 processor 消费，在同一个 WorkPool 中处理多个 WorkProcessor 不会消费同样的 sequence。
 
+### 3.1.12 总结
+
+以上内容来自官方文档，实际上为了方便理解，我们可以这样理解各个组件的作用：
+
+- Disruptor可以看作是方便我们使用的工具类，有点类似Netty的Bootstrap类，便于我们使用
+- ConsumerRepository类就是消费者的存储仓库，内部有三个map维护映射关系。
+- ConsumerInfo维护者每一个消费者的信息，在此类中有三个类：
+  - EventProcessor：可以理解为消费者的执行线程
+  - EventHandler：我们用户自己的业务处理
+  - SequenceBarrier：序号屏障，用于获取序号等操作
+- Sequencer：序号管理器，只有生产者持有，用于生产或管理消费者序号
+- Sequence：序号类
+- WaitStrategy：等待策略，用于SequenceBarrier获取序号时，如无法获取时的等待策略，比如条件等待，线程让步等。
+
+Disruptor主要就是围绕这几个核心类或者说是核心组件进行的，Disruptor的整体流程如下：
+
+
+
 ## 3.2 Sequence
 
 Sequence是Disruptor的序号类也可以理解为id类，核心属性只有一个long类型的value属性，它是被填充过缓存行的，这么做的目的就是为了解决伪共享(false sharing)的问题。我们下面来一步步了解这个类。
@@ -939,7 +957,7 @@ Sequence是Disruptor的序号类也可以理解为id类，核心属性只有一�
 
 ![image-20221101084622419](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221101084622419.png)
 
-我们看到Sequence类真正的属性再Value类中，而Value类的父类和子类都填充了7个long类型的字段，最终Sequence类继承RhsPadding类完成缓存行填充。那么为什么要填充7个long类型的字节呢？因为一个long是8个字节，现在的计算机CPU缓存行一般为64字节，这样的话就能保证CPU的每一个缓存行我们的value数据都能被填充数据所包裹，如下图：
+我们看到Sequence类真正的属性再Value类中，而Value类的父类和子类都填充了7个long类型的字段，最终Sequence类继承RhsPadding类完成缓存行填充。那么为什么要填充7个long类型的字节呢？因为一个long是8个字节，**现在的计算机CPU缓存行一般为64字节**，这样的话就能保证CPU的每一个缓存行我们的value数据都能被填充数据所包裹，如下图：
 
 ![cachelineproblem](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/cachelineproblem.gif)
 
@@ -997,7 +1015,7 @@ public boolean compareAndSet(final long expectedValue, final long newValue)
 }
 ```
 
-这里我们重点看一下`UNSAFE.putOrderedLong`延迟写入方法，因为我们的字段是volatile字段，因此根据JMM规范需要插入SS和Sl屏障，但是SL屏障开销很大，可以理解为需要保证当前写入对所有CPU可见，所以`putOrderedLong`延迟写入方法只使用了SS屏障，这样可能会造成写后结果并不会被其他线程立即看到，但是可以提升性能，且延迟一般在纳秒级别，因此此方法可以提升写入性能。关于JVM内存屏障可以看我的笔记[CAS和原子类以及有序性和可见性](https://github.com/Loserfromlazy/Code_Career/blob/master/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E5%AD%A6%E4%B9%A0/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B%E7%AF%87%E4%B8%89CAS%E5%92%8C%E5%8E%9F%E5%AD%90%E7%B1%BB%E4%BB%A5%E5%8F%8A%E6%9C%89%E5%BA%8F%E6%80%A7%E5%92%8C%E5%8F%AF%E8%A7%81%E6%80%A7.md#45-jmm)
+这里我们重点看一下`UNSAFE.putOrderedLong`延迟写入方法，因为我们的字段是volatile字段，因此根据JMM规范需要插入SS和Sl屏障，但是SL屏障开销很大，可以理解为需要保证当前写入对所有CPU可见，所以`putOrderedLong`延迟写入方法只使用了SS屏障，这样可能会造成写后结果并不会被其他线程立即看到即取消了可见性，但是可以提升性能，且延迟一般在纳秒级别，因此此方法可以提升写入性能。关于JVM内存屏障可以看我的笔记[CAS和原子类以及有序性和可见性](https://github.com/Loserfromlazy/Code_Career/blob/master/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E5%AD%A6%E4%B9%A0/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B%E7%AF%87%E4%B8%89CAS%E5%92%8C%E5%8E%9F%E5%AD%90%E7%B1%BB%E4%BB%A5%E5%8F%8A%E6%9C%89%E5%BA%8F%E6%80%A7%E5%92%8C%E5%8F%AF%E8%A7%81%E6%80%A7.md#45-jmm)
 
 ## 3.3 Sequencer
 
