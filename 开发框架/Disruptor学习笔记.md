@@ -1307,7 +1307,244 @@ group.then(TestScene::handleEvent);
 
 ## 3.6 SequenceBarrier
 
+disruptor一般需要管理两种依赖关系，一是生产者和消费者的依赖关系，这是通过SequenceBarrier的cursorSequence管理的，二是消费者和消费者之间的关系，这是通过SequenceBarrier的dependentSequence来管理的。
+
+### 3.6.1 SequenceBarrier属性和方法
+
+一般来说消费者内部都会有一个SequenceBarrier正是它维护了生产者和消费者之间的关系，那么他是怎么维护的呢？SequenceBarrier是一个接口，我们来看一下其唯一的实现类代码：
+
+![image-20221103203026419](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221103203026419.png)
+
+在序号屏障中持有着依赖序号和生产者序号，其中依赖序号持有的是当前消费者依赖的消费者的序号对象，如果没有依赖那么就是生产者的序号对象。在3.5.1中消费者消费方法processEvents中也介绍了，我们消费者消费时需要调用序号屏障的waitFor方法（如下）获取当前依赖的消费者序号的最小值：
+
+```java
+@Override
+public long waitFor(final long sequence)
+    throws AlertException, InterruptedException, TimeoutException
+{
+    checkAlert();
+	//调用等待策略获取合适的序号，获取availableSequence本质上是调用dependentSequence.get()
+    long availableSequence = waitStrategy.waitFor(sequence, cursorSequence, dependentSequence, this);
+
+    if (availableSequence < sequence)
+    {
+        return availableSequence;
+    }
+
+    return sequencer.getHighestPublishedSequence(sequence, availableSequence);
+}
+//-->BlockingWaitStrategy#waitFor
+@Override
+public long waitFor(long sequence, Sequence cursorSequence, Sequence dependentSequence, SequenceBarrier barrier)
+    throws AlertException, InterruptedException
+{
+    long availableSequence;
+    //保证生产者序号大于消费者序号，
+    if (cursorSequence.get() < sequence)
+    {
+        lock.lock();
+        try
+        {
+            while (cursorSequence.get() < sequence)
+            {
+                barrier.checkAlert();
+                processorNotifyCondition.await();
+            }
+        }
+        finally
+        {
+            lock.unlock();
+        }
+    }
+	//保证消费者序号小于其依赖的消费者的序号，因为如果比依赖的消费者序号大的话，说明其依赖的消费者还没完成消费
+    //这里如果dependentSequence是生产者那么就直接返回序号值
+    //如果是dependentSequence是其他消费者，那么dependentSequence实际上是FixedSequenceGroup，这里最终会调用Math.min获取最小值
+    while ((availableSequence = dependentSequence.get()) < sequence)
+    {
+        barrier.checkAlert();
+        ThreadHints.onSpinWait();
+    }
+
+    return availableSequence;
+}
+```
+
+在等待策略的waitFor方法中（我们上面以阻塞策略为例）会**保证消费者的序号小于生产者的序号；同时消费者的序号小于依赖的消费者的序号**，这样生产者和消费者、消费者和消费者之间的依赖关系就都被保证了。
+
+了解了SequenceBarrier之后，就会发现disruptor正是通过Sequencer和Sequencer协调关系消费者和生产者之间的关系，避免了锁和CAS操作。
+
+### 3.6.2 生产者消费者依赖总结
+
+通过上面的学习，我们发现序号Sequence需要满足三个条件：
+
+1. 消费者的序号必须小于生产者的序号
+2. 消费者的序号必须小于其依赖的消费者的序号
+3. 生产者的序号不能大于消费者最末端的序号，防止生产过快，造成消息覆盖
+
+这里第一条和第二条是在SequenceBarrier的waitFor方法中通过cursorSequence和dependentSequence两个属性实现的。第三条是在Sequencer的next方法中通过Sequencer的门禁序号实现的。
+
+disruptor正是通过这种巧妙地设计消除了锁和CAS操作。
+
 ## 3.7 RingBuffer
+
+Disruptor使用的是环形队列，如下图：
+
+![image-20221030193227058](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221030193227058.png)
+
+在Disruptor中是RingBuffer类，此类也和之前Sequence类似，进行了缓存行填充。在RingBuffer中使用了Object数组作为环形队列的实现，我们这里看一下其主要属性：
+
+![image-20221103211114288](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221103211114288.png)
+
+如上图RingBuffer使用Object数组来存储元素**注意此数组大小要求是2的幂，便于后续取余操作**，同时RingBuffer预先分配了内存，并将所有数组元素指定为特定的事件参数：
+
+```java
+private void fill(EventFactory<E> eventFactory)
+{
+    for (int i = 0; i < bufferSize; i++)
+    {
+        //通过这种预分配内存的方式，减少JVM的GC频率，提升性能
+        entries[BUFFER_PAD + i] = eventFactory.newInstance();
+    }
+}
+```
+
+当生产者向RingBuffer写入消息时，是先获取Event对象，然后更改其属性，而获取Event对象最终会通过RingBuffer的elementAt方法获取，方法如下
+
+```java
+protected final E elementAt(long sequence)
+{
+    //通过位运算取余计算， 避免数学运算的开销
+    return (E) UNSAFE.getObject(entries, REF_ARRAY_BASE + ((sequence & indexMask) << REF_ELEMENT_SHIFT));
+}
+```
+
+> 位运算取余：设X对Y求余，Y等于2^N，公式为：X & (2^N - 1)或X&(~Y)
+>
+> 参考链接：[位运算取余](http://www.javashuo.com/article/p-znklbhyx-kw.html)
 
 ## 3.8 WaitStrategy
 
+等待策略是指消费者当前若不能消费，应该以何种策略去等待是阻塞还是自旋等等。（注意这个版本的源码中生产者不使用等待策略，见3.3Sequencer）
+
+在Disruptor中有很多等待策略如下图，我们这里主要了解其中四个
+
+![image-20221103225335316](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221103225335316.png)
+
+### 3.8.1 BlockingWaitStrategy
+
+此策略是通过显式锁的条件等待队列实现的，如果当前消费者序号大于生产者序号（可以理解为消费队列为空）那么线程进入阻塞等待，直到生产者发布事件调用signalAllWhenBlocking唤醒。如果当前消费者依赖的消费者还未进行消费，那么就自旋等待，具体逻辑和源码如下：
+
+```java
+public final class BlockingWaitStrategy implements WaitStrategy
+{
+    private final Lock lock = new ReentrantLock();
+    private final Condition processorNotifyCondition = lock.newCondition();
+
+    @Override
+    public long waitFor(long sequence, Sequence cursorSequence, Sequence dependentSequence, SequenceBarrier barrier)
+        throws AlertException, InterruptedException
+    {
+        long availableSequence;
+        //当前消费者序号不能大于生产者序号
+        if (cursorSequence.get() < sequence)
+        {
+            lock.lock();
+            try
+            {
+                while (cursorSequence.get() < sequence)
+                {
+                    barrier.checkAlert();
+                    //阻塞等待
+                    processorNotifyCondition.await();
+                }
+            }
+            finally
+            {
+                lock.unlock();
+            }
+        }
+		//自旋等待依赖的消费者消费
+        while ((availableSequence = dependentSequence.get()) < sequence)
+        {
+            barrier.checkAlert();
+            //本质是一个空方法，在JDK9以后提供
+            ThreadHints.onSpinWait();
+        }
+
+        return availableSequence;
+    }
+
+    @Override
+    public void signalAllWhenBlocking()
+    {
+        lock.lock();
+        try
+        {
+            processorNotifyCondition.signalAll();
+        }
+        finally
+        {
+            lock.unlock();
+        }
+    }
+}
+```
+
+### 3.8.2 SleepingWaitStrategy
+
+此策略是通过线程睡眠实现的，如果当前消费者依赖的消费者还未进行消费，那么根据计数器情况进行不同的操作，一百次以内是自旋等待，一百次以后是进行线程让步，最后通过让线程不断睡眠100纳秒进行等待，具体逻辑和源码如下：
+
+```java
+@Override
+public long waitFor(
+    final long sequence, Sequence cursor, final Sequence dependentSequence, final SequenceBarrier barrier)
+    throws AlertException
+{
+    long availableSequence;
+    //默认值为200
+    int counter = retries;
+
+    while ((availableSequence = dependentSequence.get()) < sequence)
+    {
+        counter = applyWaitMethod(barrier, counter);
+    }
+
+    return availableSequence;
+}
+
+@Override
+public void signalAllWhenBlocking()
+{
+}
+
+private int applyWaitMethod(final SequenceBarrier barrier, int counter)
+    throws AlertException
+{
+    barrier.checkAlert();
+	//自旋一百次
+    if (counter > 100)
+    {
+        --counter;
+    }
+    //一百次之后进行线程让步
+    else if (counter > 0)
+    {
+        --counter;
+        Thread.yield();
+    }
+    //最终线程休眠100纳秒
+    else
+    {
+        //默认100纳秒
+        LockSupport.parkNanos(sleepTimeNs);
+    }
+
+    return counter;
+}
+```
+
+### 3.8.3 YieldingWaitStrategy
+
+
+
+### 3.8.4 BusySpinWaitStrategy
