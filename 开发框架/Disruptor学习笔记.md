@@ -1545,6 +1545,74 @@ private int applyWaitMethod(final SequenceBarrier barrier, int counter)
 
 ### 3.8.3 YieldingWaitStrategy
 
+此策略是通过线程让步实现的，如果当前消费者依赖的消费者还未进行消费，那么根据计数器情况进行不同的操作，一百次以内是空自旋等待，一百次以后是进行线程让步，具体逻辑和源码如下：
 
+```java
+@Override
+public long waitFor(
+    final long sequence, Sequence cursor, final Sequence dependentSequence, final SequenceBarrier barrier)
+    throws AlertException, InterruptedException
+{
+    long availableSequence;
+    //默认100次
+    int counter = SPIN_TRIES;
+
+    while ((availableSequence = dependentSequence.get()) < sequence)
+    {
+        counter = applyWaitMethod(barrier, counter);
+    }
+
+    return availableSequence;
+}
+
+@Override
+public void signalAllWhenBlocking()
+{
+}
+
+private int applyWaitMethod(final SequenceBarrier barrier, int counter)
+    throws AlertException
+{
+    barrier.checkAlert();
+	//一百次之后线程让步等待
+    if (0 == counter)
+    {
+        Thread.yield();
+    }
+    //一百次以内空自旋
+    else
+    {
+        --counter;
+    }
+
+    return counter;
+}
+```
 
 ### 3.8.4 BusySpinWaitStrategy
+
+此策略是通过线程空自旋实现的，如果当前消费者依赖的消费者还未进行消费，那么将不断的进行空自旋等待，具体逻辑和源码如下：
+
+```java
+@Override
+public long waitFor(
+    final long sequence, Sequence cursor, final Sequence dependentSequence, final SequenceBarrier barrier)
+    throws AlertException, InterruptedException
+{
+    long availableSequence;
+
+    while ((availableSequence = dependentSequence.get()) < sequence)
+    {
+        barrier.checkAlert();
+        //be
+        ThreadHints.onSpinWait();
+    }
+
+    return availableSequence;
+}
+
+@Override
+public void signalAllWhenBlocking()
+{
+}
+```
