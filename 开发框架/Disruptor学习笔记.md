@@ -1,11 +1,11 @@
 # Disruptor学习笔记
 
-> 初步笔记并未做细致整理
->
+**转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。**
+
 > 参考资料：
 >
 > - https://www.cnblogs.com/crazymakercircle/p/13909235.html
-> - 《Disruptor 红宝书》尼恩
+>- 《Disruptor 红宝书》尼恩
 > - https://jitwxs.cn/a7ed43af.html
 > - https://lmax-exchange.github.io/disruptor/user-guide/index.html#_getting_started
 > - https://www.jianshu.com/p/d2d50cf6d887
