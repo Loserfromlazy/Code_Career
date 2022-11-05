@@ -1015,7 +1015,7 @@ public boolean compareAndSet(final long expectedValue, final long newValue)
 }
 ```
 
-这里我们重点看一下`UNSAFE.putOrderedLong`延迟写入方法，因为我们的字段是volatile字段，因此根据JMM规范需要插入SS和Sl屏障，但是SL屏障开销很大，可以理解为需要保证当前写入对所有CPU可见，所以`putOrderedLong`延迟写入方法只使用了SS屏障，这样可能会造成写后结果并不会被其他线程立即看到即取消了可见性，但是可以提升性能，且延迟一般在纳秒级别，因此此方法可以提升写入性能。关于JVM内存屏障可以看我的笔记[CAS和原子类以及有序性和可见性](https://github.com/Loserfromlazy/Code_Career/blob/master/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E5%AD%A6%E4%B9%A0/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B%E7%AF%87%E4%B8%89CAS%E5%92%8C%E5%8E%9F%E5%AD%90%E7%B1%BB%E4%BB%A5%E5%8F%8A%E6%9C%89%E5%BA%8F%E6%80%A7%E5%92%8C%E5%8F%AF%E8%A7%81%E6%80%A7.md#45-jmm)
+这里我们重点看一下`UNSAFE.putOrderedLong`延迟写入方法，因为我们的字段是volatile字段，因此根据JMM规范需要插入SS和SL屏障，但是SL屏障开销很大，可以理解为需要保证当前写入对所有CPU可见，所以`putOrderedLong`延迟写入方法只使用了SS屏障，这样可能会造成写后结果并不会被其他线程立即看到即取消了可见性，但是可以提升性能，且延迟一般在纳秒级别，因此此方法可以提升写入性能。关于JVM内存屏障可以看我的笔记[CAS和原子类以及有序性和可见性](https://github.com/Loserfromlazy/Code_Career/blob/master/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E5%AD%A6%E4%B9%A0/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B%E7%AF%87%E4%B8%89CAS%E5%92%8C%E5%8E%9F%E5%AD%90%E7%B1%BB%E4%BB%A5%E5%8F%8A%E6%9C%89%E5%BA%8F%E6%80%A7%E5%92%8C%E5%8F%AF%E8%A7%81%E6%80%A7.md#45-jmm)
 
 ## 3.3 Sequencer
 
