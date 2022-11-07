@@ -395,7 +395,7 @@ docker run -id --name=c_redis -p 6379:6379 redis:5.0
 ./redis-cli.exe -h 192.168.149.135 -p 6379
 ```
 
-## 五、虚拟化技术
+## 五、虚拟化技术介绍
 
 ## 六、Dockerfile
 
@@ -462,6 +462,17 @@ dockerfile是一个文本文件，包含了一条条指令，每一条指令构�
 
 Dockerfile分为四部分：基础镜像信息、维护者信息、 镜像操作指令和容器启动时执行指令。
 
+在编写好dockerfile后就可以使用docker build命令制作镜像了，语法如下：
+
+`docker build 参数 Path|URL`
+
+其中常用参数如下：
+
+- --build-arg=[]  设置镜像创建时的变量
+- -f 指定要使用的Dockerfile的路径
+- --rm 设置镜像成功后删除中间容器
+- --tag  镜像的名字及标签，通常是name:tag或name的格式
+
 dockerfile常用字段：
 
 | 关键字      | 作用                     | 备注                                                         |
@@ -487,6 +498,8 @@ dockerfile常用字段：
 
 ### 6.3 案例
 
+**案例一：自定义Centos7镜像**
+
 自定义centos7镜像需求：
 
 1.默认登录路径为/usr
@@ -503,6 +516,8 @@ CMD /bin/bash
 
 `docker  build -f dockerfile的文件路径 -t 镜像名:版本`
 
+**案例二：发布SpringBoot项目**
+
 定义dockerfile发布springboot项目
 
 ~~~dockerfile
@@ -514,9 +529,126 @@ CMD java -jar app.jar
 
 `docker build -f  dockerfile的文件路径 -t 镜像名:版本`
 
+**案例三：MySQL镜像修改时区**
+
+```dockerfile
+FROM mysql:8.0.18
+MAINTAINER mysql from date UTC by Asia/Shanghai "loserfromlazy@163.com"
+ENV TZ Asia/Shanghai
+```
+
+`docker build --rm -t tmysql:8.0.18 .`这里使用`.`说明在当前目录下有名称为Dockerfile的文件，使用它去创建镜像
+
+![image-20221107181833104](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221107181833104.png)
+
 ## 七、Docker-compose
 
+在实际生产环境中，一个应用往往由许多服务构成，而 docker 的最佳实践是一个容器只运行一个进程，因此运行多个微服务就要运行多个容器。多个容器协同工作需要一个有效的工具来管理他们，定义这些容器如何相互关联。compose 应运而生。compose 是用来定义和运行一个或多个容器(通常都是多个)运行和应用的工具。使用 compose 可以简化容器镜像的构建以及容器的运行。
 
+compose 使用 YAML 文件来定义多容器之间的关系。一个 docker-compose up 就可以把完整的应用跑起来。 本质上， compose 把 YAML 文件解析成 docker 命令的参数，然后调用相应的 docker 命令行接口，从而将应用以容器化的方式管理起来。它通过解析容器间的依赖关系顺序地启动容器。而容器间的依赖关系由 YAML 文件中的 links 标记指定。
 
+### 7.1 安装
 
+通过以下命令安装，如不想用2.2.2版本请自行替换，最新发行的版本地址：https://github.com/docker/compose/releases
+
+`sudo curl -L "https://github.com/docker/compose/releases/download/v2.2.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose`
+
+你也可以通过下面的命令高速安装：
+
+~~~
+curl -L https://get.daocloud.io/docker/compose/releases/download/v2.4.1/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose
+~~~
+
+下载完成后使用命令给权限`sudo chmod +x /usr/local/bin/docker-compose`
+
+然后进行验证`docker-compose version`
+
+### 7.2 yml配置文件及常用指令
+
+Docker Compose 使用 YAML 文件来定义多服务的应用。YAML 是 JSON 的一个子集，因此也可以使用JSON。Docker Compose 默认使用文件名 docker-compose.yml。当然，也可以使用 -f 参数指定具体文件。
+
+Docker Compose 的yaml文件包含四个1级key：
+
+- version：必须指定，而且总是位于文件第一行，它定义了compose文件格式（主要是API）的版本。它并不是定义Docker Compose或Docker引擎的版本号。
+- services：用于定义不同的应用服务。比如我们可以定义一个mysql数据库服务，或者定义一个微服务。Dockers Compose会将每个服务部署在各自的容器中。
+- networks：用于指引Docker创建新的网络。默认情况下，Docker Compose会创建bridge网络，这是一种单主机网络，只能实现同一主机上容器的连接，当然，也可以用driver属性指定不同的网络类型。
+- volumes：用于指引Docker来创建新的卷
+
+关于docker compose的命令可以自行去看官方文档，这里贴出菜鸟教程的地址[docker-compose](https://www.runoob.com/docker/docker-compose.html)
+
+举个例子：
+
+~~~yaml
+# yaml 配置
+version: '3' #版本
+services:
+  web:
+    build: .
+    ports:
+     - "5000:5000"
+  redis:
+    image: "redis:alpine"
+~~~
+
+这个例子中有两个服务：web 和 redis。
+
+- **web**：该 web 服务使用从 Dockerfile 当前目录中构建的镜像。然后，它将容器和主机绑定到暴露的端口 5000。
+- **redis**：该 redis 服务使用 Docker Hub 的公共 Redis 映像。
+
+7.3 案例
+
+### 7.4 Dockers Compose常用命令
+
+这里以nginx举例：
+
+~~~
+#构建建启动nignx容器
+docker-compose up -d nginx                     
+
+#进入nginx容器中
+docker-compose exec nginx bash            
+
+#将会停止UP命令启动的容器，并删除容器
+docker-compose down                             
+
+#显示所有容器
+docker-compose ps                                   
+
+#重新启动nginx容器
+docker-compose restart nginx                   
+
+#构建镜像
+docker-compose build nginx      
+
+#不带缓存的构建
+docker-compose build --no-cache nginx 
+
+#查看nginx的日志
+docker-compose logs  nginx                      
+
+#查看nginx的实时日志
+docker-compose logs -f nginx                   
+
+#验证（docker-compose.yml）文件配置，
+#当配置正确时，不输出任何内容，当文件配置错误，输出错误信息
+docker-compose config  -q                        
+
+#以json的形式输出nginx的docker日志
+docker-compose events --json nginx       
+
+#暂停nignx容器
+docker-compose pause nginx                 
+
+#恢复ningx容器
+docker-compose unpause nginx             
+
+#删除容器
+docker-compose rm nginx                       
+
+#停止nignx容器
+docker-compose stop nginx                    
+
+#启动nignx容器
+docker-compose start nginx   
+~~~
 
