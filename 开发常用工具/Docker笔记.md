@@ -584,9 +584,62 @@ Docker Compose 的yaml文件包含四个1级key：
 - networks：用于指引Docker创建新的网络。默认情况下，Docker Compose会创建bridge网络，这是一种单主机网络，只能实现同一主机上容器的连接，当然，也可以用driver属性指定不同的网络类型。
 - volumes：用于指引Docker来创建新的卷
 
-关于docker compose的命令可以自行去看官方文档，这里贴出菜鸟教程的地址[docker-compose](https://www.runoob.com/docker/docker-compose.html)
+这里给出除了上面四个一级key以外，其他常用的key：
 
-举个例子：
+- image：指定容器运行的镜像，会从docker hub上下载并构建镜像。
+
+- build：指定构建镜像上下文路径，在该路径下有Dockerfile文件，根据该文件构建镜像。
+
+- container_name：指定自定义容器名称，而不是生成的默认名称。
+
+- hostname：hostname 声明用于服务容器的自定义主机名。
+
+- restart：重启策略
+
+  - no：是默认的重启策略，在任何情况下都不会重启容器。
+  - always：容器总是重新启动。
+  - on-failure：在容器非正常退出时（退出状态非0），才会重启容器。
+  - unless-stopped：在容器退出时总是重启容器，但是不考虑在Docker守护进程启动时就已经停止了的容器
+
+- ports：暴露容器端口。注意端口映射决不能与 network_mode: host 一起使用，这样做一定会导致运行时错误。
+
+- volumes：也可以做非一级key，将主机的数据卷或着文件挂载到容器里。
+
+- environment：添加环境变量。您可以使用数组或字典、任何布尔值，布尔值需要用引号引起来，以确保 YML 解析器不会将其转换为 True 或 False。例子：
+
+  ```yaml
+  environment:
+    RACK_ENV: development
+    SHOW: 'true'
+  ```
+
+- ulimits：覆盖容器默认的 ulimit。
+
+- networks：配置容器连接的网络，引用顶级 networks 下的条目。
+
+- depends_on：设置依赖关系。例子：
+
+  ```yaml
+  version: "3.7"
+  services:
+    web:
+      build: .
+      depends_on:
+        - db
+        - redis
+    redis:
+      image: redis
+    db:
+      image: postgres
+  ```
+
+  - docker-compose up ：以依赖性顺序启动服务。在上面例子中，先启动 db 和 redis ，才会启动 web。
+  - docker-compose up SERVICE ：自动包含 SERVICE 的依赖项。在上面例子中，docker-compose up web 还将创建并启动 db 和 redis。
+  - docker-compose stop ：按依赖关系顺序停止服务。在上面例子中，web 在 db 和 redis 之前停止。
+
+关于docker compose的更多命令可以自行去查看[官方文档](https://docs.docker.com/compose/compose-file/)，这里也贴出菜鸟教程的地址[docker-compose](https://www.runoob.com/docker/docker-compose.html)
+
+举个例子，例子来自官网：
 
 创建Dockerfile：
 
