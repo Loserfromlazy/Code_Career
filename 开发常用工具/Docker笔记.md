@@ -395,6 +395,16 @@ docker run -id --name=c_redis -p 6379:6379 redis:5.0
 ./redis-cli.exe -h 192.168.149.135 -p 6379
 ```
 
+### 5 部署ES、Kibana
+
+1. 拉取镜像
+
+   ```sh
+   docker pull docker.elastic.co/elasticsearch/elasticsearch:7.14.0
+   ```
+
+2. 创建容器
+
 ## 五、虚拟化技术介绍
 
 ## 六、Dockerfile
@@ -578,6 +588,24 @@ Docker Compose 的yaml文件包含四个1级key：
 
 举个例子：
 
+创建Dockerfile：
+
+~~~dockerfile
+# syntax=docker/dockerfile:1
+FROM python:3.7-alpine
+WORKDIR /code
+ENV FLASK_APP=app.py
+ENV FLASK_RUN_HOST=0.0.0.0
+RUN apk add --no-cache gcc musl-dev linux-headers
+COPY requirements.txt requirements.txt
+RUN pip install -r requirements.txt
+EXPOSE 5000
+COPY . .
+CMD ["flask", "run"]
+~~~
+
+编写Docker compose：
+
 ~~~yaml
 # yaml 配置
 version: '3' #版本
@@ -595,9 +623,7 @@ services:
 - **web**：该 web 服务使用从 Dockerfile 当前目录中构建的镜像。然后，它将容器和主机绑定到暴露的端口 5000。
 - **redis**：该 redis 服务使用 Docker Hub 的公共 Redis 映像。
 
-7.3 案例
-
-### 7.4 Dockers Compose常用命令
+### 7.3 Dockers Compose常用命令
 
 这里以nginx举例：
 
