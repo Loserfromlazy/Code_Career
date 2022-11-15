@@ -852,7 +852,175 @@ Channel和Selector可以说是多对一的关系，他们俩和SelectionKey就�
 
 ### 11.4.5 NIO示例
 
-暂略
+此示例暂未完成
+
+```java
+@Slf4j
+public class NIOSendFileClient {
+
+    public void sendFile() throws Exception {
+        //读取文件内容
+        File file = new File("");
+        if (!file.exists()){
+            log.error("文件不存在");
+            return;
+        }
+        FileInputStream inputStream = new FileInputStream(file);
+        FileChannel fileChannel = inputStream.getChannel();
+        ByteBuffer fileBuffer = ByteBuffer.allocate((int) file.length());
+
+        //连接服务端
+        SocketChannel socketChannel = SocketChannel.open();
+        socketChannel.configureBlocking(false);
+        socketChannel.setOption(StandardSocketOptions.TCP_NODELAY,true);
+        socketChannel.connect(new InetSocketAddress("localhost",9999));
+        while (socketChannel.finishConnect()){
+            //等待连接
+        }
+        if (socketChannel.isConnected()){
+            log.info("服务端连接成功");
+        }else {
+            log.info("服务端连接失败");
+            return;
+        }
+
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
+
+        //传输文件名称长度
+        String fileName = file.getName();
+        buffer.clear();
+        buffer.putInt(fileName.length());
+        buffer.flip();
+        socketChannel.write(buffer);
+        log.info("文件名称长度传输完成");
+        //传输文件名称
+        buffer.clear();
+        buffer.put(fileName.getBytes(StandardCharsets.UTF_8));
+        buffer.flip();
+        socketChannel.write(buffer);
+        log.info("文件名称传输完成");
+        //传输文件长度
+        buffer.clear();
+        buffer.putInt((int) file.length());
+        buffer.flip();
+        socketChannel.write(buffer);
+        log.info("文件长度传输完成");
+        //传输文件
+        int read=0;
+        while (( read = fileChannel.read(fileBuffer)) > 0){
+            fileBuffer.flip();
+            socketChannel.write(fileBuffer);
+            fileBuffer.clear();
+        }
+        log.info("文件传输完成");
+
+    }
+
+
+    public static void main(String[] args) throws Exception {
+        NIOSendFileClient client = new NIOSendFileClient();
+        client.sendFile();
+    }
+}
+```
+
+```java
+@Slf4j
+public class NioReceiveFileServer {
+
+    private ByteBuffer buffer = ByteBuffer.allocate(1024);
+
+    class Session{
+        String fileName;
+        long fileLength;
+        int fileNameLength;
+        int step =1;
+
+    }
+
+    private Map<Channel,Session> clientMap = new HashMap<>();
+
+    public void start() throws Exception {
+        ServerSocketChannel serverChannel = ServerSocketChannel.open();
+        Selector selector = Selector.open();
+        serverChannel.configureBlocking(false);
+        serverChannel.setOption(StandardSocketOptions.TCP_NODELAY, true);
+        serverChannel.bind(new InetSocketAddress(9999));
+        serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+        while (selector.select() > 0) {
+            if (selector.selectedKeys() == null) continue;
+            Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
+            while (iterator.hasNext()){
+                SelectionKey selectionKey = iterator.next();
+                if (selectionKey.isConnectable()){
+                    ServerSocketChannel channel = (ServerSocketChannel) selectionKey.channel();
+                    SocketChannel socketChannel = channel.accept();
+                    socketChannel.configureBlocking(false);
+                    socketChannel.register(selector,SelectionKey.OP_READ);
+                    Session session = new Session();
+                    clientMap.put(socketChannel,session);
+                }else if (selectionKey.isReadable()){
+                    handleData(selectionKey);
+                }
+            }
+        }
+    }
+
+    public void handleData(SelectionKey selectionKey) throws IOException {
+        SocketChannel channel = (SocketChannel) selectionKey.channel();
+        Session session = clientMap.get(channel);
+        buffer.clear();
+        int read;
+        while ((read =channel.read(buffer))>0){
+            buffer.flip();
+            process(buffer,session);
+        }
+        buffer.clear();
+    }
+
+    public void process(ByteBuffer buffer,Session session){
+        switch (session.step){
+            case 1:
+                if (buffer.remaining()<4){
+                    log.error("发生半包的拆包问题，暂时并未处理");
+                    throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
+                }
+                session.fileNameLength = buffer.getInt();
+                session.step =2;
+                break;
+            case 2:
+                if (buffer.remaining()<session.fileNameLength){
+                    log.error("发生半包的拆包问题，暂时并未处理");
+                    throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
+                }
+                byte [] bytes = new byte[session.fileNameLength];
+                buffer.get(bytes,0,session.fileNameLength);
+                session.fileName = new String(bytes);
+                session.step = 3;
+                break;
+            case 3:
+                if (buffer.remaining()<4){
+                    log.error("发生半包的拆包问题，暂时并未处理");
+                    throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
+                }
+                session.fileLength = buffer.getInt();
+                session.step =3;
+                break;
+            case 4:
+                
+                break;
+            default:
+                log.error("没有此步骤，发生未知错误");
+                throw new RuntimeException("没有此步骤，发生未知错误");
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        NioReceiveFileServer server = new NioReceiveFileServer();
+        server.start();
+    }
+}
+```
 
 ## 11.5 NIO原理
 
