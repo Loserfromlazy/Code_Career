@@ -415,8 +415,6 @@ socket的接收缓冲区状态变化时触发读事件，即空的接收缓冲�
 
 # 十一、Java NIO
 
-> NIO的实例暂时略，可以先看我的博客中的简单的示例和Reactor模式中的示例，后续会进行补充。
-
 ## 11.1 简介
 
 Java NIO类库包含以下三个核心组件：Channel（通道）Buffer（缓冲区）Selector（选择器）。JavaNIO属于异步阻塞模型（IO多路复用模型）。
@@ -850,9 +848,11 @@ Channel和Selector可以说是多对一的关系，他们俩和SelectionKey就�
 
 
 
-### 11.4.5 NIO示例
+### 11.4.5 NIO实例
 
-此示例暂未完成
+这里，通过一个NIO文件传输的例子，熟悉NIO的用法，这里解决了半包问题中的粘包问题，并没有解决拆包问题。
+
+客户端代码，客户端主要是传输文件到服务端，这里传输文件名和文件内容时会先传输一个长度，即length-content协议：
 
 ```java
 @Slf4j
@@ -860,21 +860,21 @@ public class NIOSendFileClient {
 
     public void sendFile() throws Exception {
         //读取文件内容
-        File file = new File("");
+        File file = new File("D:\\IDEA\\modules.zip");
         if (!file.exists()){
             log.error("文件不存在");
             return;
         }
         FileInputStream inputStream = new FileInputStream(file);
         FileChannel fileChannel = inputStream.getChannel();
-        ByteBuffer fileBuffer = ByteBuffer.allocate((int) file.length());
+
 
         //连接服务端
         SocketChannel socketChannel = SocketChannel.open();
         socketChannel.configureBlocking(false);
         socketChannel.setOption(StandardSocketOptions.TCP_NODELAY,true);
         socketChannel.connect(new InetSocketAddress("localhost",9999));
-        while (socketChannel.finishConnect()){
+        while (!socketChannel.finishConnect()){
             //等待连接
         }
         if (socketChannel.isConnected()){
@@ -892,28 +892,35 @@ public class NIOSendFileClient {
         buffer.putInt(fileName.length());
         buffer.flip();
         socketChannel.write(buffer);
-        log.info("文件名称长度传输完成");
+        log.info("文件名称长度传输完成,长度={}",fileName.length());
         //传输文件名称
         buffer.clear();
         buffer.put(fileName.getBytes(StandardCharsets.UTF_8));
         buffer.flip();
         socketChannel.write(buffer);
-        log.info("文件名称传输完成");
+        log.info("文件名称传输完成,文件名称={}",fileName);
         //传输文件长度
         buffer.clear();
         buffer.putInt((int) file.length());
         buffer.flip();
         socketChannel.write(buffer);
-        log.info("文件长度传输完成");
+        log.info("文件长度传输完成,文件长度={}",file.length());
         //传输文件
         int read=0;
-        while (( read = fileChannel.read(fileBuffer)) > 0){
-            fileBuffer.flip();
-            socketChannel.write(fileBuffer);
-            fileBuffer.clear();
+        buffer.clear();
+        while (( read = fileChannel.read(buffer)) > 0){
+            buffer.flip();
+            //等待缓冲区发送完，不然大文件可能会
+            while (socketChannel.write(buffer) <=0)
+            buffer.clear();
+        }
+        Thread.sleep(60000);
+        if (read == -1){
+            fileChannel.close();
+            socketChannel.shutdownOutput();
+            socketChannel.close();
         }
         log.info("文件传输完成");
-
     }
 
 
@@ -922,7 +929,10 @@ public class NIOSendFileClient {
         client.sendFile();
     }
 }
+
 ```
+
+服务端代码，服务端主要解决了半包问题中的粘包问题（此问题见13.9.1），就是通过将读取文件名长度、文件名、文件长度、文件内容分步骤，然后通过循环读取解决了粘包问题。代码如下：
 
 ```java
 @Slf4j
@@ -935,7 +945,8 @@ public class NioReceiveFileServer {
         long fileLength;
         int fileNameLength;
         int step =1;
-
+        FileChannel fileChannel;
+        int receiveLength;
     }
 
     private Map<Channel,Session> clientMap = new HashMap<>();
@@ -944,24 +955,27 @@ public class NioReceiveFileServer {
         ServerSocketChannel serverChannel = ServerSocketChannel.open();
         Selector selector = Selector.open();
         serverChannel.configureBlocking(false);
-        serverChannel.setOption(StandardSocketOptions.TCP_NODELAY, true);
+        //serverChannel.setOption(StandardSocketOptions.TCP_NODELAY, true);
         serverChannel.bind(new InetSocketAddress(9999));
         serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+        log.info("开始监听9999端口");
         while (selector.select() > 0) {
             if (selector.selectedKeys() == null) continue;
             Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
             while (iterator.hasNext()){
                 SelectionKey selectionKey = iterator.next();
-                if (selectionKey.isConnectable()){
+                if (selectionKey.isAcceptable()){
                     ServerSocketChannel channel = (ServerSocketChannel) selectionKey.channel();
                     SocketChannel socketChannel = channel.accept();
                     socketChannel.configureBlocking(false);
                     socketChannel.register(selector,SelectionKey.OP_READ);
                     Session session = new Session();
                     clientMap.put(socketChannel,session);
+                    log.info("新客户端加入，channel={}",channel);
                 }else if (selectionKey.isReadable()){
                     handleData(selectionKey);
                 }
+                iterator.remove();
             }
         }
     }
@@ -970,48 +984,66 @@ public class NioReceiveFileServer {
         SocketChannel channel = (SocketChannel) selectionKey.channel();
         Session session = clientMap.get(channel);
         buffer.clear();
-        int read;
-        while ((read =channel.read(buffer))>0){
+        int read =0;
+        while ((read =channel.read(buffer))!=-1){
             buffer.flip();
             process(buffer,session);
+            buffer.clear();
         }
-        buffer.clear();
     }
 
-    public void process(ByteBuffer buffer,Session session){
-        switch (session.step){
-            case 1:
-                if (buffer.remaining()<4){
-                    log.error("发生半包的拆包问题，暂时并未处理");
-                    throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
-                }
-                session.fileNameLength = buffer.getInt();
-                session.step =2;
-                break;
-            case 2:
-                if (buffer.remaining()<session.fileNameLength){
-                    log.error("发生半包的拆包问题，暂时并未处理");
-                    throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
-                }
-                byte [] bytes = new byte[session.fileNameLength];
-                buffer.get(bytes,0,session.fileNameLength);
-                session.fileName = new String(bytes);
-                session.step = 3;
-                break;
-            case 3:
-                if (buffer.remaining()<4){
-                    log.error("发生半包的拆包问题，暂时并未处理");
-                    throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
-                }
-                session.fileLength = buffer.getInt();
-                session.step =3;
-                break;
-            case 4:
-                
-                break;
-            default:
-                log.error("没有此步骤，发生未知错误");
-                throw new RuntimeException("没有此步骤，发生未知错误");
+    public void process(ByteBuffer buffer,Session session) throws IOException {
+        while (buffer.remaining() > 0) {
+            switch (session.step){
+                case 1:
+                    if (buffer.remaining()<4){
+                        log.error("发生半包的拆包问题，暂时并未处理");
+                        throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
+                    }
+                    session.fileNameLength = buffer.getInt();
+                    session.step =2;
+                    log.info("步骤1处理完成,文件名称长度{}",session.fileNameLength);
+                    break;
+                case 2:
+                    if (buffer.remaining()<session.fileNameLength){
+                        log.error("发生半包的拆包问题，暂时并未处理");
+                        throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
+                    }
+                    byte [] bytes = new byte[session.fileNameLength];
+                    buffer.get(bytes,0,session.fileNameLength);
+                    session.fileName = new String(bytes);
+                    session.step = 3;
+                    log.info("步骤2处理完成,文件名称{}",session.fileName);
+                    break;
+                case 3:
+                    if (buffer.remaining()<4){
+                        log.error("发生半包的拆包问题，暂时并未处理");
+                        throw new RuntimeException("发生半包的拆包问题，暂时并未处理");
+                    }
+                    session.fileLength = buffer.getInt();
+                    File file = new File("D:\\001\\"+session.fileName);
+                    if (!file.exists()){
+                        file.createNewFile();
+                    }
+                    FileOutputStream fileOutputStream = new FileOutputStream(file);
+                    FileChannel channel = fileOutputStream.getChannel();
+                    session.fileChannel=channel;
+                    session.step =4;
+                    log.info("步骤3处理完成,文件长度{}",session.fileLength);
+                    break;
+                case 4:
+                    session.receiveLength += buffer.remaining();
+                    log.info("已接收字节数={},总接收={}",buffer.remaining(),session.receiveLength);
+                    session.fileChannel.write(buffer);
+                    if (session.fileLength <= session.receiveLength){
+                        log.info("完成文件传输");
+                        session.fileChannel.close();
+                    }
+                    break;
+                default:
+                    log.error("没有此步骤，发生未知错误");
+                    throw new RuntimeException("没有此步骤，发生未知错误");
+            }
         }
     }
 
@@ -1020,6 +1052,7 @@ public class NioReceiveFileServer {
         server.start();
     }
 }
+
 ```
 
 ## 11.5 NIO原理
