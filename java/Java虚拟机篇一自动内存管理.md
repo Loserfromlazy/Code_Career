@@ -643,11 +643,58 @@ public class ReferenceCount {
 
 - 软引用是用来描述一些还有用，但非必须的对象，只要被软引用关联着的对象，在系统即将要发生内存溢出前，会把这些对象列为回收范围进行第二次回收，如果这次回收还没有足够的内存才会抛出内存溢出异常。在JDK1.2后提供了SoftReference类来实现软引用。
 
-- 弱引用。这也是用来描述那些非必需对象的，但它比软引用还要弱一些，只要到下一次垃圾收集，无论内存是否足够，都会回收掉只被弱引用关联的对象。在jdk1.2后提供了WeakReference来实现弱引用。
+- 弱引用。这也是用来描述那些非必需对象的，但它比软引用还要弱一些，只要到下一次垃圾收集，无论内存是否足够，都会回收掉只被弱引用关联的对象。也就是说如果该对象只有一个弱引用，那么到下次GC时就会被回收掉。弱引用会和一个引用队列联合使用，如果弱引用的对象被回收掉，那么JVM就会将这个引用加入到与之关联的引用队列中。弱引用的对象可以通过弱引用的get方法获取。在jdk1.2后提供了WeakReference来实现弱引用。
 
   在ThreadLocalMap中的key就是通过弱引用进行包裹的。具体可见我的[Java高并发笔记一多线程](https://github.com/Loserfromlazy/Code_Career/blob/master/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E5%AD%A6%E4%B9%A0/Java%E9%AB%98%E5%B9%B6%E5%8F%91%E7%BC%96%E7%A8%8B%E7%AF%87%E4%B8%80%E5%A4%9A%E7%BA%BF%E7%A8%8B.md#173-threadlocal%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90)
 
-- 虚引用，又称为幽灵或幻影引用，它是最弱的一种引用，一个对象是否有虚引用存在，完全不对其生存空间有影响，也无法通过虚引用来取得一个对象实例，为一个对象设置虚引用的唯一目的是为了在这个对象被收集器回收前收到一个系统通知。在jdk1.2后提供PhantomReference来实现虚引用。
+  这里给出一个示例：
+
+  ```java
+  @Test
+  public void testWeakReference(){
+      String str = new String("123");
+      WeakReference<String> stringWeakReference = new WeakReference<>(str);
+      str = null;
+      log.info(stringWeakReference.get());
+      System.gc();
+      log.info(stringWeakReference.get());
+  }
+  //运行结果：
+  //17:35:05.759 [main] INFO com.example.test.testReference.TestIt - 123
+  //17:35:05.764 [main] INFO com.example.test.testReference.TestIt - null
+  ```
+
+- 虚引用，又称为幽灵或幻影引用，它是最弱的一种引用，一个对象是否有虚引用存在，完全不对其生存空间有影响，也无法通过虚引用来取得一个对象实例，为一个对象设置虚引用的唯一目的是为了在这个对象被收集器回收前收到一个系统通知。在jdk1.2后提供PhantomReference来实现虚引用。在NIO的DirectBuffer中的Cleaner使用了虚引用，具体可见我的[Java零拷贝笔记](https://github.com/Loserfromlazy/Code_Career/blob/master/Java%E8%BF%9B%E9%98%B6/%E9%9B%B6%E6%8B%B7%E8%B4%9D.md)。
+
+  举个例子：
+
+  ```java
+  @Test
+  public void testPhantomReference() throws InterruptedException {
+      String str = new String("123");
+      ReferenceQueue referenceQueue = new ReferenceQueue();
+      PhantomReference<String> phantomReference = new PhantomReference<>(str,referenceQueue);
+      log.info(String.valueOf(phantomReference));
+      //虚引用的get返回的时null
+      log.info(phantomReference.get());
+      str = null;
+      log.info(phantomReference.get());
+      System.gc();
+      while (true){
+          Reference poll = referenceQueue.poll();
+          if (poll!=null){
+              //gc后可以通过引用队列拿到该虚引用对象
+              log.info(String.valueOf(poll));
+          }
+          Thread.sleep(1000);
+      }
+  }
+  //运行结果：
+  //17:45:03.661 [main] INFO 。。。.TestIt - java.lang.ref.PhantomReference@6c80d78a
+  //17:45:03.662 [main] INFO 。。。.TestIt - null
+  //17:45:03.663 [main] INFO 。。。.TestIt - null
+  //17:45:04.678 [main] INFO 。。。.TestIt - java.lang.ref.PhantomReference@6c80d78a
+  ```
 
 ### 2.1.4 可达性分析的缓刑
 
