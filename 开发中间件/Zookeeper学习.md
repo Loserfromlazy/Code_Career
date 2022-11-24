@@ -5,6 +5,7 @@
 > 参考资料：
 >
 > - Java高并发核心编程卷1
+> - https://cdn.modb.pro/db/237605
 
 # 一、概述
 
@@ -336,4 +337,81 @@ public class TestZkWatcher {
     }
 }
 ```
+
+- Node Cache节点缓存可以用于ZNode节点的监听；
+- Path Cache子节点缓存用于ZNode的子节点的监听；
+- Tree Cache树缓存是Path Cache的增强，不仅仅能监听子节点，也能监听ZNode节点自身。
+
+```java
+@Test
+public void testNodeCache(){
+    CuratorFramework client = ClientFactory.createSimple(ZK_ADDRESS);
+    client.start();
+    try {
+        NodeCache nodeCache = new NodeCache(client,workerPath,false);
+        NodeCacheListener listener = new NodeCacheListener() {
+            @Override
+            public void nodeChanged() throws Exception {
+                ChildData currentData = nodeCache.getCurrentData();
+                log.info("####节点变化,path={}",currentData.getPath());
+                log.info("####节点变化,data={}",new String(currentData.getData(),StandardCharsets.UTF_8));
+                log.info("####节点变化,stat={}",currentData.getStat());
+            }
+        };
+        nodeCache.getListenable().addListener(listener);
+        nodeCache.start();
+        client.setData().forPath(workerPath,"第111111次变动".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(1000);
+        client.setData().forPath(workerPath,"第222222次变动".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(1000);
+        client.setData().forPath(workerPath,"第333333次变动".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(Integer.MAX_VALUE);
+    }catch (Exception e){
+        e.printStackTrace();
+    }
+}
+```
+
+对于Zookeeper3.6.x之前版本，Curator提供的Cache分为Path Cache、NodeCache、Tree Cache，三者隶属于三个独立的类。对于之后的版本，统一使用一个工具类CuratorCache实现。就是说，Zookeeper3.6.x之后版本，Path Cache、Node Cache、Tree Cache均标记为废弃，建议使用Curator Cache。
+
+```java
+@Test
+public void testCuratorCache() {
+    CuratorFramework client = ClientFactory.createSimple(ZK_ADDRESS);
+    client.start();
+    try {
+        CuratorCache curatorCache = CuratorCache.build(client, workerPath, CuratorCache.Options.SINGLE_NODE_CACHE);
+
+        curatorCache.listenable().addListener(new CuratorCacheListener() {
+            @Override
+            public void event(Type type, ChildData oldData, ChildData data) {
+                switch (type.name()) {
+                    case "NODE_CREATED":
+                        System.out.println("####NODE_CREATED: " + oldData + " : " + data);
+                        break;
+                    case "NODE_CHANGED":
+                        System.out.println("####NODE_CHANGED: " + oldData + " : " + data);
+                        break;
+                    case "NODE_DELETED":
+                        System.out.println("####NODE_DELETED: " + oldData + " : " + data);
+                        break;
+                    default:
+                        break;
+                }
+            }
+        });
+        curatorCache.start();
+        client.setData().forPath(workerPath, "第111111次变动".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(1000);
+        client.setData().forPath(workerPath, "第222222次变动".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(1000);
+        client.setData().forPath(workerPath, "第333333次变动".getBytes(StandardCharsets.UTF_8));
+        Thread.sleep(Integer.MAX_VALUE);
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+}
+```
+
+# 四、分布式锁
 
