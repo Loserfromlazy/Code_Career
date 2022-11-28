@@ -342,6 +342,8 @@ public class TestZkWatcher {
 - Path Cache子节点缓存用于ZNode的子节点的监听；
 - Tree Cache树缓存是Path Cache的增强，不仅仅能监听子节点，也能监听ZNode节点自身。
 
+下面是NodeCache的例子：
+
 ```java
 @Test
 public void testNodeCache(){
@@ -372,7 +374,7 @@ public void testNodeCache(){
 }
 ```
 
-对于Zookeeper3.6.x之前版本，Curator提供的Cache分为Path Cache、NodeCache、Tree Cache，三者隶属于三个独立的类。对于之后的版本，统一使用一个工具类CuratorCache实现。就是说，Zookeeper3.6.x之后版本，Path Cache、Node Cache、Tree Cache均标记为废弃，建议使用Curator Cache。
+对于Zookeeper3.6.x之前版本，Curator提供的Cache分为Path Cache、NodeCache、Tree Cache，三者隶属于三个独立的类。对于之后的版本，统一使用一个工具类CuratorCache实现。就是说，Zookeeper3.6.x之后版本，Path Cache、Node Cache、Tree Cache均标记为废弃，建议使用Curator Cache。例子如下：
 
 ```java
 @Test
