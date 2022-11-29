@@ -5,7 +5,8 @@
 > 参考资料：
 >
 > - Java高并发核心编程卷1
-> - https://cdn.modb.pro/db/237605
+> - https://blog.csdn.net/qq_37960603/article/details/121835169
+> - https://github.com/apache/curator/blob/master/curator-examples/src/main/java/cache/CuratorCacheExample.java
 
 # 一、概述
 
@@ -299,6 +300,10 @@ public void testIDMaker(){
 
 # 三、分布式事件监听
 
+针对ZooKeeper服务端的节点操作事件监听，是客户端操作服务器的一项重点工作。在Curator的API中，事件监听有两种方式：一是标准的观察者模式，二是缓存监听模式。标准的观察者模式，是通过Watcher监听器实现，缓存监听模式则是引入了本地缓存Cache机制实现。简单地理解，Cache在客户端缓存了Znode的各种状态，当感知到Zookeeper集群的Znode变化，会触发event事件，注册到这些事件上的监听器会处理这些事件。虽然Cache是缓存机制，但是可以借助Cache实现事件的监听，并且Watcher只能监听一次，Cache可以多次监听。
+
+下面是Watcher的用法：
+
 ```java
 @Slf4j
 public class TestZkWatcher {
@@ -318,12 +323,18 @@ public class TestZkWatcher {
             if (stat==null){
                 client.create().creatingParentsIfNeeded().forPath(workerPath);
             }
+            //构建Watcher实例
             Watcher watcher = new Watcher() {
+                //process是回调方法；Watcher只能监听一次
                 @Override
                 public void process(WatchedEvent watchedEvent) {
+                    //输出结果为：
+                    //####监听的变化 watchEvent=WatchedEvent state:SyncConnected type:NodeDataChanged path:/test/listener/remoteNode
                     System.out.println("####监听的变化 watchEvent="+watchedEvent);
                 }
             };
+            //一般来说可以通过GetDataBuilder、GetChildrenBuilder、ExistsBuidler等实现了Watchable接口的构造者实例，通过其usingWatcher方法使用Watcher监听器
+            //比如下面getData()返回的就是一个GetDataBuilder实例
             byte[] bytes = client.getData().usingWatcher(watcher).forPath(workerPath);
             log.info("监听节点内容={}",new String(bytes));
             client.setData().forPath(workerPath,"第一次变动".getBytes(StandardCharsets.UTF_8));
@@ -338,11 +349,17 @@ public class TestZkWatcher {
 }
 ```
 
+在WatchedEvent中一共有三个属性：keeperState通知状态、eventType事件类型、path节点路径，三个属性。关于通知状态和事件类型如下图：（图片来自高并发核心编程卷一）
+
+![image-20221129100029635](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221129100029635.png)
+
+Curator引入的Cache缓存实现，Cache缓存拥有一个系列的类型，包括了Node Cache 、Path Cache、Tree Cache三组类：
+
 - Node Cache节点缓存可以用于ZNode节点的监听；
 - Path Cache子节点缓存用于ZNode的子节点的监听；
 - Tree Cache树缓存是Path Cache的增强，不仅仅能监听子节点，也能监听ZNode节点自身。
 
-下面是NodeCache的例子：
+下面是Node Cache的例子：
 
 ```java
 @Test
@@ -374,6 +391,14 @@ public void testNodeCache(){
 }
 ```
 
+下面是Path Cache的例子：
+
+
+
+下面是Tree Cache的例子：
+
+
+
 对于Zookeeper3.6.x之前版本，Curator提供的Cache分为Path Cache、NodeCache、Tree Cache，三者隶属于三个独立的类。对于之后的版本，统一使用一个工具类CuratorCache实现。就是说，Zookeeper3.6.x之后版本，Path Cache、Node Cache、Tree Cache均标记为废弃，建议使用Curator Cache。例子如下：
 
 ```java
@@ -382,26 +407,43 @@ public void testCuratorCache() {
     CuratorFramework client = ClientFactory.createSimple(ZK_ADDRESS);
     client.start();
     try {
+        /*默认已指定节点为根的整个子树都被缓存；如果使用SINGLE_NODE_CACHE则只会缓存指定的节点
+            * CuratorCache.Options除了单节点还有两个选项：
+            * COMPRESSED_DATA： 通过org.apache.curator.framework.api.GetDataBuilder.decompressed()解压数据
+            * DO_NOT_CLEAR_ON_CLOSE：当通过close()关闭缓存时，会通过CuratorCacheStorage.clear()清除storage，此选项可以防止storage被清除
+             * */
         CuratorCache curatorCache = CuratorCache.build(client, workerPath, CuratorCache.Options.SINGLE_NODE_CACHE);
-
-        curatorCache.listenable().addListener(new CuratorCacheListener() {
-            @Override
-            public void event(Type type, ChildData oldData, ChildData data) {
-                switch (type.name()) {
-                    case "NODE_CREATED":
-                        System.out.println("####NODE_CREATED: " + oldData + " : " + data);
-                        break;
-                    case "NODE_CHANGED":
-                        System.out.println("####NODE_CHANGED: " + oldData + " : " + data);
-                        break;
-                    case "NODE_DELETED":
-                        System.out.println("####NODE_DELETED: " + oldData + " : " + data);
-                        break;
-                    default:
-                        break;
-                }
-            }
-        });
+        //通过lambda构建listener
+        CuratorCacheListener listener = CuratorCacheListener.builder()
+            //添加缓存中的数据时调用
+            .forCreates(node -> System.out.println(String.format("####Node created: [%s]", node)))
+            //修改缓存中的数据时调用
+            .forChanges((oldNode, node) -> System.out.println(String.format("####Node changed. Old: [%s] New: [%s]", oldNode, node)))
+            //删除缓存中的数据时调用
+            .forDeletes(oldNode -> System.out.println(String.format("####Node deleted. Old value: [%s]", oldNode)))
+            //初始化完成时调用
+            .forInitialized(() -> System.out.println("####Cache initialized"))
+            .build();
+        curatorCache.listenable().addListener(listener);
+        //匿名创建listener
+        //            curatorCache.listenable().addListener(new CuratorCacheListener() {
+        //                @Override
+        //                public void event(Type type, ChildData oldData, ChildData data) {
+        //                    switch (type.name()) {
+        //                        case "NODE_CREATED":
+        //                            System.out.println("####NODE_CREATED: " + oldData + " : " + data);
+        //                            break;
+        //                        case "NODE_CHANGED":
+        //                            System.out.println("####NODE_CHANGED: " + oldData + " : " + data);
+        //                            break;
+        //                        case "NODE_DELETED":
+        //                            System.out.println("####NODE_DELETED: " + oldData + " : " + data);
+        //                            break;
+        //                        default:
+        //                            break;
+        //                    }
+        //                }
+        //            });
         curatorCache.start();
         client.setData().forPath(workerPath, "第111111次变动".getBytes(StandardCharsets.UTF_8));
         Thread.sleep(1000);
