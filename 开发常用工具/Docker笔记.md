@@ -397,13 +397,18 @@ docker run -id --name=c_redis -p 6379:6379 redis:5.0
 
 ### 5 部署ES、Kibana
 
+> - https://www.elastic.co/guide/en/elasticsearch/reference/8.6/advanced-configuration.html#set-jvm-options
+> - https://blog.csdn.net/qq_39314099/article/details/105532460
+
 1. 拉取镜像
 
    ```sh
    docker pull docker.elastic.co/elasticsearch/elasticsearch:7.14.0
    ```
 
-2. 创建容器
+2. 创建启动容器
+
+   
 
 ## 五、虚拟化技术介绍
 
