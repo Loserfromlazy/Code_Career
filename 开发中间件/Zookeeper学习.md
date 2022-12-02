@@ -459,3 +459,184 @@ public void testCuratorCache() {
 
 # 四、分布式锁
 
+暂未完成
+
+```java
+package com.learn.zkLock;
+
+import com.learn.zookeeper.ClientFactory;
+import org.apache.curator.framework.CuratorFramework;
+import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.WatchedEvent;
+import org.apache.zookeeper.Watcher;
+import org.apache.zookeeper.data.Stat;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * <p>
+ * ZkLook
+ * </p>
+ *
+ * @author Yuhaoran
+ * @since 2022/11/25
+ */
+public class ZkLock implements Lock{
+
+    private static final String LOCK_PATH="/lock/mylock";
+    private static final String LOCK_PREFIX = LOCK_PATH+"/";
+    private static final String ZK_ADDRESS = "127.0.0.1:2181";
+    private static String lockNumber;
+    private static String lastNumber;
+    CuratorFramework client = null;
+    AtomicInteger lockCount = new AtomicInteger(0);
+    Thread thread;
+
+    public ZkLock() {
+        client = ClientFactory.createSimple(ZK_ADDRESS);
+        client.start();
+        try {
+            Stat stat = client.checkExists().forPath(LOCK_PATH);
+            if (stat==null){
+                client.create().creatingParentsIfNeeded().forPath(LOCK_PATH);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public boolean lock() {
+        synchronized (this){
+            if (lockCount.get() ==0){
+                thread = Thread.currentThread();
+                lockCount.incrementAndGet();
+            }else {
+                //不是当前线程不能重入
+                if (!thread.equals(Thread.currentThread())){
+                    return false;
+                }
+                lockCount.incrementAndGet();
+            }
+        }
+
+        try {
+            boolean locked = tryLock();
+            if (locked){
+                return true;
+            }
+            while (!locked){
+                await();
+                List<String> waiters = getWaiters();
+                if (checkLocked(waiters)){
+                    locked = true;
+                }
+            }
+            return true;
+        }catch (Exception e){
+            lockCount.decrementAndGet();
+            e.printStackTrace();
+        }
+        return false;
+    }
+
+    @Override
+    public boolean unlock() {
+        if (!thread.equals(Thread.currentThread())){
+            return false;
+        }
+        lockCount.decrementAndGet();
+        if (lockCount.get()<0){
+            throw new RuntimeException("当前并未上锁，无法释放锁");
+        }
+        if (lockCount.get()!=0){
+            return true;
+        }
+        try {
+            Stat stat = client.checkExists().forPath(LOCK_PREFIX + lockNumber);
+            if (stat!=null){
+                client.delete().forPath(LOCK_PREFIX+lockNumber);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+        return true;
+    }
+
+    private boolean tryLock() throws Exception {
+        String forPath = client.create().creatingParentsIfNeeded().withMode(CreateMode.EPHEMERAL_SEQUENTIAL).forPath(LOCK_PREFIX);
+        lockNumber = forPath.substring(LOCK_PREFIX.length());
+        List<String> waiters = getWaiters();
+        Collections.sort(waiters);
+        if (checkLocked(waiters)){
+            return true;
+        }
+        int index = Collections.binarySearch(waiters, lockNumber);
+        if (index <0){
+            throw new RuntimeException("发生异常,找不到当前节点");
+        }
+        lastNumber = LOCK_PREFIX+ waiters.get(index - 1);
+        return false;
+    }
+
+    private boolean checkLocked(List<String> waiters){
+        return lockNumber.equals(waiters.get(0));
+    }
+
+    //获取等待队列
+    private List<String> getWaiters() throws Exception {
+        return client.getChildren().forPath(LOCK_PATH);
+    }
+
+    private void await() throws Exception {
+        if (lastNumber == null){
+            throw new RuntimeException("前一节点为空");
+        }
+        CountDownLatch latch = new CountDownLatch(1);
+        client.getData().usingWatcher(new Watcher() {
+            @Override
+            public void process(WatchedEvent event) {
+                System.out.println("####监听到变化，event="+event);
+                latch.countDown();
+            }
+        }).forPath(lastNumber);
+        latch.await();
+    }
+
+    public static void main(String[] args) throws Exception {
+        ZkLock lock = new ZkLock();
+        lock.tryLock();
+    }
+}
+```
+
+```java
+public class TestZkLock {
+    int count=0;
+    @Test
+    public void testZkLock() throws InterruptedException {
+
+        ExecutorService service = Executors.newFixedThreadPool(10);
+        for (int i = 0; i < 10; i++) {
+            service.submit(new Runnable() {
+                @Override
+                public void run() {
+                    ZkLock zkLock = new ZkLock();
+                    zkLock.lock();
+                    for (int j = 0; j < 10; j++) {
+                        count++;
+                    }
+                    zkLock.unlock();
+                    System.out.println("####"+count);
+                }
+            });
+        }
+        System.out.println(count);
+        Thread.sleep(Integer.MAX_VALUE);
+    }
+}
+```
