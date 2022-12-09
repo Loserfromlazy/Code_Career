@@ -5,8 +5,8 @@
 
 笔记说明：
 
-1. activeMQ（未完结）
 1. ElasticSearch（完结，PS：此笔记与大学时完成整理，可能或有些老）
 1. Lucene全文检索（完结，PS：此笔记与大学时完成整理，可能或有些老）
 1. rabbitMQ（完结，仅入门学习）
 1. Zookeeper学习笔记（完结）
+1. Kafka（未完结，刚开始学习）
