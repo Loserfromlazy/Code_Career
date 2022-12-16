@@ -736,3 +736,28 @@ docker-compose stop nginx
 docker-compose start nginx   
 ~~~
 
+## 八、推送镜像到中央仓库
+
+中央仓库地址如下，如果没有账号的需要先注册账号。免费版的只能创建公开仓库。[官网](https://hub.docker.com/)
+
+下面我以我自己的mit6.s081-gdb镜像为例进行推送演示：
+
+1. 注册账号，这一步略
+
+2. 使用docker login命令登录
+
+   ![image-20221216104420878](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221216104420878.png)
+
+3. 本地镜像打标记
+
+   ![image-20221216105241598](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221216105241598.png)
+
+4. 推送镜像
+
+   使用`docker push loserfromlazy/mit6.s081-gdb`推送镜像，这里的loserfromlazy/mit6.s081-gdb是我自己的本地镜像名，可以使用`docker images`查看。
+
+   ![image-20221216104338297](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221216104338297.png)
+
+到此镜像就已经推送到中央仓库了，可以在自己账号下进行查看：
+
+![image-20221216105321793](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221216105321793.png)
