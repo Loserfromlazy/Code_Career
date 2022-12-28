@@ -1,11 +1,5 @@
 # Zookeeper学习笔记
 
-> 参考资料：
->
-> - Java高并发核心编程卷1
->- https://blog.csdn.net/qq_37960603/article/details/121835169
-> - https://github.com/apache/curator/blob/master/curator-examples/src/main/java/cache/CuratorCacheExample.java
-
 # 一、概述
 
 ## 1.1 Zookeeper伪集群的搭建
@@ -949,3 +943,10 @@ Zookeeper的分布式锁的优点是有效的解决分布式问题和不可重�
 1. 基于Redis的分布式锁：适用于并发高，性能要求高，可靠性可以通过其他方式弥补。
 2. 基于Zookeeper的分布式锁：适用于高可靠且并发不是很高的场景。
 
+# 参考资料
+
+参考资料：
+
+- Java高并发核心编程卷1
+- https://blog.csdn.net/qq_37960603/article/details/121835169
+- https://github.com/apache/curator/blob/master/curator-examples/src/main/java/cache/CuratorCacheExample.java

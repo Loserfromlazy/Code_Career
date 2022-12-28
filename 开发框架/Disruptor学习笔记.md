@@ -2,14 +2,6 @@
 
 **转载请声明！！！切勿剽窃他人成果。本文如有错误欢迎指正，感激不尽。**
 
-> 参考资料：
->
-> - https://www.cnblogs.com/crazymakercircle/p/13909235.html
->- 《Disruptor 红宝书》尼恩
-> - https://jitwxs.cn/a7ed43af.html
-> - https://lmax-exchange.github.io/disruptor/user-guide/index.html#_getting_started
-> - https://www.jianshu.com/p/d2d50cf6d887
-
 # 一、概述
 
 Disruptor是英国外汇公司LMAX开发的一款高性能队列，初衷是解决内存队列的延迟问题。基于Disruptor开发的系统单线程支撑每秒600w订单，2010年后在QCon演讲后，获得了业界关注。2011年，企业应用软件专家Martin Fowler专门撰写长文介绍Disruptor。
@@ -1616,3 +1608,13 @@ public void signalAllWhenBlocking()
 {
 }
 ```
+
+# 参考资料
+
+参考资料：
+
+- https://www.cnblogs.com/crazymakercircle/p/13909235.html
+- 《Disruptor 红宝书》尼恩
+- https://jitwxs.cn/a7ed43af.html
+- https://lmax-exchange.github.io/disruptor/user-guide/index.html#_getting_started
+- https://www.jianshu.com/p/d2d50cf6d887
