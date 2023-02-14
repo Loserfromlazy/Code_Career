@@ -2660,7 +2660,7 @@ Netty中不直接使用NIO的Channel组件，而是进行了自己的封装。Ne
 
 Netty对于每一种协议基本上都有NIO和OIO(即阻塞式的)两个版本，常见的通道如下：
 
-- NioSocketChannel：异步非阻塞TCP socketc传输通道
+- NioSocketChannel：异步非阻塞TCP socket传输通道
 - NioServerSocketChannel：异步非阻塞TCP socket服务端监听通道
 - NioDatagramChannel：异步非阻塞的UDP传输通道
 - NioSctpChannel：异步非阻塞Sctp传输通道
@@ -2697,7 +2697,7 @@ NioEventLoop类有两个重要的属性：一个是Thread线程类成员，一�
 
 ![image-20220524101723456](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20220524101723456.png)
 
-Netty的入站流程以JavaNIO的OP_READ事件为例：在通道中发生了都时间后，会被EventLoop查到，然后分发给ChannelInboundHandler入站处理器，调用对应的入站处理的read方法。而后在read方法的具体实现中，可以从通道中读取数据。
+Netty的入站流程以JavaNIO的OP_READ事件为例：在通道中发生了读事件后，会被EventLoop查到，然后分发给ChannelInboundHandler入站处理器，调用对应的入站处理的read方法。而后在read方法的具体实现中，可以从通道中读取数据。
 
 Netty中的入站处理触发的方向为：由通道触发，ChannelInboundHandler入站处理器负责接收（或者执行）。Netty中的入站处理，不仅仅是OP_READ输入事件的处理，还包括从通道底层触发，由Netty通过层层传递，调用ChannelInboundHandler入站处理器进行的其他某个处理。
 
@@ -3143,7 +3143,7 @@ AttributeMap是一个接口，在Netty中提供了默认的实现，同时Attrib
 
 在Reactor反应器模型中，反应器在查询到IO事件后，分发到Handler业务处理器，由Handler完成IO操作和业务处理。整个IO处理环节包括从通道读取数据包、数据包解码、业务处理、目标数据编码、把数据包写到通道，然后由通道发送到对端。整个IO处理分为两个环节，其中从通道读数据包和由通道发送到对端是由Netty底层完成的，用户程序主要负责数据包解码、业务处理、目标数据编码、把数据包写到通道中。
 
-从开发人员角度，Netty分为入站和出战两种操作类型：
+从开发人员角度，Netty分为入站和出站两种操作类型：
 
 - 入站：自底向上，Netty的内部到入站处理器。负责数据包解码、业务处理。
 - 出战，自顶向下,出站处理器到Netty的内部，负责编码和将数据包写入通道。
