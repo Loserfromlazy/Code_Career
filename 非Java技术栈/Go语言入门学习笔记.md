@@ -1246,7 +1246,7 @@ fmt.Println(a, "除以", b, "的结果是 ", res)
 > err = fmt.Errorf("产生了一个 %v 异常", "喝太多")
 > ~~~
 
-## 5.4 详细的异常信息
+## 4.4 详细的异常信息
 
 上面的异常信息只是简单的返回了一个字符串而已，想在报错的时候得到更多的异常内容怎么办呢？这就要看看 `errors` 的内部实现了。其实相当简单。
 
@@ -2083,4 +2083,4 @@ func testTicker() {
 - [Go语言精进之路](https://golang-minibear2333.github.io/books-share/)
 - [菜鸟教程](https://www.runoob.com/go/go-program-structure.html)
 - [VSCode安装go开发环境](https://blog.csdn.net/m0_63044390/article/details/123944893)
-- [解决vode安装go失败的问题](https://blog.csdn.net/qq_41065919/article/details/107710144)
+- [解决vscode安装go失败的问题](https://blog.csdn.net/qq_41065919/article/details/107710144)
