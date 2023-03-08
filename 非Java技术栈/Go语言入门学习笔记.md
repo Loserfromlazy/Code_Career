@@ -1591,6 +1591,10 @@ var b chan float64
 var c chan string
 ```
 
+> **channel本质上传递的是数据的拷贝，拷贝的数据越小传输效率越高，传递结构体指针，比传递结构体更高效**
+>
+> 比如这种方式`reqCh chan *Request`是比这种方式`reqCh chan Request`好的
+
 通道是一个引用类型，初始值为`nil`，对于值为`nil`的通道，不论具体是什么类型，它们所属的接收和发送操作都会永久处于阻塞状态，所以必须手动`make`初始化，示例：
 
 ```go
