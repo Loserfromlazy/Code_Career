@@ -1280,23 +1280,63 @@ public class MyWebSocketHandler extends SimpleChannelInboundHandler<WebSocketFra
 
 ## 3.4 WebSocket原理
 
+WebSocket是基于Http协议进行握手和协议升级的。且WebSocket是应用层的协议，是TCP/IP协议的子集，该协议是通过HTTP/1.1协议的101状态码完成握手，也就是说，WebSocket协议需要先借助HTTP协议，在服务端返回101状态码之后才可以进行WenSocket的全双工通信，协议升级之后就和HTTP协议没有关系了。客户端发起握手时，需要向WebSocket的监控URL发起GET请求，WebSocket握手和响应的报文如下：
+
 ![image-20221017170439084](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221017170439084.png)
 
-图片来源网络：
+实际上，握手的报文就是HTTP报文，但是根据WebSocket协议规定，创建WebSocket握手请求必须是一个HTTP请求，请求的方法必须是GET，并且HTTP协议的版本不可以低于1.1。同时握手请求HTTP报文需要携带一些WebSocket协议规范约定的请求头：
+
+- Sec-WebSocket-Key请求头
+
+  该请求头的值是一个Base64编码的值，这个是客户端浏览器随机生成的，服务端从请求(HTTP的请求头)信息中提取Sec-WebSocket-Key，服务端会对此值进行加密，之后会将加密结果响应给客户端。WebSocket协议规范约定，握手报文必须包含Sec-WebSocket-Key请求头。
+
+- Upgrade请求头
+
+  WebSocket协议规范约定，握手请求报文必须包含Upgrade请求头，并且此请求头的值必须包含"websocket"。
+
+- Connection请求头
+
+  WebSocket协议规范约定，握手报文必须包含Connection请求头，并且此请求头的值必须包含"Upgrade"。
+
+- Sec-WebSocket-Version请求头
+
+  WebSocket协议规范约定，握手报文必须包含Sec-WebSocket-Version请求头，其值若为13，表示客户端支持WebSocket的协议版本号为13，该版本为目前最为常用的协议版本，其余版本号包括00、07、08等。
+
+- Sec-WebSocket-Protocol请求头
+
+  Sec-WebSocket-Protocol则是表示通信使用的子协议，这属于用户自定义的协议名称，只要与服务端的子协议名称保持一致即可，否则会握手失败
+
+服务端接收请求后启动服务端升级握手的机制，进行握手检查，如果客户端能够满足WebSocket通信的要求，握手处理器会向客户端发送Switching Protocols（转换协议）HTTP响应报文（见上图）。该响应报文的响应状态码为101，表示服务端同意客户端协议升级请求，并将协议从HTTP转换为WebSocket协议。响应报文中所涉及到的比较重要的响应头：
+
+- Upgrade响应头
+
+  响应报文中Upgrade头值为“websocket”，服务端通过该头告诉客户端，即将升级的通信协议是WebSocket协议，而不是其他的协议。
+
+- Sec-WebSocket-Accept响应头
+
+  服务端通过Sec-WebSocket-Accept响应头去确认客户端的Sec-WebSocket-Key，该响应头的值为加密过后的、客户端握手请求中的Sec-WebSocket-Key值。客户端收到报文后，会对改值进行校验，只有当握手请求的Sec-WebSocket-Key值经过固定算法加密后的结果和响应头里的Sec-WebSocket-Accept的值保持一致，该连接才会被认可建立。
+
+- Sec-WebSocket-Protocol请求头
+
+  Sec-WebSocket-Protocol则是表示最终使用的子协议，这属于应用程序的自定义协议
+
+客户端收到服务端响应之后，如果校验通过，则握手成功，WebSocket连接建立，双向通信便可以开始了。握手完成之后，客户端与服务端之间的通信，不再是HTTP协议，而是WebSocket协议。WebSocket协议的报文如下图，图片来源网络：
 
 ![image-20221017171039334](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221017171039334.png)
+
+WebSocket协议的通信报文是二进制格式，大致包含以下字段：
 
 - FIN，占用1bit，如果其值为1，表示该帧是消息的最后一帧，如果是0，则不是消息的最后一帧。
 - RSV1-3，默认是0 (必须是0)，除非有扩展定义了非零值的意义。
 - Opcode，WebSocket的操作码，占4bit位。其值决定了后续如何解析Data Payload。具体如下：
-                  0x00 denotes a continuation frame
-                  0x01 表示一个text frame
-                  0x02 表示一个binary frame
-                  0x03 ~~ 0x07 are reserved for further non-control frames,为将来的非控制消息片段保留测操作码
-                  0x08 表示连接关闭
-                  0x09 表示 ping (心跳检测相关)
-                  0x0a 表示 pong (心跳检测相关)
-                  0x0b ~~ 0x0f are reserved for further control frames,为将来的控制消息片段保留的操作码
+         0x00 denotes a continuation frame
+         0x01 表示一个text frame
+         0x02 表示一个binary frame
+         0x03 ~~ 0x07 are reserved for further non-control frames,为将来的非控制消息片段保留测操作码
+         0x08 表示连接关闭
+         0x09 表示 ping (心跳检测相关)
+         0x0a 表示 pong (心跳检测相关)
+         0x0b ~~ 0x0f are reserved for further control frames,为将来的控制消息片段保留的操作码
 - Mask，一个bit位（值为1时抓包会显示为true），表示是否要对数据载荷进行掩码操作。客户端向服务端发送数据时，需要对数据进行掩码操作；从服务端向客户端发送数据时，不需要对数据进行掩码操作，如果服务端接收到的数据没有进行掩码操作，服务器需要断开连接。所有的客户端发送到服务端的数据帧，Mask值都是1。
 - Payload len，通信报文中Payload data的长度。
 - Masking-key，掩码键，如果Mask值为1，需要用这个掩码键来对数据进行反掩码，才能获取到真实的通信数据。为了避免被网络代理服务器误认为是HTTP请求，从而招致代理服务器被恶意脚本的攻击，WebSocket客户端必需掩码所有送给服务器的数据帧。
