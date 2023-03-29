@@ -14,6 +14,10 @@
 
 ## 1.2 Class类文件结构
 
+
+
+[winhex下载地址](http://www.x-ways.net/winhex.zip)
+
 ## 1.3 字节码指令
 
 ## 1.4 公有设计与私有实现
