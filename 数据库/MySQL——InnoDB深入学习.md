@@ -376,5 +376,15 @@ InnoDB的Page Header中有以下几个部分来保存插入的顺序信息：
 - Index_type：索引的类型》InnoDB只支持B+树索引
 - Comment注释
 
-其中Cardinality值很重要，优化器会根据这个值判断是否使用索引。在生产环境中，数据
+对于什么时候添加B+树索引，一般来说在低选择性的字段上加比较有意义。比如对于性别字段它的取值范围很小，这就是低选择性。如何查看索引的高选择性呢？可以通过Cardinality值，它表示索引中不重复记录数量的预估值。在实际使用时Cardnality应该尽可能接近1，如果非常小，用户应考虑是否有必要创建这个索引。
+
+Cardnality的统计是放在存储引擎层进行的。在生产环境中，索引的更新操作是非常频繁的，所以数据库对于Cardnality的统计是通过采样来完成的。在InnoDB中，Cardnality的统计发生在INSERT和UPDATE中，InnoDB的更新Cardnality的策略是：
+
+- 表中1/16的数据发生了变化
+
+- `stat_modified_counter`>2000000000 
+
+  在InnoDB中有一个计数器`stat_modified_counter`用来表示发生变化的次数，这是因为如果表中某一行数据频繁的进行更新，这是表中的数据并没有增加，所以增加此计数器
+
+eof
 
