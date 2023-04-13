@@ -216,6 +216,14 @@ InnoDB支持一下几种常见的索引：
 
 其中InnoDB存储引擎支持的哈希索引是自适应的，其会根据表的使用情况自动生成哈希索引，不能人为干预是否在一张表中生成哈希索引。B+索引是传统意义上的索引，这是目前关系型数据库中查找最为常用和最有效的索引。
 
+索引可以让服务器快速定位到表的指定位置，也有一些其他的作用，比如B树索引，按照顺序存储数据，所以mysql可以用索引来做Order by和group by 。因为数据是有序的，所以B+树会将相关的列存储到一起。总结一下，索引共有三个优点：
+
+- 索引大大减少了服务器需要扫描的数据量
+- 索引可以帮助服务器避免排序和临时表
+- 索引可以将随机IO变为顺序IO
+
+Lahdenmaki在他的书中介绍了索引的三星系统，即索引将相关的记录放在一起就获得一星；如果索引中的数据顺序与查询中的排序顺序一致则获得二星；如果索引中的列包含了查询中需要的全部列则获得三星。
+
 ## 2.1 基础数据结构和算法
 
 ### 2.1.1 二分查找法
@@ -384,7 +392,263 @@ Cardnality的统计是放在存储引擎层进行的。在生产环境中，索�
 
 - `stat_modified_counter`>2000000000 
 
-  在InnoDB中有一个计数器`stat_modified_counter`用来表示发生变化的次数，这是因为如果表中某一行数据频繁的进行更新，这是表中的数据并没有增加，所以增加此计数器
+  在InnoDB中有一个计数器`stat_modified_counter`用来表示发生变化的次数，这是因为如果表中某一行数据频繁的进行更新，这时表中的数据并没有增加，所以增加此计数器用来表示发生变化的次数。
 
-eof
+在InnoDB中是通过采样的方式进行Cardinality的值进行统计和更新的。默认InnoDb对8个叶子节点进行采样，过程如下：
+
+- 取得B+树索引中的叶子节点的数量，记作A
+- 随机取得B+树索引的8个叶子节点，统计每个页不同的记录的个数，记作P1，P2.....P8。
+- 根据采样信息给出Cardinality的预估值：`Cardinality=(P1+P2+......+P8)*A /8`
+
+因为8个叶子节点是随机的所以Cardinality的值每次可能是不同的。我们可以使用`SHOW INDEX
+ FROM Table_Name`触发MYSQL对Cardinality的值的统计，如下图：
+
+![image-20230413091914344](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413091914344.png)
+
+## 2.4 哈希索引
+
+## 2.5 高性能索引策略
+
+### 2.5.1 使用独立的列
+
+如果查询中的列不是独立的，那么MySQL不会使用索引，独立的列的意思是索引列不能是表达式的一部分，也不能是函数的参数，如下我们有一个`test_user`表，其中有一个`login_error_count`列，这个列上有索引，现在有以下两个sql：
+
+~~~mysql
+SELECT id,`name` from test_user where login_error_count + 1 = 4;//不走索引
+SELECT id,`name` from test_user where login_error_count = 4;//走索引
+~~~
+
+其中`login_error_count + 1 = 4`这个条件mysql无法解析此方程式，这是用户行为所以无法走索引。下面我们用explain分析一下：
+
+![image-20230413100455822](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413100455822.png)
+
+再看一下另一个：
+
+![image-20230413100519191](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413100519191.png)
+
+我们写SQL时应该**习惯简化WHERE条件，应该始终将索引列单独放在比较符号的另一侧**。
+
+下面是另一个常见的错误：
+
+~~~mysql
+SELECT ... from test_user where TO_DAYS(CURRENT_DATE)-TO_DAYS(date_col) <=10;
+~~~
+
+### 2.5.2 前缀索引和索引选择性
+
+有时候可能会需要索引很长的字符列，这会让索引变得又大又慢，有一种策略是使用2.4中的模拟hash索引，还有一种就是可以使用下面的前缀索引。其实**前缀索引就是索引字符串前面的部分字符，这样可以节约索引空间，提高索引效率，但是这样也会降低索引的选择性**。索引的选择性是指不重复的索引值和数据表的记录总数（#T）的比值，范围从`1/#T`到1之间。索引的选择性越高，擦汗寻的效率就越高，唯一索引的选择性是1，这也是最好的索引选择性。
+
+在创建索引时，需要选择足够长的前缀以保证较高的选择性，但又不能太长，我们下面举个例子：
+
+首先我们用以下语句建立测试数据集：
+
+> 注意sakila库是一个MySQL官方提供的模拟电影出租厅信息管理系统的示例数据库，下载地址：[sakila库](http://downloads.mysql.com/docs/sakila-db.zip)
+
+~~~mysql
+create table sakila.city_demo(city VARCHAR(50) not null);
+
+insert into sakila.city_demo(city) SELECT city from sakila.city;
+#执行5次
+insert into sakila.city_demo(city) SELECT city from sakila.city_demo;
+
+update sakila.city_demo set city = (select city from sakila.city ORDER BY RAND() LIMIT 1)
+~~~
+
+然后我们先查询出来最常见的城市列表：
+
+~~~mysql
+#查询最常见的city list
+select count(*) as cnt,city from city_demo group by city order by cnt desc LIMIT 10;
+~~~
+
+![image-20230413104815216](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413104815216.png)
+
+然后我们可以从3开始试，逐渐增加前缀长度，直到前缀的选择性接近上面完整的选择性：
+
+~~~mysql
+#查询
+select count(*) as cnt,LEFT(city,3) as pref from city_demo group by pref order by cnt desc LIMIT 10;
+select count(*) as cnt,LEFT(city,7) as pref from city_demo group by pref order by cnt desc LIMIT 10;
+~~~
+
+前缀为3结果如下：
+
+![image-20230413110006720](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413110006720.png)
+
+直到试到前缀为7：
+
+![image-20230413110101905](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413110101905.png)
+
+当然也有另一种方式就是计算选择性，如下：
+
+~~~
+#计算完整列的选择性
+SELECT count(DISTINCT city)/count(*) from city_demo
+#计算不同前缀长度的选择性
+SELECT count(DISTINCT left(city,3))/count(*) as select3,
+count(DISTINCT left(city,4))/count(*) as select4,
+count(DISTINCT left(city,5))/count(*) as select5,
+count(DISTINCT left(city,6))/count(*) as select6,
+count(DISTINCT left(city,7))/count(*) as select7
+from city_demo
+~~~
+
+完整的选择性结果：
+
+![image-20230413110210160](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413110210160.png)
+
+不同前缀长度的选择性：
+
+![image-20230413110237586](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413110237586.png)
+
+既然我们找到了合适的前缀的长度，我们可以使用：
+
+~~~mysql
+alert table city_demo add key(city(7));
+~~~
+
+创建前缀索引。注意前缀索引有缺点，即mysql无法用前缀索引做order by 和 group by，也无法使用前缀索引做覆盖扫描。前缀索引比较常见的场景就是很长的十六进制唯一ID。
+
+### 2.5.3 多列索引
+
+### 2.5.4 合适的索引列顺序
+
+### 2.5.5 聚集索引
+
+### 2.5.6 覆盖索引
+
+### 2.5.7 索引和锁
+
+### 2.5.8 MRR优化
+
+### 2.5.9 ICP优化
+
+# 三、锁
+
+## 3.1 锁概述
+
+锁是数据库系统区别于文件系统的关键特性。锁机制用于管理对共享资源的并发访问。InnoDB会在行级别上对表数据上锁，同时也会在数据库内部其他多个地方使用锁，从而允许对多种不同资源提供并发访问，例如操作缓冲池中的LRU列表。尽管数据库系统大都类似，但是不同数据库的锁实现大多是不同的。在SQL语法方面，由于SQL标准所以大差不差，但是对于锁在Oracle、sql server、innoDb中实现都是完全不同。其中InnoDB与Oracle数据库类似，提供了一致性的非锁定读、行级锁的支持。行级锁没有额外的开销，且可以得到并发性和一致性。
+
+在学习锁之前还应该区别数据库的lock和latch的概念，在数据库中这俩都可以被称为锁，但是含义是不同的，这里我们主要关注lock。
+
+- latch一般称为闩锁（轻量级锁），其要求锁定时间非常短，若持续的时间长，则应用的性能会非常差。在InnoDB 存储引擎中，latch 又可以分为 mutex(互斥量)和 rwlock(读写锁)。其目的是用来保证并发线操作临界资源的正确性，并且通常没有死锁检测的机制。
+- lock 的对象是事务，用来锁定的是数据库中的对象，如表、页、行。并且一般 lock的对象仅在事务 commit 或 rollback 后进行释放(不同事务隔离级别释放的时间可能不同)。与大多数数据库中一样，lock是有死锁机制的。
+
+下表显示了 lock 与latch 的不同：
+
+|          | lock                                                  | latch                                                        |
+| -------- | ----------------------------------------------------- | ------------------------------------------------------------ |
+| 对象     | 事务                                                  | 线程                                                         |
+| 保护     | 数据库内容                                            | 内存数据结构                                                 |
+| 持续时间 | 整个事务过程                                          | 临界资源                                                     |
+| 模式     | 行级锁、表锁、意向锁                                  | 读写锁、互斥锁                                               |
+| 死锁     | 通过waits-for graph、time out等机制进行死锁检测与处理 | 无死锁检测与处理机制。仅通过应用程序加锁的顺序保证无死锁的情况发生 |
+| 存在于   | Lock Manager的哈希表中                                | 每个数据结构的对象中                                         |
+
+对于InnoDB中的latch，可以通过`SHOW ENGINE INNODB MUTEX`查看，数据如下：
+
+~~~
+Type	Name	Status
+InnoDB	rwlock: fil0fil.cc:3013	waits=1
+InnoDB	sum rwlock: buf0buf.cc:781	waits=20
+~~~
+
+> 其中列type总是InnoDB；列name是latch的信息及其源码位置；列status比较复杂可能会包含os_waits（操作系统的等待的次数）等信息。
+
+对于InnoDB中的lock，可以通过`SHOW ENGINE INNODB STATUS`和information_schema下的表INNODB_TRX、INNODB_LOCKS、INNODB_LOCKS_WAITS查看锁的信息。
+
+## 3.2 InnoDB中的Lock
+
+### 3.2.1 锁的类型
+
+InnoDB实现了下面两种标准的行级锁：
+
+- 共享锁 S Lock，允许事务读一行数据
+- 排他锁 X Lock，允许事务删除或更新一行数据
+
+如果一个事务（记作T1）已经获取了行r的共享锁，那么另外的事务 T2 可以立即获得行r的共享锁，因为读取并没有改变行r 的数据，这种情况称为锁兼容 (Lock Compatible)。但若有其他的事务 T3 获得行r的排他锁，则其必须待事务 T1、T2释放行r的共享锁，这种情况称为锁不兼容。俩锁的兼容如下表：
+
+|      | X      | S      |
+| ---- | ------ | ------ |
+| X    | 不兼容 | 不兼容 |
+| S    | 不兼容 | 兼容   |
+
+X锁与任何锁都不兼容，S锁只与S锁兼容。此外InnoDB支持多粒度锁定，这种锁定允许事务在行级上的锁和表级上的锁同时存在，为了支持在不同粒度上进行加锁操作，InmDB 存储引擎支持一种额外的锁方式，称之为意向锁 (Intention Lock)。意向锁是将锁定的对象分为多个层次，意向锁意味着事务希望在更细粒度(fine granularity)上进行加锁，如下图（参考Mysql技术内幕InnoDB存储引擎第二版绘制）：
+
+![image-20230413144816179](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413144816179.png)
+
+若将上锁的对象当作一个树，对最下层的对象（最细粒度）上锁需要先对粗粒度的对象上锁，比如上图中对记录r上X锁,那么需要分别对数据库A、表、页上意向锁IX，最后对记录上X锁。如果其中任一部分导致等待，那么该操作需要粗粒度锁的完成。eg：对记录r加X锁之前，已经有事务加了S表锁，也就是表1已经有S锁。这时事务需要对记录r在表1上加IX锁，由于不兼容，需要等待S表锁的操作完成。
+
+InnoDB的意向锁就是表级别的锁。设计目的主要是为了在一个事务中揭示下一行将被请求的锁类型，共有两种意向锁：
+
+- 意向共享锁 IS Lock，事务想获得一张表中某几行的共享锁
+- 意向排他锁 IX Lock，事务想获得一张表中某几行的排他锁
+
+由于ImnnoDB存储引擎支持的是行级别的锁，因此意向锁其实不会阻塞除全表扫以外的任何请求。故表级意向锁与行级锁的兼容性如下：
+
+|      | IS     | IX     | S      | X      |
+| ---- | ------ | ------ | ------ | ------ |
+| IS   | 兼容   | 兼容   | 兼容   | 不兼容 |
+| IX   | 兼容   | 兼容   | 不兼容 | 不兼容 |
+| S    | 兼容   | 不兼容 | 兼容   | 不兼容 |
+| X    | 不兼容 | 不兼容 | 不兼容 | 不兼容 |
+
+在InnoDB 1.0版本前，用户只能通过`SHOW ENGINE INNODB STATUS`，`SHOW FULL PROCESSLIST`等查看当前数据库的锁的请求，然后再判断事务所的情况。从1.0开始，在information_schema下添加了表INNODB_TRX、INNODB_LOCKS、INNODB_LOCKS_WAITS。通过这三张表可以简单监控当前事务并分析可能存在的锁问题。表INNODB_TRX的定义如下：
+
+~~~mysql
+CREATE TEMPORARY TABLE `INNODB_TRX` (
+  `trx_id` varchar(18) NOT NULL DEFAULT '' COMMENT 'InnoDB存储引擎内部的唯一事务ID',
+  `trx_state` varchar(13) NOT NULL DEFAULT '' COMMENT '当前事务的状态',
+  `trx_started` datetime NOT NULL DEFAULT '0000-00-00 00:00:00' COMMENT '事务的开始时间',
+  `trx_requested_lock_id` varchar(105) DEFAULT NULL COMMENT '等待事务的锁id。比如trx_state为LOCK——WAIT，该值代表当前事务等待之前事务占用锁资源的ID。若trx_state不是LOCK_WAIT，该值为null',
+  `trx_wait_started` datetime DEFAULT NULL COMMENT '事务等待开始的时间',
+  `trx_weight` bigint(21) unsigned NOT NULL DEFAULT '0' COMMENT '事务权重，反映了一个事务修改和锁住的行数，当发生死锁需要回滚时，InnoDB会选择该值最小的进行回滚',
+  `trx_mysql_thread_id` bigint(21) unsigned NOT NULL DEFAULT '0' COMMENT 'mysql中的线程ID，SHOW PROCESSLIST显示的结果',
+  `trx_query` varchar(1024) DEFAULT NULL COMMENT '事务允许的SQL语句',
+  `trx_operation_state` varchar(64) DEFAULT NULL,
+  `trx_tables_in_use` bigint(21) unsigned NOT NULL DEFAULT '0',
+  `trx_tables_locked` bigint(21) unsigned NOT NULL DEFAULT '0',
+  `trx_lock_structs` bigint(21) unsigned NOT NULL DEFAULT '0',
+  `trx_lock_memory_bytes` bigint(21) unsigned NOT NULL DEFAULT '0',
+  `trx_rows_locked` bigint(21) unsigned NOT NULL DEFAULT '0',
+  `trx_rows_modified` bigint(21) unsigned NOT NULL DEFAULT '0',
+  `trx_concurrency_tickets` bigint(21) unsigned NOT NULL DEFAULT '0',
+  `trx_isolation_level` varchar(16) NOT NULL DEFAULT '',
+  `trx_unique_checks` int(1) NOT NULL DEFAULT '0',
+  `trx_foreign_key_checks` int(1) NOT NULL DEFAULT '0',
+  `trx_last_foreign_key_error` varchar(256) DEFAULT NULL,
+  `trx_adaptive_hash_latched` int(1) NOT NULL DEFAULT '0',
+  `trx_adaptive_hash_timeout` bigint(21) unsigned NOT NULL DEFAULT '0',
+  `trx_is_read_only` int(1) NOT NULL DEFAULT '0',
+  `trx_autocommit_non_locking` int(1) NOT NULL DEFAULT '0'
+) ENGINE=MEMORY DEFAULT CHARSET=utf8;
+~~~
+
+表INNODB_LOCKS结构如下图（图片来自Mysql技术内幕InnoDB存储引擎第二版）：
+
+![image-20230413154337824](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413154337824.png)
+
+> innodb_locks表在8.0.13版本中由performance_schema.data_locks表所代替
+
+表INNODB_LOCKS_WAITS结构如下图（图片来自Mysql技术内幕InnoDB存储引擎第二版）：
+
+![image-20230413154451680](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413154451680.png)
+
+> INNODB_LOCKS_WAITS表在8.0.13版本中由performance_schema.data_locks_waits表所代替
+
+### 3.2.2 一致性非锁定读
+
+> **事务的隔离级别：**
+>
+> Read uncommitted：未提交读，任何读问题都解决不了
+>
+> Read committed：已读提交，解决脏读，但是不可重复读和虚读有可能发生（Oracle）
+>
+> Repeatable read：重复读，解决脏读和不可重复读，但是虚读有可能发生（Mysql）
+>
+> Serializable：解决所有读问题
+>
+> MySQL的默认隔离级别是：REPEATABLE READ
+
+
 
