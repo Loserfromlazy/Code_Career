@@ -12,7 +12,6 @@
 6. Java类加载与反射
 7. Java爬虫学习
 8. Java数据结构
-9. Java虚拟机（正在学习中，未完结）
 10. Java注解
 11. Jmeter的使用
 12. Kotlin入门学习
