@@ -844,7 +844,7 @@ INSERT INTO test_table2 SELECT 6,7;
   | 3    | "小明" |
   | 5    | "小华" |
 
-  ​    此时，如果一条sql语句执行`select * from user where id=4 for update`。这个时候，id为4的这一行记录，因为不存在于表当中，因此会锁住最近的索引范围，也就是会加上一个id为`(3,5)`范围的间隙锁。这个时候，如果有其他的事物想插入id为4的数据，那么就会被阻塞。
+  此时，如果一条sql语句执行`select * from user where id=4 for update`。这个时候，id为4的这一行记录，因为不存在于表当中，因此会锁住最近的索引范围，也就是会加上一个id为`(3,5)`范围的间隙锁。这个时候，如果有其他的事物想插入id为4的数据，那么就会被阻塞。
 
 > **对于唯一键值的锁定，Next-Key Lock 降级为 Record Lock仅存在于查询所有的唯一索引列。**若唯一索引由多个列组成，而查询仅是查找多个唯一索引列中的其中一个，那么查询其实是 range 类型查询，而不是 point 类型查询，故InnoDB存储引擎依然使用 Next-Key Lock 进行锁定。
 
@@ -874,11 +874,13 @@ INSERT INTO test_table2 SELECT 6,7;
 
   然后我们使用`select * from performance_schema.data_locks`查询当前锁，我们可以看到：
 
-  ![image-20230414151853083](C:\Users\yhr\AppData\Roaming\Typora\typora-user-images\image-20230414151853083.png)
+  ![image-20230414151853083](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414151853083.png)
 
   这时由于没有找到主键索引6，所以会对主键索引加next-key锁，即锁住了`(6,8]`，由于是范围查找所以会继续往后找，表中最后一条记录是20所以会加next-key锁，即锁住了`(8,20]`。实际在 Innodb 存储引擎中，会用一个特殊的记录来标识最后一条记录，该特殊的记录的名字叫 supremum pseudo-record（也可以理解为正无穷），所以还会加一个加next-key锁，即锁住了`(20, supremum pseudo-record]`，最后停止扫描。也就是说最后会创建三个X型的next-key锁。
 
-  > 上图中Lock_Type是RECORD表示行锁。而且注意上图中还有一个IX意向锁，这是因为mysql需要从下锁到上，见3.2.1。
+  > 上图中Lock_Type是RECORD表示行锁。LOCK_MODE=X表示X型next-key锁
+  >
+  > 而且注意上图中还有一个IX意向锁，这是因为mysql需要从下锁到上，见3.2.1。
 
   当我们执行下面的SQL语句时
 
@@ -887,12 +889,32 @@ INSERT INTO test_table2 SELECT 6,7;
   select * from test_table2 where a >= 8 for update;
   ~~~
 
-  
+  我们再查看一下当前的锁：
+
+  ![image-20230414163650061](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414163650061.png)
+
+  我们可以看到这次如果条件值的记录存在于表中（即a=8），所以该记录的索引中的 next-key 锁会**退化成记录锁**。后续过程与上面是一样的。
 
 - 情况二：针对「小于或者小于等于」的范围查询，要看条件值的记录是否存在于表中：
 
   - 当条件值的记录不在表中，那么不管是「小于」还是「小于等于」条件的范围查询，**扫描到终止范围查询的记录时，该记录的索引的 next-key 锁会退化成间隙锁**，其他扫描到的记录，都是在这些记录的索引上加 next-key 锁。
+
+    我们还是依然用情况1的大于等于的例子来实验，我们执行以下语句：
+
+    ~~~mysql
+    BEGIN;
+    select * from test_table2 where a <= 6 for update;
+    ~~~
+
+    然后查一下锁的情况：
+
+    ![image-20230414164842115](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414164842115.png)
+
+    最开始查找的是1，所以会加一个next-key锁，即锁住了`(负无穷,1]`，因为是范围查找，所以然后找到第二个加一个next-key锁，即锁住了`(1,3]`，后面过程类似，直到找到了8，因为8不满足条件所以会退化成间隙锁，所以会加一个gap lock 即锁住了`(4,8)`,然后再扫下一个记录不满足条件所以终止扫描。
+
   - 当条件值的记录在表中，如果是「小于」条件的范围查询，**扫描到终止范围查询的记录时，该记录的索引的 next-key 锁会退化成间隙锁**，其他扫描到的记录，都是在这些记录的索引上加 next-key 锁；如果「小于等于」条件的范围查询，扫描到终止范围查询的记录时，该记录的索引 next-key 锁不会退化成间隙锁。其他扫描到的记录，都是在这些记录的索引上加 next-key 锁。
+
+    这里可参照上面的例子，过程类似。
 
 #### 非唯一索引等值查询
 
@@ -904,6 +926,8 @@ INSERT INTO test_table2 SELECT 6,7;
 - 当查询的记录「不存在」时，**扫描到第一条不符合条件的辅助索引记录，该辅助索引的 next-key 锁会退化成间隙锁。因为不存在满足查询条件的记录，所以不会对主键索引加锁**。
 
 #### 非唯一索引范围查询
+
+
 
 #### 没有加索引的查询
 
