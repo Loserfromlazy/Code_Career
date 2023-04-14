@@ -1,6 +1,6 @@
 # MySql——InnoDB深入学习
 
-> 参考文档：Mysql技术内幕InnoDB存储引擎第二版、高性能Mysql第三版及部分互联网资源
+> 
 
 # 一、Mysql体系结构和存储引擎
 
@@ -407,6 +407,8 @@ Cardnality的统计是放在存储引擎层进行的。在生产环境中，索�
 
 ## 2.4 哈希索引
 
+暂略
+
 ## 2.5 高性能索引策略
 
 ### 2.5.1 使用独立的列
@@ -566,6 +568,8 @@ InnoDB实现了下面两种标准的行级锁：
 - 共享锁 S Lock，允许事务读一行数据
 - 排他锁 X Lock，允许事务删除或更新一行数据
 
+> **也就是说update和delete操作都会加X锁**
+
 如果一个事务（记作T1）已经获取了行r的共享锁，那么另外的事务 T2 可以立即获得行r的共享锁，因为读取并没有改变行r 的数据，这种情况称为锁兼容 (Lock Compatible)。但若有其他的事务 T3 获得行r的排他锁，则其必须待事务 T1、T2释放行r的共享锁，这种情况称为锁不兼容。俩锁的兼容如下表：
 
 |      | X      | S      |
@@ -638,11 +642,19 @@ CREATE TEMPORARY TABLE `INNODB_TRX` (
 
 ### 3.2.2 一致性非锁定读
 
+一致性非锁定读是指InnoDb通过行多版本控制的方式来读取当前执行时间数据库中的数据。如果读取的行正在执行DELETE或UPDATE操作，这时读取操作不会去等待行上锁的释放，而是会去读取行的一个快照数据。如下图（图片来自Mysql技术内幕InnoDB存储引擎第二版）：
+
+![image-20230414091443582](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414091443582.png)
+
+上图非常直观的展示了非锁定读，因为读时不需要等待行上X锁的释放。这里快照数据是指该行的之前版本的数据，该实现是通过undo字段来完成的，而undo用来在事务中回滚数据，因此快照数据本身没有额外的开销。此外，读取快照数据不需要上锁，因为没有事务会操作历史数据。如上图，一行记录可能不只有一个快照数据，每行记录可能有多个版本，一般称这种技术为行多版本技术，由此带来的并发控制被称为多版本并发控制（Multi Version Concurrency Control ，MVCC）。
+
+非锁定读极大的提高了数据库的并发性能，在InnoDB中这时默认的读取方式，也就是说读取不会占用和等待表上的锁。但是在不同的事务隔离级别下，读取的方式不同，并不是每个事务隔离级别下都是采用非锁定一致性读。此外，即使都是用非锁定一致性读，但是快照的底层定义也不同。
+
 > **事务的隔离级别：**
 >
 > Read uncommitted：未提交读，任何读问题都解决不了
 >
-> Read committed：已读提交，解决脏读，但是不可重复读和虚读有可能发生（Oracle）
+> Read committed：读已提交，解决脏读，但是不可重复读和虚读有可能发生（Oracle）
 >
 > Repeatable read：重复读，解决脏读和不可重复读，但是虚读有可能发生（Mysql）
 >
@@ -650,5 +662,259 @@ CREATE TEMPORARY TABLE `INNODB_TRX` (
 >
 > MySQL的默认隔离级别是：REPEATABLE READ
 
+在事务隔离级别Read committed和Repeatable read下，虽然都使用非锁定一致性读，但是快照数据的定义不同。在 READ COMMITTED 事务隔离级别下，对于快照数据，非锁定一致性读总是读取被锁定行的最新的一份快照数据。而在 REPEATABLE READ 事务隔离级别下，对于快照数据，非锁定一致性读总是读取事务开始时的行数据版本。举例：
+
+我们先在会话1中开启事务，然后查询actor_id =1的数据：
+
+~~~mysql
+#会话1
+BEGIN;
+select * from actor where actor_id =1;
+~~~
+
+结果：
+
+| actor_id | first_name | last_name | last_updade         |
+| -------- | ---------- | --------- | ------------------- |
+| 1        | PENELOPE   | GUINESS   | 2023-04-14 01:47:36 |
+
+然后新开一个会话（这里记为会话2），执行以下SQL：
+
+~~~mysql
+#会话2
+BEGIN;
+UPDATE actor set actor_id = 999 where actor_id =1;
+~~~
+
+然后在会话1中再次使用`select * from actor where actor_id =1;`查询，这时不管是Read committed还是Repeatable read两种隔离级别都是刚才的数据：
+
+![image-20230414095651195](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414095651195.png)
+
+然后我们通过`COMMIT;`提交会话2的事务，然后再回到会话1去查询，这时
+
+- 当隔离级别是Read committed时
+
+  > 注意由于mysql默认隔离级别不是Read committed，所以在我们在刚打开这个会话时需要手动设置隔离级别：
+  >
+  > ~~~mysql
+  > #设置当前会话的隔离级别，这种设置的隔离级别只在当前会话生效
+  > set session transaction isolation level read committed;
+  > ~~~
+
+  ![image-20230414095836550](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414095836550.png)
+
+  查询的数据应该是空：
+
+  ![image-20230414100019716](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414100019716.png)
+
+- 当隔离级别是Repeatable read时
+
+  ![image-20230414100200869](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414100200869.png)
+
+  查询的数据应该还是刚才的数据
+
+  ![image-20230414100225466](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414100225466.png)
+
+为什么两种隔离级别的查询结果不一样呢？这是因为**Read committed（读已提交）的隔离级别下，总是读取行的最新版本，如果行被锁定了就读取该行的最新一个快照**，所以在上面的例子中，在会话2未提交事务时还能读到actor_id=1的数据，但是会话2提交了事务之后，会读到最新版本，也就是actor_id=1的数据已经不存在了，读取了空值。
+
+**而隔离级别是Repeatable read（可重复读）时，总是读取事务开始时的行数据**，所以还是能读到actor_id=1的数据。下图是上面例子的流程图：
+
+![image-20230414101614989](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414101614989.png)
+
+> MYSQL旧版本也就是5.x的变量才是tx_isolation；新版本(8.x)的系统变量改成transaction_isolation
+
+### 3.2.3 一致性锁定读
+
+在默认配置下，隔离级别是Repeatable read（可重复读），且InnoDB的Select操作是一致性非锁定读。但是在某些情况下，用户需要显式的对数据库读取操作进行加锁以保证数据逻辑的一致性。InnoDB对Select语句支持两种一致性锁定读操作：
+
+- SELECT  ...... FOR UPDATE
+- SELECT  ...... LOCK IN SHARE MODE
+
+`SELECT  ...... FOR UPDATE`对读取的行记录加一个X锁，其他事务不能对已锁定的行加任何锁。`SELECT  ...... LOCK IN SHARE MODE`会对读取的行记录加一个S锁，其他事务可以向被锁定的行加S锁，但是不能加X锁。
+
+而对于一致性非锁定读，即使改行执行了`SELECT  ...... FOR UPDATE`，也是可以读取的，这跟上一节的例子是一样的，因为update也是加X锁。同时还要注意，`SELECT  ...... FOR UPDATE`和`SELECT  ...... LOCK IN SHARE MODE`必须在一个事务里，当事务提交了，锁也就释放了，因此在使用上述两句 SELECT 锁定语句时，务必加上 BEGIN，START TRANSACTION 或者 SETAUTOCOMMIT=0。
+
+## 3.3 锁的算法
+
+### 3.3.1 行锁的三种算法
+
+InnoDB有三种行锁的算法，分别是：
+
+- Record Lock：单个行记录上的锁
+- Gap Lock：间隙锁，锁定一个范围，但不包含记录本身
+- Next-Key Lock：Gap Lock+Record Lock，锁定一个范围，且包含锁定记录本身。
+
+> Record Lock总会去锁住索引记录，如果InnoDB存储引擎表在建立的时候没有设置任何一个索引，那么这时InnoDB存储引擎会使用隐式的主键来进行锁定。
+
+Next-Key Lock的锁定技术被称为Next-Key Locking。设计的目的是为了解决Phantom Problem问题（幻读问题）。利用这种锁定技术锁定的不是单个值而是一个范围，next-key lock本质上就是一个拥有左开右闭区间的锁，假如一个索引有10，11，13，20这四个值，那么该索引可能被Next-Key Locking的区间为`(负无穷,10]`,`(10,11]`,`(11,13]`,`(13,20]`,`(20,正无穷)`。假如事务T1已经通过Next-Key Locking锁定了`(10,11]、(11,13]`，当插入新的记录12时，锁定的范围就会变成`(10,11]、(11,12]、(12,13]`。但是当查询的索引含有唯一属性时，InnoDB会对Next-Key Lock进行优化，将其降级为Record Lock，仅锁住索引本身，而不是范围。举个例子：
+
+我们首先先建个表，然后插入几条数据：
+
+![image-20230414110507052](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414110507052.png)
+
+然后我们执行以下SQL
+
+| 时间 | 会话1                                          | 会话2                            |
+| ---- | ---------------------------------------------- | -------------------------------- |
+| 1    | BEGIN;                                         |                                  |
+| 2    | SELECT * FROM test_table WHERE a=5 FOR UPDATE; |                                  |
+| 3    |                                                | BEGIN;                           |
+| 4    |                                                | INSERT INTO test_table SELECT 4; |
+| 5    |                                                | COMMIT;                          |
+| 6    | COMMIT;                                        |                                  |
+
+test_table 共有 1、2、5三个值。在上面的例子中，在会话1中首先对 a=5 进行锁定而由于 a 是主键且唯一，因此锁定的仅是 5 这个值，而不是(2，5]这个范围，这样在会话2中插入值 4 就不会阻塞，可以立即插人并返回。即锁定由 Next-Key Lock 算法降级为了 Record Lock，从而提高应用的并发性。
+
+但是如果是辅助索引则情况会完全不同，我们先建个数据表并插入数据：
+
+![image-20230414111115326](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230414111115326.png)
+
+| 时间 | 会话1                                           | 会话2                                                 |
+| ---- | ----------------------------------------------- | ----------------------------------------------------- |
+| 1    | BEGIN;                                          |                                                       |
+| 2    | SELECT * FROM test_table2 WHERE b=3 FOR UPDATE; |                                                       |
+| 3    |                                                 | BEGIN;                                                |
+| 4    |                                                 | #这句会被阻塞<br/>INSERT INTO test_table2 SELECT 4,2; |
+
+这时在第二步，由于SQL语句通过索引列b进行查询，所以使用Next-Key Locking技术继续加锁。且由于这个表有两个索引，所以需要分别锁定。对于聚集索引，仅需要对列a=5（也就是b=3）的索引加上Record Lock。对于辅助索引来说，加的是Next-Key Lock，锁定的范围是`(1,3)`。这里还需要注意，**InnoDB还会对辅助索引的下一个键值加上间隙锁(gap lock)**，所以这里实际上还有一个辅助索引范围为`(3,6)`的锁。这时当执行下面这几句sql时都会被阻塞：
+
+~~~mysql
+#由于a=5索引已经加上了X锁，所以执行会被阻塞
+SELECT * FROM test_table2 WHERE a=5 LOCK IN SHARE MODE;
+#主键插入4没问题，但是辅助索引值插入的2在(1,3)范围中，所以执行会被阻塞
+INSERT INTO test_table2 SELECT 4,2;
+#主键插入6没问题，但是辅助索引值插入的5也不在(1,3)范围中，但是5在另一个间隙锁的锁定范围(3,6),所以执行会被阻塞
+INSERT INTO test_table2 SELECT 6,5;
+~~~
+
+虽然上面的SQL会被阻塞，但是下面的SQL就不会被阻塞：
+
+~~~mysql
+INSERT INTO test_table2 SELECT 8,6;
+INSERT INTO test_table2 SELECT 2,0;
+INSERT INTO test_table2 SELECT 6,7;
+~~~
+
+从上面的例子中可以看到，Gap Lock的作用是为了阻止多个事务将记录插入到同一范围内，而多个事务将记录插入到同一范围内会引起幻读问题（Phantom Problem）。例如在上面的例子中，会话1中用户已经锁定了b=3的记录，如果此时没有Gap Lock锁定`(3,6)`，那么用户可以插入b=3的记录，这样会导致会话1的用户再次查询同样的条件返回不同的记录，也就是幻读。
+
+> Phantom ：n. 幽灵，鬼魂；幻觉，幻象；adj. 虚幻的，幻觉的；
+
+用户可以通过以下两种方式显示关闭Gap Lock：
+
+- 将事务的隔离级别设置为读已提交
+- 将参数`innodb_locks_unsafe_for_binlog`设置为1
+
+同时在InnoDB中，对于INSERT的操作，会检查插入记录的下一条记录是否被锁定，若已经被锁定则不允许查询，就像上面的例子一样。
+
+**对于唯一键值的锁定，Next-Key Lock 降级为 Record Lock仅存在于查询所有的唯一索引列。**若唯一索引由多个列组成，而查询仅是查找多个唯一索引列中的其中一个，那么查询其实是 range 类型查询，而不是 point 类型查询，故InnoDB存储引擎依然使用 Next-Key Lock 进行锁定。
+
+### 3.3.2 mysql加锁总结
+
+下面我们对mysql加行级锁进行总结：
+
+- 普通的select语句不会加行级锁，因为普通的select是通过MVCC并发版本控制读取快照，不需要加锁。
+- 要想在select语句中加锁，可以使用以下两种方式：
+  - SELECT  ...... FOR UPDATE   **对读取的记录加独占锁(X型锁)**
+  - SELECT  ...... LOCK IN SHARE MODE  **对读取的记录加独占锁(X型锁)**
+- update 和 delete 操作都会加行级锁，且锁的类型都是独占锁(X型锁)。
+- 在读已提交隔离级别（Read committed）下，行级锁的种类只有记录锁，也就是仅仅把一条记录锁上。
+- 在可重复读隔离级别（Repeatable read）下，行级锁的种类除了有记录锁，还有间隙锁（目的是为了避免幻读），行级锁主要有三类：
+  - Record Lock，记录锁，锁住的是一条记录，而且记录锁是有 S 锁和 X 锁之分的；
+  - Gap Lock，间隙锁，锁定一个范围，但是不包含记录本身，它只存在于可重复读隔离级别，目的是为了解决可重复读隔离级别下幻读的现象；
+  - Next-Key Lock：Record Lock + Gap Lock 的组合，锁定一个范围，并且锁定记录本身。
+
+### 3.3.3 mysql行级锁规则
+
+行级锁加锁规则比较复杂，不同的场景，加锁的形式是不同的：
+
+**加锁的对象是索引，加锁的基本单位是 next-key lock**。它是由记录锁和间隙锁组合而成的，next-key lock 是前开后闭区间，而间隙锁是前开后开区间。但是，next-key lock 在一些场景下会退化成记录锁或间隙锁。
+
+> **也就是说只要是加行级锁，默认都是加next-key lock**
+
+#### 唯一索引等值查询
+
+- 当查询的记录是「存在」的，在索引树上定位到这一条记录后，将该记录的索引中的 next-key lock 会退化成「记录锁」，只锁住当前记录。
+
+- 当查询的记录是「不存在」的，在索引树找到第一条大于该查询记录的记录后，将该记录的索引中的 next-key lock 会退化成「间隙锁」。
+
+  例如，在下表当中:
+
+  | id   | name   |
+  | ---- | ------ |
+  | 3    | "小明" |
+  | 5    | "小华" |
+
+  ​    此时，如果一条sql语句执行`select * from user where id=4 for update`。这个时候，id为4的这一行记录，因为不存在于表当中，因此会锁住最近的索引范围，也就是会加上一个id为`(3,5)`范围的间隙锁。这个时候，如果有其他的事物想插入id为4的数据，那么就会被阻塞。
+
+> **对于唯一键值的锁定，Next-Key Lock 降级为 Record Lock仅存在于查询所有的唯一索引列。**若唯一索引由多个列组成，而查询仅是查找多个唯一索引列中的其中一个，那么查询其实是 range 类型查询，而不是 point 类型查询，故InnoDB存储引擎依然使用 Next-Key Lock 进行锁定。
+
+#### 唯一索引范围查询
+
+当唯一索引进行范围查询时，会对每一个扫描到的索引加 next-key 锁，然后如果遇到下面这些情况，会退化成记录锁或者间隙锁：
+
+- 情况一：针对「大于等于」的范围查询，因为存在等值查询的条件，那么如果等值查询的记录是存在于表中，那么该记录的索引中的 next-key 锁会**退化成记录锁**。
+
+  我们用3.3.1中的test_table2实验一下，数据如下：
+
+  | a（主键） | b（辅助索引） |
+  | --------- | ------------- |
+  | 1         | 1             |
+  | 3         | 1             |
+  | 4         | 2             |
+  | 5         | 3             |
+  | 8         | 6             |
+  | 20        | 8             |
+
+  我们执行以下语句：
+
+  ~~~mysql
+  BEGIN;
+  select * from test_table2 where a >= 6 for update;
+  ~~~
+
+  然后我们使用`select * from performance_schema.data_locks`查询当前锁，我们可以看到：
+
+  ![image-20230414151853083](C:\Users\yhr\AppData\Roaming\Typora\typora-user-images\image-20230414151853083.png)
+
+  这时由于没有找到主键索引6，所以会对主键索引加next-key锁，即锁住了`(6,8]`，由于是范围查找所以会继续往后找，表中最后一条记录是20所以会加next-key锁，即锁住了`(8,20]`。实际在 Innodb 存储引擎中，会用一个特殊的记录来标识最后一条记录，该特殊的记录的名字叫 supremum pseudo-record（也可以理解为正无穷），所以还会加一个加next-key锁，即锁住了`(20, supremum pseudo-record]`，最后停止扫描。也就是说最后会创建三个X型的next-key锁。
+
+  > 上图中Lock_Type是RECORD表示行锁。而且注意上图中还有一个IX意向锁，这是因为mysql需要从下锁到上，见3.2.1。
+
+  当我们执行下面的SQL语句时
+
+  ~~~mysql
+  BEGIN;
+  select * from test_table2 where a >= 8 for update;
+  ~~~
+
+  
+
+- 情况二：针对「小于或者小于等于」的范围查询，要看条件值的记录是否存在于表中：
+
+  - 当条件值的记录不在表中，那么不管是「小于」还是「小于等于」条件的范围查询，**扫描到终止范围查询的记录时，该记录的索引的 next-key 锁会退化成间隙锁**，其他扫描到的记录，都是在这些记录的索引上加 next-key 锁。
+  - 当条件值的记录在表中，如果是「小于」条件的范围查询，**扫描到终止范围查询的记录时，该记录的索引的 next-key 锁会退化成间隙锁**，其他扫描到的记录，都是在这些记录的索引上加 next-key 锁；如果「小于等于」条件的范围查询，扫描到终止范围查询的记录时，该记录的索引 next-key 锁不会退化成间隙锁。其他扫描到的记录，都是在这些记录的索引上加 next-key 锁。
+
+#### 非唯一索引等值查询
+
+当我们用非唯一索引进行等值查询的时候，**因为存在两个索引，一个是主键索引，一个是非唯一索引（辅助索引），所以在加锁时，同时会对这两个索引都加锁，但是对主键索引加锁的时候，只有满足查询条件的记录才会对它们的主键索引加锁**。
+
+针对非唯一索引等值查询时，查询的记录存不存在，加锁的规则也会不同：
+
+- 当查询的记录「存在」时，由于不是唯一索引，所以肯定存在索引值相同的记录，于是**非唯一索引等值查询的过程是一个扫描的过程，直到扫描到第一个不符合条件的辅助索引记录就停止扫描，然后在扫描的过程中，对扫描到的辅助索引记录加的是 next-key 锁，而对于第一个不符合条件的辅助索引记录，该辅助索引的 next-key 锁会退化成间隙锁。同时，在符合查询条件的记录的主键索引上加记录锁**。
+- 当查询的记录「不存在」时，**扫描到第一条不符合条件的辅助索引记录，该辅助索引的 next-key 锁会退化成间隙锁。因为不存在满足查询条件的记录，所以不会对主键索引加锁**。
+
+#### 非唯一索引范围查询
+
+#### 没有加索引的查询
 
 
+
+# 参考文档
+
+- 《Mysql技术内幕InnoDB存储引擎第二版》
+
+- 《高性能Mysql第三版》
+
+- [MYSQL是如何加锁的](https://www.xiaolincoding.com/mysql/lock/how_to_lock.html#%E4%BB%80%E4%B9%88-sql-%E8%AF%AD%E5%8F%A5%E4%BC%9A%E5%8A%A0%E8%A1%8C%E7%BA%A7%E9%94%811)
+
+  > 《Mysql技术内幕InnoDB存储引擎第二版》一书中虽然讲解了加锁规则，但是没有系统性讲解，这里可以结合书中的知识配上这篇博客，可以对知识梳理的更清晰。
