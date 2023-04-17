@@ -4,7 +4,7 @@
 >
 > 参考资料见最后一章
 >
-> **所有例子均是本人亲自上机后，将代码或结果复制回来的。**
+> **所有例子均是本人亲自上机后，将代码或结果复制回来的。请勿盗图**
 
 # 一、Mysql体系结构和存储引擎
 
@@ -487,7 +487,7 @@ select count(*) as cnt,LEFT(city,7) as pref from city_demo group by pref order b
 
 当然也有另一种方式就是计算选择性，如下：
 
-~~~
+~~~mysql
 #计算完整列的选择性
 SELECT count(DISTINCT city)/count(*) from city_demo
 #计算不同前缀长度的选择性
@@ -516,6 +516,8 @@ alert table city_demo add key(city(7));
 创建前缀索引。注意前缀索引有缺点，即mysql无法用前缀索引做order by 和 group by，也无法使用前缀索引做覆盖扫描。前缀索引比较常见的场景就是很长的十六进制唯一ID。
 
 ### 2.5.3 多列索引
+
+
 
 ### 2.5.4 合适的索引列顺序
 
@@ -1029,12 +1031,16 @@ select * from test_table2 where b >= 4 for update;
 
 ~~~mysql
 BEGIN;
-select * from test_table3 where c >= 4 for update;
+select * from t est_table3 where c >= 4 for update;
 ~~~
 
 查看锁情况：
 
 ![image-20230417154824200](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230417154824200.png)
+
+### 3.3.4 next key lock引起的死锁问题
+
+我们这里举个例子进行模拟：
 
 # 参考文档
 
