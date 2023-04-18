@@ -388,7 +388,7 @@ InnoDB的Page Header中有以下几个部分来保存插入的顺序信息：
 - Index_type：索引的类型》InnoDB只支持B+树索引
 - Comment注释
 
-对于什么时候添加B+树索引，一般来说在低选择性的字段上加比较有意义。比如对于性别字段它的取值范围很小，这就是低选择性。如何查看索引的高选择性呢？可以通过Cardinality值，它表示索引中不重复记录数量的预估值。在实际使用时Cardnality应该尽可能接近1，如果非常小，用户应考虑是否有必要创建这个索引。
+对于什么时候添加B+树索引，一般来说在低选择性的字段上加比较有意义。比如对于性别字段它的取值范围很小，这就是低选择性。如何查看索引的高选择性呢？可以通过Cardinality值，它表示索引中不重复记录数量的预估值。在实际使用时`Cardnality/n_rows_in_table`的值应该尽可能接近1，如果非常小，用户应考虑是否有必要创建这个索引。
 
 Cardnality的统计是放在存储引擎层进行的。在生产环境中，索引的更新操作是非常频繁的，所以数据库对于Cardnality的统计是通过采样来完成的。在InnoDB中，Cardnality的统计发生在INSERT和UPDATE中，InnoDB的更新Cardnality的策略是：
 
@@ -408,6 +408,12 @@ Cardnality的统计是放在存储引擎层进行的。在生产环境中，索�
  FROM Table_Name`触发MYSQL对Cardinality的值的统计，如下图：
 
 ![image-20230413091914344](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230413091914344.png)
+
+### 2.3.3 聚集索引
+
+
+
+### 2.3.4 辅助索引
 
 ## 2.4 哈希索引
 
@@ -442,7 +448,7 @@ SELECT ... from test_user where TO_DAYS(CURRENT_DATE)-TO_DAYS(date_col) <=10;
 
 ### 2.5.2 前缀索引和索引选择性
 
-有时候可能会需要索引很长的字符列，这会让索引变得又大又慢，有一种策略是使用2.4中的模拟hash索引，还有一种就是可以使用下面的前缀索引。其实**前缀索引就是索引字符串前面的部分字符，这样可以节约索引空间，提高索引效率，但是这样也会降低索引的选择性**。索引的选择性是指不重复的索引值和数据表的记录总数（#T）的比值，范围从`1/#T`到1之间。索引的选择性越高，擦汗寻的效率就越高，唯一索引的选择性是1，这也是最好的索引选择性。
+有时候可能会需要索引很长的字符列，这会让索引变得又大又慢，有一种策略是使用2.4中的模拟hash索引，还有一种就是可以使用下面的前缀索引。其实前缀索引就是索引字符串前面的部分字符，这样可以节约索引空间，提高索引效率，但是这样也会降低索引的选择性。**索引的选择性是指不重复的索引值和数据表的记录总数（#T）的比值，范围从`1/#T`到1之间。**索引的选择性越高，擦汗寻的效率就越高，唯一索引的选择性是1，这也是最好的索引选择性。
 
 在创建索引时，需要选择足够长的前缀以保证较高的选择性，但又不能太长，我们下面举个例子：
 
@@ -515,21 +521,137 @@ alert table city_demo add key(city(7));
 
 创建前缀索引。注意前缀索引有缺点，即mysql无法用前缀索引做order by 和 group by，也无法使用前缀索引做覆盖扫描。前缀索引比较常见的场景就是很长的十六进制唯一ID。
 
-### 2.5.3 多列索引
+> 注意这里
 
+### 2.5.3 联合索引
 
+> Lahdenmaki在他的书中介绍了索引的三星系统，即索引将相关的记录放在一起就获得一星；如果索引中的数据顺序与查询中的排序顺序一致则获得二星；如果索引中的列包含了查询中需要的全部列则获得三星。
+
+关于索引一个常见的错误就是为每个列创建独立的索引，或者按照错误得顺序创建多列索引：
+
+~~~mysql
+create table t (
+	c1 int,
+    c2 int,
+    c3 int,
+    key(c1),
+    key(c2),
+    key(c3)
+);
+~~~
+
+上面这种方式就是“把WHERE条件里的列都加上索引”这种模糊的建议导致的。实际上这个建议是错误得，这样一来最好的情况下也只能是一星索引，性能可能照最优得索引差几个数量级，有时如果无法设计一个三星索引，不如忽略WHERE子句，集中精力优化索引列得顺序，或者创建一个全覆盖索引。
+
+**实际上在多个列上建立独立的单列索引大部分情况下并不能提高 MySQL 的查询性能**。MySQL5.0 及以后版本引入了一种叫“索引合并”(index merge)的策略，一定程度上可以使用表上的多个单列索引来定位指定的行。更早版本的 MySQL 只能使用其中某一个单列索引，这种情况下没有哪一个独立的单列索引是非常有效的。例如，表 film actor 在字段 film_id 和actor id 上各有一个单列索引。但对于下面这个查询 WHERE 条件，这两个单列索引都不是好的选择（下面的例子来自《高性能Mysql第三版》）：
+
+~~~mysql
+#film_actor是mysql官方示例库sakila中的表
+select film_id,actor_id from film_actor是mysql官方示例库sakila中的表 where actor_id =1 OR film_id =1;
+#union
+select film_id,actor_id from film_actor where actor_id =1 
+UNION ALL
+explain select film_id,actor_id from film_actor where film_id =1 and actor_id <> 1;
+~~~
+
+在老的MYSQL中，这个查询会使用全表扫描，除非改成union的方式(见上面)，但是在5.0 及以后版本会使用索引合并，本质上就是两个索引扫描的联合，我们可以通过explain进行查看：
+
+![image-20230418100937721](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418100937721.png)
+
+如上面的例子，mysql会使用这个技术对复杂查询进行优化，所以某些sql在extra中还可以看到嵌套操作。索引合并是一种优化的结果，实际上说明了表的索引建的很糟糕：
+
+- 当出现服务器对多个索引做相交操作时 (通常有多个 AND 条件)，通常意味着需要个包含所有相关列的多列索引，而不是多个独立的单列索引。
+- 当服务器需要对多个索引做联合操作时(通常有多个 0R条件)，通常需要耗费大量CPU 和内存资源在算法的缓存、排序和合并操作上。特别是当其中有些索引的选择性不高，需要合并扫描返回的大量数据的时候。
+- 更重要的是，优化器不会把这些计算到“查询成本”(cost)中，优化器只关心随机页面读取。这会使得查询的成本被“低估”,导致该执行计划还不如直接走全表扫描，这样做不但会消耗更多的 CPU 和内存资源，还可能会影响查询的并发性，但如果是单独运行这样的查询则往往会忽略对并发性的影响。
+
+所以如果在 EXPLAIN中看到有索引合并，应该好好检查一下查询和表的结构，看是不是已经是最优的。也可以通过参数 optimizer switch 来关闭索引合并功能。也可以使用IGNOREINDEX提示让优化器忽略掉某些索引。
+
+那么什么时候需要使用联合索引呢？从本质上来说联合索引也是一个b+树，结构如下（图片来自《Mysql技术内幕InnoDB存储引擎第二版》）：
+
+![image-20230418101800419](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418101800419.png)
+
+对于`select * from table_name where a=xx and b=xx`，显然可以使用`(a,b)`这个联合索引的。而且对于单个a列的查询`select * from table_name where a=xx`也是可以使用这个索引的，但是对于b列的查询是不可以的，因为上图可见，叶子节点的b值显然不是排序的。
+
+联合索引还有一个好处就是对第二个键值已经做好了排序处理。我们举个例子，首先创建表并加入数据，如下图：
+
+![image-20230418103527078](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418103527078.png)
+
+然后加上两个索引：
+
+![image-20230418103549924](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418103549924.png)
+
+然后我们看看当只查询id时，优化器选择的索引是`key_id`，因为这个索引的叶子节点是一个值，所以一页可以放更多数据。
+
+![image-20230418103722210](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418103722210.png)
+
+但当我们执行以下SQL时发现走的是`key_double`这个索引，因为联合索引的第二个值已经排好序了。
+
+![image-20230418103917500](C:\Users\yhr\AppData\Roaming\Typora\typora-user-images\image-20230418103917500.png)
+
+若强制使用`key_id`索引，如下会额外进行一次排序：
+
+![image-20230418104346156](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418104346156.png)
+
+也就是说联合索引 `(a，b)`其实是根据列a、b进行排序，对于联合索引`(a，b，c)`来说，下列语同样可以直接通过联合索引得到结果：
+
+~~~mysql
+select * from table_name where a=xx order by b
+select * from table_name where a=xx and b=xx  order by c
+~~~
+
+但是对于下面的语句，联合索引不能直接得到结果，其还需要执行一次 filesort 排序操作，因为索引` (a，c)`并未排序:
+
+~~~MYSQL
+select * from table_name where a=xx order by c
+~~~
 
 ### 2.5.4 合适的索引列顺序
 
-### 2.5.5 聚集索引
+那么联合索引怎么选择合适的索引列顺序呢？正确的顺序依赖于该索引的查询，并且需要同时考虑如何更好的满足排序和分组的需要。在一个联合索引中，索引列的顺序意味着索引首先按照最左列进行排序，其次是第二列，等等。所以，索引可以按照升序或者降序进行扫描，以满足精确符合列顺序的ORDER BY、GROUP BY和 DISTINCT等子句的查询需求。
 
-### 2.5.6 覆盖索引
+所以联合索引的列顺序非常重要，在Lahdenmaki的三星系统中，列顺序也决定了一个索引是否能成为三星索引。
 
-### 2.5.7 索引和锁
+> Lahdenmaki在他的书中介绍了索引的三星系统，即索引将相关的记录放在一起就获得一星；如果索引中的数据顺序与查询中的排序顺序一致则获得二星；如果索引中的列包含了查询中需要的全部列则获得三星。
 
-### 2.5.8 MRR优化
+对于索引的列顺序有一个经验法则：即将选择性最高的列放在索引最前面。当不需要考虑排序和分组时，将选择性最高的列放在前面通常是很好的。这时候索引的作用只是用于优化 WHERE条件的查找。在这种情况下，这样设计的索引确实能够最快地过滤出需要的行，对于在 WHERE子中只使用了索引部分前缀列的查询来说选择性也更高。然而，性能不只是依赖于所有索引列的选择性(整体基数)，也和查询条件的具体值有关，也就是和值的分布有关。这和2.5.2中前缀索引的例子一样，虽然6位和7位差不多，但是值的分布可能会很不均匀。可能需要根据那些运行频率最高的查询来调整索引列的顺序，让这种情况下索引的选择性最高。我们下面举个例子：
 
-### 2.5.9 ICP优化
+~~~mysql
+#payment是mysql官方示例库sakila中的表，payment表中staff_id和customer_id都有单列的索引
+select * from payment where staff_id =2 and customer_id = 584
+~~~
+
+这个查询是应该创建一个`(staff_id,customer_id)`还是应该创建一个`(customer_id,staff_id)`？我们可以允许SQL来确定表中值得分布情况，并确定哪个列的选择性能高。我们先查一下数据基数：
+
+~~~mysql
+select sum(staff_id=2),sum(customer_id=584) from payment
+~~~
+
+结果：
+
+| sum(staff_id=2) | sum(customer_id=584) |
+| --------------- | -------------------- |
+| 7990            | 30                   |
+
+​	根据前面的经验法则，将选择性最高的列放在索引最前面，我们应该将customer_id放在前面，因为对应条件值得customer_id更小，这里也可以去计算一下两个列的选择性，如下图：
+
+![image-20230418134808062](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418134808062.png)
+
+得到customer_id列的选择性更高，所以我们可以将customer_id放在第一位,即建立`(customer_id,staff_id)`索引。
+
+当然上面这种经验法则在多数情况是有用的，但是有时特殊情况可能会摧毁整个应用的性能，比如下面这个例子（例子来自《高性能Mysql第三版》）：
+
+![image-20230418141810494](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418141810494.png)
+
+### 2.5.5 覆盖索引
+
+### 2.5.6 索引和锁
+
+### 2.5.7 MRR优化
+
+### 2.5.8 ICP优化
+
+## 2.6 索引案例
+
+
 
 # 三、锁
 
@@ -1040,7 +1162,77 @@ select * from t est_table3 where c >= 4 for update;
 
 ### 3.3.4 next key lock引起的死锁问题
 
-我们这里举个例子进行模拟：
+> 此例子参考生产环境发生的问题，模拟高并发的全量更新场景
+
+我们这里举个例子进行模拟，有下面一张表，数据和表结构如下：
+
+~~~mysql
+CREATE TABLE `test_deadlock`  (
+  `name` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `type` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `age` int(11) NULL DEFAULT NULL,
+  `version` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL DEFAULT NULL,
+  PRIMARY KEY (`name`, `type`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = Dynamic;
+
+INSERT INTO `test_deadlock` VALUES ('TEST0', '1', 15, '7.0');
+INSERT INTO `test_deadlock` VALUES ('TEST1', '1', 11, '1.0');
+INSERT INTO `test_deadlock` VALUES ('TEST1', '2', 12, '2.0');
+INSERT INTO `test_deadlock` VALUES ('TEST1', '3', 13, '3.0');
+INSERT INTO `test_deadlock` VALUES ('TEST2', '2', 11, '1.0');
+INSERT INTO `test_deadlock` VALUES ('TEST2', '3', 12, '2.0');
+INSERT INTO `test_deadlock` VALUES ('TEST3', '1', 11, '1.0');
+~~~
+
+然后我开一个事务执行以下SQL：
+
+~~~mysql
+#事务1
+begin
+delete from test_deadlock where `name`='TEST1'
+~~~
+
+然后再新开一个事务模拟并发：
+
+~~~mysql
+#事务2
+begin
+delete from test_deadlock where `name`='TEST2'
+~~~
+
+这是我们可以看一下当前锁情况`SELECT * FROM performance_schema.data_locks`：
+
+![image-20230418152802480](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418152802480.png)
+
+然后事务1执行`insert into test_deadlock values("TEST1","4",NULL,NULL)`，这时会发现sql被阻塞。然后回到事务2执行`insert into test_deadlock values("TEST2","1",NULL,NULL)`，之后就会发生死锁，结果：
+
+~~~
+insert into test_deadlock values("TEST2","1",NULL,NULL)
+> 1213 - Deadlock found when trying to get lock; try restarting transaction
+> 时间: 0.032s
+~~~
+
+我们下面来分析一下为什么会死锁，首先事务1执行删除sql，删除name等于TEST1的数据，这时由于表的唯一索引是`(name,type)`，所以这时实际上执行的是非唯一索引的等值加锁规则（具体见3.3.3加锁规则），对于第一个不符合条件的辅助索引记录，该辅助索引的 next-key 锁会退化成间隙锁，所以事务1执行完删除语句后锁情况如下图：
+
+![image-20230418153848283](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418153848283.png)
+
+当事务2执行完删除语句后锁情况如下图（也可以见上面的SQL结果`SELECT * FROM performance_schema.data_locks`）：
+
+![image-20230418155051883](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230418155051883.png)
+
+这时当我们事务1执行`insert into test_deadlock values("TEST1","4",NULL,NULL)`语句时，由于事务2存在`(TEST1-3,TEST2-2]`的next key lock，所以事务会阻塞，这时事务2再执行sql时，由于事务1存在`(TEST1-3,TEST2-2)`的间隙锁，所以事务2也会阻塞，造成死锁。
+
+解决死锁问题可以有以下几种解决方案：
+
+1. 优化查询：死锁通常是由于查询语句不当或索引不当而引起的。您可以尝试优化查询语句或重新设计索引，以减少死锁的可能性。
+
+2. 减少事务时间：死锁通常是由于事务持有锁定时间过长而引起的。您可以尝试减少事务的持有时间，以减少死锁的可能性。
+
+3. 调整隔离级别：死锁通常是由于并发事务之间的竞争而引起的。您可以尝试调整隔离级别，以减少并发事务之间的竞争，从而减少死锁的可能性。
+
+4. 可以尝试减少事务中的索引扫描和范围查询的数量
+
+由于数据重要性不高最终实际在业务中是通过减少事务时间解决的，即减少长事务，完成即提交事务解决地死锁。当然也可以通过优化表结构和索引解决，只是由于历史原因最终通过减少事务时间解决的。
 
 # 参考文档
 
