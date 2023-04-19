@@ -39,9 +39,9 @@ Class文件是一组以8个字节为基础单位的二进制流，各个数据�
 
 > 上图中的数据项无论是顺序还是数量，甚至于数据存储的字节序(Byte Ordering，Class 文件中字节序为Big-Endian)这样的细节，都是被严格限定的，哪个字节代表什么含义，长度是多少，先后顺序如何，全部都不允许改变。
 
-### 1.2.1魔数与Class文件的版本
+### 1.2.1 魔数与Class文件的版本
 
-每个Class文件的前四个字节被称为魔数，他的唯一作用就是确定这个文件是否是一个能被虚拟机接受的Class文件。使用魔数而不是扩展名来进行识别主要是基于安全考虑，因为文件扩展名可以随意改动。Class 文件的魔数取得很有“浪漫气息”，值为0xCAFEBABE (咖啡宝贝?)。
+每个Class文件的前四个字节被称为魔数，他的唯一作用就是确定这个文件是否是一个能被虚拟机接受的Class文件。使用魔数而不是扩展名来进行识别主要是基于安全考虑，因为文件扩展名可以随意改动。Class 文件的魔数取得很有“浪漫气息”，值为0xCAFEBABE (咖啡宝贝)。
 
 > 很多文件格式标准中都有使用魔数来进行身份识别的习惯，警如图片格式，如 GIF 或者JPEG 等在文件头中都存有魔数。
 
@@ -63,21 +63,151 @@ public class SimpleClass {
 
 ![image-20230419141447906](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419141447906.png)
 
+从上图可见，class文件的开头四个字节时0xCAFEBABE，后四个字节是次版本号是0x0000，主版本号是0x0034转换成十进制就是52，也就是说可以被JDK8及以上的虚拟机执行。JDK的版本号对应如下图（图片来自《深入理解Java虚拟机周志明第三版》）：
 
+![image-20230419142541315](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419142541315.png)
+
+次版本号在JDK1.2以后均未被使用，全部固定为0.
 
 ### 1.2.2 常量池
 
-### 访问标志
+紧接着主、次版本号之后的是常量池入口，常量池可以比喻为 Class 文件里的资源仓库，它是 Class 文件结构中与其他项目关联最多的数据，通常也是占用 Class 文件空间最大的数据项目之一，另外，它还是在 Class 文件中第一个出现的表类型数据项目。
 
-### 类索引、父类索引与接口索引集合
+由于常量数量不固定，所以常量池入口放了一个u2类型的数据，代表常量池容量计数器，与Java 中语言习惯不同，这个容量计数是从1而不是0开始的，如下图所示，常量池容量（偏移地址0x0000008）为十六进制数 0x0016，即十进制的 22，这就代表常量池中有 21项常量，索引值范围为1~21。
 
-### 字段表集合
+![image-20230419143200670](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419143200670.png)
 
-### 方法表集合
+设计者将第0项常量空出来是有特殊考虑的，这样做的目的在于，如果后面某些指向常量池的索引值的数据在特定情况下需要表达*不引用任何一个常量池*项目的含义，可以把索引值设置为0来表示。Class 文件结构中只有常量池的容量计数是从1开始，对于其他集合类型，包括接口索引集合、字段表集合、方法表集合等的容量计数都与一般习惯相同，都是从0开始。
 
-### 属性表集合
+常量池中主要存放两大类常量：`字面量 (Literal)` 和`符号引用(Symbolic References)`。字面量比较接近于 Java 语言层面的常量概念，如文本字符串、被声明为 final的常量值等；而符号引用则属于编译原理方面的概念，主要包括下面几类常量：
 
+- 被模块导出或开放的包（package）
+- 类和接口的全限定名（(Fully Qualified Name）
+- 字段的名称和描述符（(Descriptor）
+- 方法的名称和描述符
+- 方法句柄和方法类型（Method Handle、Method Type、Invoke Dynamic）
+- 动态调用点和动态常量（Dynamically-Computed Call Site、Dynamically-ComputedConstant）
 
+Java代码编译时，没有C中的连接步骤，而是虚拟机加载Class文件时动态连接，也就是说Class文件中不会保存各个方法、字段最终在内存的布局信息，这些字段、方法的符号引用不经过虚拟机在运行期转换的话是无法得到真正的内存入口地址，也就是说无法直接被虚拟机使用。当虚拟机做类加载时，将会从常量池获得对应的符号引用，再在类创建时或运行时解析、翻译到具体的内存地址之中。
+
+常量池的每一项都是一个表，截至JDK13共有17种常量，这些表结构的第一位是一个u1类型的标志为，代表当前常量属于哪种常量类型。17种常量如下图（图片来自《深入理解Java虚拟机周志明第三版》）：
+
+![image-20230419144122378](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419144122378.png)
+
+![image-20230419144606930](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419144606930.png)
+
+之所以常量池是最繁琐的数据，是因为这17种常量类型各自有完全独立的数据结构，之间也没有共性和联系。
+
+我们这里举两个例子（来自《深入理解Java虚拟机周志明第三版》）：
+
+![image-20230419145600334](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419145600334.png)
+
+上图中tag 是标志位，它用于区分常量类型；name index 是常量池的索引值，它指向常量池中个`CONSTANT_Utf8_info` 类型常量，此常量代表了这个类(或者接口)的全限定名。
+
+![image-20230419145611533](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419145611533.png)
+
+length 值说明了这个UTF-8 编码的字符串长度是多少字节，它后面紧跟着的长度为length 字节的连续数据是一个使用 UTF-8 缩略编码表示的字符串。
+
+> UTF-8缩略编码与UTF-8编码的区别是：从`\u0001`到`\u007f`之间的字符（相当于1-127的ASCII码）的缩略编码用一个字节，从`\u0080`到`\u07ff`之间的所有字符用两个字节，从`\u0800`到`\uffff`之间的所有字符与普通UTF-8一致用三个字节表示。
+
+> 注意：由于Class 文件中方法、字段等都需要引用`CONSTANT_Utf8_info`型常量来描述名称，所以这个常量的最大长度也就是 Java 中方法、字段名的最大长度。而这里的最大长度就是 length 的最大值，既u2 类型能表达的最大值 65535，所以 Java 程序中如果定义了超过 64KB 英文字符的变量或方法名，即使规则和全部字符都是合法的，也会无法编译。
+
+上面举了两个例子，但实际上JDK提供了用于分析Class文件字节码的工具：`javap`。
+
+> javap参数：-verbose 输出栈大小，方法参数的个数
+
+我们使用javap分析上面的SimpleClass.class字节码文件，如下图：
+
+![image-20230419150614400](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419150614400.png)
+
+我们可以看到，21个常量已经计算出来了。
+
+> 关于17种常量类型结构详见4.1小节
+
+### 1.2.3 访问标志
+
+常量池结束之后，紧接着的2个字节表示访问标志（`access_flags`），这个标志用于识别一些类或者接口层次的访问信息，包括：
+
+- 这个Class是类还是接口
+- 是否是public类型
+- 是否是abstract类型
+- 是否被声明为final
+- ......
+
+具体含义如下图（来自《深入理解Java虚拟机周志明第三版》）
+
+![image-20230419151252625](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419151252625.png)
+
+访问标志目前截至JDK9只定义了9个，没有用到的一律为0。我们上面的SimpleClass.class中只用了public修饰了，且不是final的，所以最终访问标志是`0x0021` 由 `0x0020 | 0x0001`计算得来。
+
+### 1.2.4 类索引、父类索引与接口索引集合
+
+类索引（`this_class`）、父类索引(`super_class`)都是一个u2类型的数据，而接口索引集合（`interfaces`）是一组u2类型的数据的集合，Class文件中由这三项数据来确定该类型的继承关系。
+
+类索引用于确定这个类的全限定名，父类索引用于确定这个类的父类的全限定名。由于 Java 语言不允许多重继承，所以父类索引只有一个，除了`java.lang.Object` 之外，所有的Java 类都有父类，因此除了 `java.lang.Object` 外，所有 Java 类的父类索引都不为0。接口索引集合就用来描述这个类实现了哪些接口，这些被实现的接口将按 implements 关键字(如果这个 Class 文件表示的是一个接口，则应当是 extends 关键字)后的接口顺序从左到右排列在接口索引集合中。
+
+类索引、父类索引和接口索引集合都按顺序排列在访问标志之后，类索引和父类索引用两个u2类型的索引值表示，它们各自指向一个类型为`CONSTANT_Class_info` 的类描述符常量，通过 `CONSTANT_Class_info` 类型的常量中的索引值可以找到定义在 `CONSTANT_Utf8_info`类型的常量中的全限定名字符串。接口索引集合的入口第一项u2类型的数据为接口计数器，表示索引表的容量，如果没有实现接口则为0。类索引查找全限定名的过程如下图：
+
+![image-20230419154125972](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419154125972.png)
+
+从javap中也能找到类和父类的常量，如下图：
+
+![image-20230419154527414](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419154527414.png)
+
+### 1.2.5 字段表集合
+
+字段表（`field_info`）用于描述接口或类中声明的变量。Java中的字段（Field）包括类级变量和实例级变量，但不包括方法内部的局部变量。在Java中，字段可以包括的修饰符有字段的作用域(public、private、protected 修饰符)、是实例变量还是类变量 (static 修饰符)、可变性 (final)并发可见性 (volatile 修饰符，是否强制从主内存读写)、可否被序列化(transient 修饰符)字段数据类型(基本类型、对象、数组)、字段名称。这些信息都是引用常量池中的常量来描述，字段表最终格式如下图：
+
+![image-20230419154853630](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419154853630.png)
+
+字段修饰符在`access_flags`项目中，它与类中的`access_flags`是非常相似的，都是一个u2的数据类型，其可以设置的标志位如下图：
+
+![image-20230419161610525](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419161610525.png)
+
+跟随`access_flags`标志的是两项索引值：`name_index`和`descriptor_index`。他们都是对常量池项的引用，分别代表着字段的简单名称以及字段和方法的描述符。
+
+> 以SimpleClass类为例：
+>
+> - 全限定名：`com/learn/jvmtest/SimpleClass`
+> - 字段方法的简单名称：inc、m
+
+方法和字段的描述符规则如下图：
+
+![image-20230419162051173](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419162051173.png)
+
+对于数组类型，每一维将使用前置的`[`来描述，比如String类型的二维数组被记录为`[[Ljava/lang/String`,整形数组被记为`[I`。
+
+描述方法时，按照先参数列表、后返回值的顺序描述，比如方法`void inc()`描述符为`()V`；方法`java.lang.toString()`描述符为`()Ljava/lang/String`；方法`int indexOf(cahr[] source,int sourceOffset,int sourceCount,char[] target,int targetOffset,int targetCount,int fromIndex)`描述符为`([CII[CIII)I`。
+
+字段表包含的固定数据到`descriptor_index`就结束了，上图中还有两个时一个属性表集合，用于存储一些额外的信息，字段表可以在属性表中符假描述0-n项的额外信息。关于属性表详见1.2.7小节。
+
+> 字段表集合中不会列出从父类或者父接口中继承而来的字段，但有可能出现原本 Java代码之中不存在的字段，譬如在内部类中为了保持对外部类的访问性，编译器就会自动添加指向外部类实例的字段。另外，在 Java 语言中字段是无法重载的，两个字段的数据类型修饰符不管是否相同，都必须使用不一样的名称，但是对于 Class 文件格式来讲，只要两个字段的描述符不是完全相同，那字段重名就是合法的。
+
+### 1.2.6 方法表集合
+
+如果理解了字段表，那么方法表的描述与字段表采用了几乎一致的方式，方法表结构如下：
+
+![image-20230419163143578](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419163143578.png)
+
+方法表的访问标志`access_flags`取值如下：
+
+![image-20230419163219580](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419163219580.png)
+
+方法的定义可以通过访问标志、名称索引、描述符索引描述清楚，那么方法里的代码怎么办？实际上经过javac编译成字节码指令后，存放在方法属性表集合的一个名为Code的属性里面了。
+
+> 与字段表集合相对应地，如果父类方法在子类中没有被重写(Override)，方法表集合中就不会出现来自父类的方法信息。但同样地，有可能会出现由编译器自动添加的方法，最常见的便是类构造器`<clinit>()`方法和实例构造器`<init>()`方法。
+>
+> 在 Java 语言中，要重载 (Overload)一个方法，除了要与原方法具有相同的简单名称之外，还要求必须拥有一个与原方法不同的特征签名。特征签名是指一个方法中各个参数在常量池中的字段符号引用的集合，也正是因为返回值不会包含在特征签名之中，所以 Java语言里面是无法仅仅依靠返回值的不同来对一个已有方法进行重载的。但是在 Class 文件格式之中，特征签名的范围明显要更大一些，只要描述符不是完全一致的两个方法就可以共存。也就是说，如果两个方法有相同的名称和特征签名，但返回值不同，那么也是可以合法共存于同一个 Class 文件中的。
+
+### 1.2.7 属性表集合
+
+属性表在前面已经见过多次，Class文件、字段表、方法表都可以有自己的属性表集合，以描述一些场景专有的信息。与Class文件中其他的数据项目要求严格的顺序、长度、内容不同，属性表集合的限制稍微宽松一些，不再要求各个属性表具有严格顺序，并且《Java 虚拟机规范》允许只要不与已有属性名重复，任何人实现的编译器都可以向属性表中写入自己定义的属性信息，Java虚拟机运行时会忽略掉它不认识的属性。
+
+> 为了能正确解析 Class 文件，《 Java 虚拟机规范》最初只预定义了9 项所有 Java 虚拟机实现都应当能识别的属性，而在最新的《 Java 虚拟机规范》的 Java SE 12 版本中，预定义属性已经增加到 29 项，关于虚拟机规范预定义的属性，详见4.2小节。
+
+对于每一个属性，它的名称都需从常量池中引用一个`CONSTANT_Utf8_info`类型的常量来进行表示，而属性值的结构则是完全自定义的，只需要通过一个u4的长度属性说明属性值所占用的位数即可。一个符合规则的属性表应该满足如下定义的结构。
+
+![image-20230419164229581](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419164229581.png)
 
 ## 1.3 字节码指令简介
 
@@ -89,9 +219,125 @@ public class SimpleClass {
 
 # 二、虚拟机类加载机制
 
+## 2.1 概述
+
+## 2.2 类加载的时机
+
+## 2.3 类加载的过程
+
+### 2.3.1 加载
+
+### 2.3.2 验证
+
+### 2.3.3 准备
+
+### 2.3.4 解析
+
+### 2.3.5 初始化
+
+## 2.4 类加载器
+
+### 2.4.1 类与类加载器
+
+### 2.4.2 双亲委派模型
+
+### 2.4.3 破坏双亲委派模型
+
+## 2.5 Java模块化系统
+
 
 
 # 三、虚拟机字节码执行引擎
 
+# 四、附录
 
+## 4.1 十七种种常量类型结构
 
+![image-20230419150836072](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419150836072.png)
+
+![image-20230419150903308](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419150903308.png)
+
+![image-20230419150916099](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419150916099.png)
+
+## 4.2 虚拟机规范预定义的属性
+
+> 本小节内容来自：
+>
+> - 《深入理解Java虚拟机周志明第三版》
+> - [Class类文件结构解析](http://www.taodudu.cc/news/show-4748638.html)
+
+![image-20230419164010045](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419164010045.png)
+
+![image-20230419164036952](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419164036952.png)
+
+下面举例说明部分属性定义，这里不展示全部，如有需要请自行百度。
+
+### 4.2.1 Code属性
+
+ Code属性是Class文件中最重要的属性，如果把Java程序信息分为代码（Java代码）和元数据（包括类、字段、方法及其他信息），那么Code属性就是用来描述代码的，而其他所有数据项目都是在描述元数据。
+
+Code属性结构如下
+
+| 类型           | 名称                   | 数量             | 含义                     |
+| -------------- | ---------------------- | ---------------- | ------------------------ |
+| u2             | attribute_name_index   | 1                | 属性名索引               |
+| u4             | attribute_length       | 1                | 属性长度                 |
+| u2             | max_stack              | 1                | 操作数栈深度的最大值     |
+| u2             | max_locals             | 1                | 局部变量表所需的存续空间 |
+| u4             | code_length            | 1                | 字节码指令的长度         |
+| u1             | code                   | code_length      | 存储字节码指令           |
+| u2             | exception_table_length | 1                | 异常表长度               |
+| exception_info | exception_table        | exception_length | 异常表                   |
+| u2             | attributes_count       | 1                | 属性集合计数器           |
+| attribute_info | attributes             | attributes_count | 属性集合                 |
+
+部分类型说明：
+
+- attribute_name_index:一项指向CONSTANT_Utf8_info型常量的索引，该常量固定为"Code"，代表了该属性的名称。
+- max_stack：操作数栈深度最大值，在方法执行的任意时刻，操作数栈都不会超过这个深度。
+- max_locals: 局部变量表所需存储空间，单位为变量槽（Slot），Slot是JVM为局部变量分配内存的最小单位。
+- code_length：虽然是u4，但由于JVM规定方法不允许超过65535条字节码指令，所以只用了u2.
+
+### 4.2.2 Exceptions属性
+
+Exceptions属性属于方法表，与Code属性平级，**作用是列举出方法中可能抛出的受查异常，也就是方法描述时throws关键词之后的异常**。结构如下。这和Code属性中的Exception table不一样，Code异常表是用来处理异常，实现finally处理机制的。
+
+| 类型 | 名称                  | 数量                |
+| ---- | --------------------- | ------------------- |
+| u2   | attribute_name_index  | 1                   |
+| u4   | attribute_length      | 1                   |
+| u2   | number_of_exceptions  | 1                   |
+| u2   | exception_index_table | number_of_exception |
+
+### 4.2.3 LineNumberTable属性
+
+LineNumberTable属性是用来描述Java源码行号与字节码行号之间的对应关系。**通过两者的对应关系，当发生异常时，JVM可以准确的定义到是源码的哪行出现的错误。**
+
+| 类型             | 名称                     | 数量                     | 含义       |
+| ---------------- | ------------------------ | ------------------------ | ---------- |
+| u2               | attribute_name_index     | 1                        | 属性名索引 |
+| u4               | attribute_length         | 1                        | 属性长度   |
+| u2               | line_number_table_length | 1                        | 行号表长度 |
+| line_number_info | line_number_table        | line_number_table_length | 行号表     |
+
+### 4.2.4 LocalVariableTable及LocalVariableTypeTable属性
+
+LocalVariableTable用于描述栈帧种局部变量表的变量与Java源码中变量的关系，它也不是运行时必需的属性，但默认会生成到 Class 文件之中，可以在Javac 中使用-g:none 或-g:vars 选项来取消或要求生成这项信息。如果没有生成这项属性，最大的影响就是当其他人引用这个方法时，所有的参数名称都将会丢失，譬如 IDE 将会使用诸如 arg0、argl之类的占位符代替原有的参数名，这对程序运行没有影响，但是会对代码编写带来较大不便，而且在调试期间无法根据参数名称从上下文中获得参数值。
+
+LocalVariableTable属性结构如下图：
+
+![image-20230419170005773](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419170005773.png)
+
+其中`local_variable_table`代表了一个栈帧与源码中的局部变量的关系，结构如下图：
+
+![image-20230419170112605](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230419170112605.png)
+
+### 4.2.5 SourceFile属性
+
+attribute_name_index属性名索引指向常量池中的”SourceFile“字符串常量，sourcefile_index数据项指向常量池中CONSTANT_Utf8_info型常量索引，常量值是源码文件的文件名，通常类名和文件名是一致的，但也有一些特殊情况，比如内部类（见1.1.1）。
+
+| 类型 | 名称                 | 数量 | 含义         |
+| ---- | -------------------- | ---- | ------------ |
+| u2   | attribute_name_index | 1    | 属性名索引   |
+| u4   | attribute_length     | 1    | 属性长度     |
+| u2   | sourcefile_index     | 1    | 源码文件索引 |
