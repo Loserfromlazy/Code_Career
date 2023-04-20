@@ -133,13 +133,13 @@ InnoDB内存数据对象如下：
 
    而MySQL为了解决此问题又引入了另一个参数进一步管理LRU列表`innodb_old_blocks_time`，用于表示页读取到mid位置后需要等待多久才会被加入到LRU列表的热端。如果第二次的访问时间与第一次访问的时间在 1 秒内（默认值），那么该页就不会被从 old 区域升级到 new区域；如果第二次的访问时间与第一次访问的时间超过 1 秒，那么该页就会从 old 区域升级到 young 区域。这是为了防止某些不常用的页（如全表扫描的页）在短时间（如1秒内）内被多次访问，让系统误以为它是热数据从而将其放入了热端区域。
 
-   LRU列表用来管理已经读取的页，但数据库刚启动时，LRU列表是空的，这时页都存放在Free列表中，当需要缓冲池分页时，首先从Free表中查找是否有可用的空闲页，若有则将该页从Free列表中删除，当如LRU列表。否则淘汰LRU末尾的页。当页从old加入到new部分时，称为page made young，反之因为innodb_old_blocks_time导致没有移动到new 被称为page not made young，可以通过`SHOW ENGINE INNODB STATUS来观察`：
+   LRU列表用来管理已经读取的页，但数据库刚启动时，LRU列表是空的，这时页都存放在Free列表中，当需要缓冲池分页时，首先从Free表中查找是否有可用的空闲页，若有则将该页从Free列表中删除，加入LRU列表。否则淘汰LRU末尾的页。当页从old加入到new部分时，称为page made young，反之因为innodb_old_blocks_time导致没有移动到new 被称为page not made young，可以通过`SHOW ENGINE INNODB STATUS来观察`：
 
    ![image-20221014154035205](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20221014154035205.png)
 
    > 这里还有个变量 Buffer poll hit rate 表示缓冲池命中率，一般该值不低于95%
 
-   在LRU中的页没修改后，该页为脏页，这时数据库就会通过CHECKPOINT机制将数据刷新回磁盘。Flush列表中的页就是脏页，但是脏页即存在LRU列表又存在于Flush列表。
+   在LRU中的页被修改后，该页为脏页，这时数据库就会通过CHECKPOINT机制将数据刷新回磁盘。Flush列表中的页就是脏页，但是脏页即存在LRU列表又存在于Flush列表。
 
    InnoDB从1.0.x版本开始支持压缩页，即将16K的页压缩为1、2、4、8KB，对于非16K的页，是通过unzip_LRU管理的。
 
