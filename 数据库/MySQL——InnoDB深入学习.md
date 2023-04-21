@@ -956,7 +956,7 @@ UPDATE actor set actor_id = 999 where actor_id =1;
 
 `SELECT  ...... FOR UPDATE`对读取的行记录加一个X锁，其他事务不能对已锁定的行加任何锁。`SELECT  ...... LOCK IN SHARE MODE`会对读取的行记录加一个S锁，其他事务可以向被锁定的行加S锁，但是不能加X锁。
 
-而对于一致性非锁定读，即使改行执行了`SELECT  ...... FOR UPDATE`，也是可以读取的，这跟上一节的例子是一样的，因为update也是加X锁。同时还要注意，`SELECT  ...... FOR UPDATE`和`SELECT  ...... LOCK IN SHARE MODE`必须在一个事务里，当事务提交了，锁也就释放了，因此在使用上述两句 SELECT 锁定语句时，务必加上 BEGIN，START TRANSACTION 或者 SETAUTOCOMMIT=0。
+而对于一致性非锁定读，即使该行执行了`SELECT  ...... FOR UPDATE`，也是可以读取的，这跟上一节的例子是一样的，因为update也是加X锁。同时还要注意，`SELECT  ...... FOR UPDATE`和`SELECT  ...... LOCK IN SHARE MODE`必须在一个事务里，当事务提交了，锁也就释放了，因此在使用上述两句 SELECT 锁定语句时，务必加上 BEGIN，START TRANSACTION 或者 SETAUTOCOMMIT=0。
 
 ## 3.3 锁的算法
 
