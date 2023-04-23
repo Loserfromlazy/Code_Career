@@ -1126,7 +1126,7 @@ G1的运行过程大概可以分为以下几个阶段：
 
 jdk8的默认回收器是Parallel Scavenge + Parallel Old。我们可以通过`java -XX:+PrintCommandLineFlags -version`命令查看：
 
-
+![image-20230423145357399](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230423145357399.png)
 
 jdk8使用CMS的参考配置：
 
