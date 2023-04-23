@@ -1,6 +1,6 @@
 # Java虚拟机篇二虚拟机执行子系统
 
-**转载请声明！！！违者必究！**
+**禁止转载！！**
 
 > 本篇是Java虚拟机的学习笔记的第二篇，虚拟机执行子系统。
 >
@@ -1118,19 +1118,179 @@ public class Test {
 }
 ```
 
+输出`hello char`很好理解，但如果我们注释掉char的重载方法，这时就会输出：
 
+![image-20230423151721707](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230423151721707.png)
+
+这是因为发生了自动类型转换，`'a'`除了字符还可以代表数字97，我们继续注释，这时会输出：
+
+![image-20230423151849260](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230423151849260.png)
+
+这是因为从数字又被自动转换成长整数97L，匹配到了long的重载。这里没有写float、double等重载，但实际上自动重载还能发生很多：`char > int > long > float >double`。会按照这个顺序转换。然后我们继续注释掉long的重载方法：
+
+![image-20230423152135716](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230423152135716.png)
+
+我们可以看到这时又发生了一次自动装箱，然后我们继续注释：
+
+![image-20230423152230355](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230423152230355.png)
+
+这时会发现出现序列化了，这是因为Character类实现了Serializable接口
+
+```java
+public final
+class Character implements java.io.Serializable, Comparable<Character>
+```
+
+由于找不到装箱类，所以找到了装箱类的实现接口，注意char可以转成int，但Character不能转成Integer。如果两个参数Serializable和Comparable的重载同时出现，那么编译器将拒绝编译，因为无法确定自动转型到哪种类型。
+
+这时继续注释的话就会输出`hello Object`，因为char装箱后变成了父类，如果有多个父类，那就按照继承关系从下向上搜索。如果我们把Object的重载也注释掉，就会输出 `hello char ...`，可见可变长参数的重载优先级最低，这时`'a'`被当作`char[]`类型。
 
 #### 动态分派
 
+我们还是先看一段代码：
+
+```java
+public class DynamicDispatch {
+    static abstract class Human {
+        protected abstract void hello();
+    }
+
+    static class Man extends Human {
+        @Override
+        protected void hello() {
+            System.out.println("boy says hello");
+        }
+    }
+
+    static class Woman extends Human {
+        @Override
+        protected void hello() {
+            System.out.println("girl says hello");
+        }
+    }
+
+    public void hello(Human guy) {
+        System.out.println("hello guy");
+    }
+
+    public static void main(String[] args) {
+        Human man = new Man();
+        Human woman = new Woman();
+        man.hello();
+        woman.hello();
+        man = new Woman();
+        man.hello();
+    }
+}
+//运行结果：
+//boy says hello
+//girl says hello
+//girl says hello
+```
+
+然后我们javap查看字节码指令：
+
+![image-20230423153423859](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230423153423859.png)
+
+其中0-15行对应着 `Human man = new Man();Human woman = new Woman();`，接下来16行和20行的aload指令分别把刚创建的俩对象压到栈顶，这两个对象是hello方法的所有者，称为接收者；17和21行是方法调用指令，这两个指令从字节码角度来看无论是`invokevirtual`还是参数上图中对应着常量池`#9`都完全一样，但是这两句指令的执行的方法不同，所以弄清楚如何确定方法版本、如何实现多态还是要从 `invokevirtual`指令入手。
+
+> 上面的#9如下：
+>
+>  `#9 = Methodref          #15.#44        // com/learn/jvmtest/DynamicDispatch$Human.hello:()V`
+
+`invokevirtual`指令的解析过程大致如下：
+
+1. 找到操作数栈顶的第一个元素所指向的对象的实际类型，记作 C。
+2. 如果在类型 C 中找到与常量中的描述符和简单名称都相符的方法，则进行访问权限校验，如果通过则返回这个方法的直接引用，查找过程结束；不通过则返回`java.lang.IllegalAccessError` 异常
+3. 否则，按照继承关系从下往上依次对 C 的各个父类进行第二步的搜索和验证过程。
+4. 如果始终没有找到合适的方法，则抛出`java.lang.AbstractMethodError` 异常。
+
+正是因为 invokevirtual 指令执行的第一步就是在运行期确定接收者的实际类型，所以两次调用中的 invokevirtual 指令并不是把常量池中方法的符号引用解析到直接引用上就结束了，还会根据方法接收者的实际类型来选择方法版本，这个过程就是 Java 语言中方法重写的本质。我们把这种在运行期根据实际类型确定方法执行版本的分派过程称为**动态分派**。
+
+这种多态性的根源在于虚方法调用指令 `invokevirtual`的执行逻辑，且只会对方法有效，对字段是无效的，因为字段不使用这条指令。事实上，在Java 里面只有虚方法存在，字段永远不可能是虚的，换句话说，字段永远不参与多态，哪个类的方法访问某个名字的字段时，该名字指的就是这个类能看到的那个字段。
+
 #### 单分派与多分派
+
+方法的接收者和方法的参数统称为方法的宗量，这个定义最早来自于《Java与模式》。我们可以将分派划分为单分派与多分派。单分派是根据一个宗量对目标方法进行选择，多分派是根据多于一个宗量对目标方法进行选择。举个例子：
+
+> 这个例子的梗在[这是一个艰难的决定](https://zhuanlan.zhihu.com/p/19609988)，周志明大佬带你重温老梗doge。
+
+```java
+public class Test {
+
+    static class QQ{}
+    static class _360{}
+
+    public static class Father{
+        public void hardChoice(QQ arg){
+            System.out.println("father choose QQ");
+        }
+        public void hardChoice(_360 arg){
+            System.out.println("father choose 360");
+        }
+    }
+
+    public static class Son extends Father{
+        public void hardChoice(QQ arg){
+            System.out.println("son choose QQ");
+        }
+        public void hardChoice(_360 arg){
+            System.out.println("son choose 360");
+        }
+    }
+
+    public static void main(String[] args) {
+        Father father = new Father();
+        Father son = new Son();
+        father.hardChoice(new _360());
+        son.hardChoice(new QQ());
+    }
+}
+//运行结果：
+//father choose 360
+//son choose QQ
+```
+
+上面的代码中，在main中调用了两次hardChoice方法。先关注静态分派：在静态分派的过程中选择目标方法的依据有两点：一是静态类型是 Father 还是 Son；二是方法参数是QQ还是360。这次选择结果的最终产物是产生了两条 `invokevirtual` 指令，两条指令的参数分别为常量池中指向 `Father::hardChoice(360)`及 `Father::hardChoice(QQ)`方法的符号引用。因为是根据两个宗量进行选择，所以 Java 语言的静态分派属于多分派类型。
+
+再看动态分派在执行`son.hardChoice(new QQ())`这行代码时，更准确地说，是在执行这行代码所对应的 `invokevirtual` 指令时，由于编译期已经决定目标方法的签名必须为 `hardChoice(QQ)`，虚拟机此时不会关心传递过来的参数“QQ”到底是“腾讯 QQ”还是“奇瑞 QQ”，因为这时候参数的静态类型、实际类型都对方法的选择不会构成任何影响，唯一可以影响虚拟机选择的因素只有该方法的接受者的实际类型是 Father 还是 Son。因为只有一个宗量作为选择依据，所以 Java 语言的动态分派属于单分派类型。
+
+因此可以说Java是一门静态多分派，动态单分派的语言。
 
 #### 虚拟机动态分派的实现
 
+动态分派是执行非常频繁的动作，而且动态分派的方法版本选择过程需要运行时在接收者类型的方法元数据中搜索合适的目标方法，因此，Java 虚拟机实现基于执行性能的考虑，真正运行时一般不会如此频繁地去反复搜索类型元数据。面对这种情况，一种基础而且常见的优化手段是为类型在方法区中建立一个虚方法表(Virtual Method Table，也称为vtable，与此对应的，在invokeinterface 执行时也会用到接口方法表Interface MethodTable，简称 itable)，使用虚方法表索引来代替元数据查找以提高性能。虚方法表结构如下：
 
+![image-20230423161522280](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230423161522280.png)
 
-## 3.4 动态类型语言支持
+虚方法表中存放着各个方法的实际入口地址。如果某个方法在子类中没有被重写，那子类的虚方法表中的地址入口和父类相同方法的地址入口是一致的，都指向父类的实现入口。如果子类中重写了这个方法，子类虚方法表中的地址也会被替换为指向子类实现版本的入口地址。在上图中，Son 重写了来自 Father 的全部方法，因此 Son 的方法表没有指向 Father 类型数据的箭头。但是 Son 和 Father 都没有重写来自 Obiect 的方法，所以它们的方法表中所有从 Object 继承来的方法都指向了 Object 的数据类型。
+
+查虚方法表是分派调用的一种优化手段，由于 Java 对象里面的方法默认(即不使用 final 修饰)就是虚方法，虚拟机除了使用虚方法表之外，为了进一步提高性能，还会使用类型继承关系分析(Class Hierarchy Analysis，CHA)、守护内联(GuardedInlining)、内联缓存(Inline Cache)等多种非稳定的激进优化来争取更大的性能空间。
+
+## 3.4 动态类型语言支持todo
 
 ## 3.5 基于栈的字节码解释执行引擎
+
+许多Java虚拟机的执行引擎在执行Java代码都有解释执行（通过解释器执行）和编译执行（通过即时编译器产生本地代码执行）两种选择。这里我们学习一下在概念模型下的Java虚拟机解释执行字节码时，执行引擎是如何工作的。
+
+> 注意这里仅是概念模型，因为实际的虚拟机实现并不是概念模型一板一眼的机械式计算，而是动态产生每条字节码的汇编代码运行。
+
+### 3.5.1 解释执行
+
+在 Java 初生的JDK 1.0 时代，解释执行还算是比较准确的，但当主流的虚拟机中都包含了即时编译器后，Class 文件中的代码到底会被解释执行还是编译执行，就成了只有虚拟机自己才能准确判断的事。只有确定了谈论对象是某种具体的 Java 实现版本和执行引擎运行模式时，谈解释执行还是编译执行才会比较合理确切。
+
+无论是解释还是编译，也无论是物理机还是虚拟机，对于应用程序，机器都不可能如人那样阅读、理解，然后获得执行能力。大部分的程序代码转换成物理机的目标代码或虚拟机能执行的指令集之前，都需要经过下图的各个步骤，图片来自《深入理解Java虚拟机周志明第三版》：
+
+![image-20230423163417124](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230423163417124.png)
+
+如今，基于物理机、Java 虚拟机，或者是非 Java 的其他高级语言虚拟机(HLLVM)的代码执行过程，大体上都会遵循这种符合现代经典编译原理的思路，在执行前先对程序源码进行词法分析和语法分析处理，把源码转化为抽象语法树(Abstract Syntax Tree，AST)。对于一门具体语言的实现来说，词法、语法分析以至后面的优化器和目标代码生成器都可以选择独立于执行引擎，形成一个完整意义的编译器去实现，这类代表是 C/C++ 语言。也可以选择把其中一部分步骤(如生成抽象语法树之前的步骤) 实现为一个半独立的编译器这类代表是 Java 语言。又或者把这些步骤和执行引擎全部集中封装在一个封闭的黑匣子之中，如大多数的JavaScript 执行引擎。
+在Java 语言中，Javac 编译器完成了程序代码经过词法分析、语法分析到抽象语法树再遍历语法树生成线性的字节码指令流的过程。因为这一部分动作是在 Java 虚拟机之外进行的，而解释器在虚拟机的内部，所以 Java 程序的编译就是半独立的实现。
+
+### 3.5.2 基于栈的指令集和基于寄存器的指令集
+
+
+
+### 3.5.3 基于栈的解释器的执行过程
 
 # 四、附录
 
