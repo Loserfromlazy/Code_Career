@@ -1039,7 +1039,7 @@ INSERT INTO test_table2 SELECT 6,7;
 - 普通的select语句不会加行级锁，因为普通的select是通过MVCC并发版本控制读取快照，不需要加锁。
 - 要想在select语句中加锁，可以使用以下两种方式：
   - SELECT  ...... FOR UPDATE   **对读取的记录加独占锁(X型锁)**
-  - SELECT  ...... LOCK IN SHARE MODE  **对读取的记录加独占锁(X型锁)**
+  - SELECT  ...... LOCK IN SHARE MODE  **对读取的记录加共享锁(S型锁)**
 - update 和 delete 操作都会加行级锁，且锁的类型都是独占锁(X型锁)。
 - 在读已提交隔离级别（Read committed）下，行级锁的种类只有记录锁，也就是仅仅把一条记录锁上。
 - 在可重复读隔离级别（Repeatable read）下，行级锁的种类除了有记录锁，还有间隙锁（目的是为了避免幻读），行级锁主要有三类：
