@@ -1137,7 +1137,7 @@ jdk8使用CMS的参考配置：
 -Xmx16g//最大堆内存
 -Xms16g//最小堆内存
 -Xmn256m//新生代大小，新生代设置过大会导致young gc时间过长，一般来说最好每次http请求都能在young gc收集掉不让其发生full gc。一般来说-Xmn与-Xmx比例为1：9
--XX:PermSize=128m//持久代大小
+//-XX:PermSize=128m //持久代大小
 -Xss256k//设置每个线程的堆栈大小
 -XX:DisableExplicitGC//禁止手动调用gc，即System.gc()是空调用
 -XX:+UseConcMarkSweepGC //并发标记清除（CMS）收集器
@@ -1148,6 +1148,19 @@ jdk8使用CMS的参考配置：
 -XX:+UseCMSInitiatingOccupancyOnly //使用手动定义初始化定义开始CMS收集
 -XX:CMSInitiatingOccupancyFraction=70 //使用cms作为垃圾回收使用70％后开始CMS收集
 ~~~
+
+> `-XX:PermSize` 是用于设置永久代（Permanent Generation）内存大小的一个JVM参数。在JVM的内存管理中，永久代是一块用于存放类信息、常量、静态变量等数据的区域，它在Java 8及之前的版本中存在，但在Java 8及之后的版本中被元空间（Metaspace）取代。
+>
+> `-XX:PermSize` 参数用于设置永久代内存的初始大小，单位为字节。这个参数的默认值在不同的JVM版本中可能会有所不同，通常情况下默认值较小，例如在Java 7及之前的版本中，默认值为64MB。在Java 8及之后的版本中，由于永久代被元空间取代，`-XX:PermSize` 参数不再生效。
+>
+> 需要注意的是，`-XX:PermSize` 参数只在使用永久代（Java 7及之前的版本）的JVM中生效，对于使用元空间（Java 8及之后的版本）的JVM，应使用`-XX:MetaspaceSize` 参数来设置元空间的初始大小。例如，要将元空间的初始大小设置为256MB，可以使用以下参数：
+>
+> ```
+> diffCopy code
+> -XX:MetaspaceSize=256m
+> ```
+>
+> 在设置永久代或元空间大小时，应根据具体的应用程序需求和性能测试结果来选择合适的值，避免出现内存溢出或性能不佳的情况。同时，建议升级到Java 8及之后的版本，使用元空间代替永久代，以获得更好的性能和内存管理效果。
 
 **jdk8使用G1的参考配置：**
 

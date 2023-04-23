@@ -1087,6 +1087,37 @@ staticDispatch.hello((Woman) human);
 
 下面我们来看一下静态分派的例子，看一下方法重载时目标方法的选择过程：
 
+```java
+public class Test {
+    public static void hello(Object arg){
+        System.out.println("hello Object");
+    }
+    public static void hello(int arg){
+        System.out.println("hello int");
+    }
+    public static void hello(long arg){
+        System.out.println("hello long");
+    }
+    public static void hello(Character arg){
+        System.out.println("hello Character");
+    }
+    public static void hello(char arg){
+        System.out.println("hello char");
+    }
+    public static void hello(char ... arg){
+        System.out.println("hello char ...");
+    }
+    public static void hello(Serializable arg){
+        System.out.println("hello Serializable");
+    }
+
+    public static void main(String[] args) {
+        hello('a');
+        //运行结果：hello char
+    }
+}
+```
+
 
 
 #### 动态分派
