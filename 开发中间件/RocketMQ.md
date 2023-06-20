@@ -1483,7 +1483,7 @@ nameserver作为一个名称服务，需要提供服务注册、服务剔除、�
 
 ![image-20230213165325729](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230213165325729.png)
 
-NameServer本质上是一个AP的设计，虽然在早期也是依赖Zookeeper的，但是在3.0版本就去掉了Zookeeper的依赖，而是使用了自己的NameServer。因为NameServer需要报纸最终一致，而并不需要强一致性，所以使用自己的降低维护成本。这里需要注意，NameServer不想Zookeeper（使用Zab协议）、etcd（使用raft协议），NameServer节点互不通信，无法进行数据复制。
+NameServer本质上是一个AP的设计，虽然在早期也是依赖Zookeeper的，但是在3.0版本就去掉了Zookeeper的依赖，而是使用了自己的NameServer。因为NameServer需要保证最终一致，而并不需要强一致性，所以使用自己的降低维护成本。这里需要注意，NameServer不像Zookeeper（使用Zab协议）、etcd（使用raft协议），NameServer节点互不通信，无法进行数据复制。
 
 > CAP：
 >
@@ -1686,7 +1686,7 @@ ServerBootstrap childHandler =
 - 主动注册：Broker开启时进行注册。 broker调用registerBrokerAll 方法进行注册
 - 定期（被动注册）：这也是broker的心跳，broker通过定时任务（线程）调用registerBrokerAll方法进行元数据的注册与更新。 默认30s心跳。
 
-下面我们来看代，在brokerq启动时会像namesrv一样创建BrokerController，然后启动这个controller，源码如下：
+下面我们来看代码，在brokerq启动时会像namesrv一样创建BrokerController，然后启动这个controller，源码如下：
 
 ```java
 public static void main(String[] args) {
@@ -2428,7 +2428,7 @@ public void start() throws MQClientException {
 这里我们主要关注`defaultMQProducerImpl.start()`方法，然后我们跟进此方法：
 
 ```java
-producerTable中，具体见下面的图片public void start() throws MQClientException {
+public void start() throws MQClientException {
     this.start(true);
 }
 //---->
