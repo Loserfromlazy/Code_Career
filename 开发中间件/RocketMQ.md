@@ -5092,11 +5092,25 @@ public void handleDiskFlush(AppendMessageResult result, PutMessageResult putMess
 }
 ```
 
-我们先来看一下
-
 > 在上面的方法中构建同步刷盘请求GroupCommitRequest时传入的参数是从doAppand方法来的，如下图：
 >
 > ![image-20230407092422129](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230407092422129.png)
+
+我们先来看一下同步刷盘的流程，首先同步刷盘会创建一个同步刷盘的请求GroupCommitRequest，然后调用同步刷盘服务GroupCommitService的putRequest方法将刷盘请求提交。我们来看一看这个同步刷盘服务，如下图：
+
+![image-20230703160647885](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230703160647885.png)
+
+这个类是ServiceThread类的实现类（代码如下），这个类在6.5.2学习过，作用是周期性的执行某个任务，同时还拥有了紧急执行该任务的能力。
+
+```java
+abstract class FlushCommitLogService extends ServiceThread {
+    protected static final int RETRY_TIMES_OVER = 10;
+}
+```
+
+刷盘服务GroupCommitService中维护了两个队列，这两个队列形成了特殊的生产者消费者模式
+
+
 
 
 
