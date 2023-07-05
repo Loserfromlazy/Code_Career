@@ -5108,11 +5108,93 @@ abstract class FlushCommitLogService extends ServiceThread {
 }
 ```
 
-刷盘服务GroupCommitService中维护了两个队列，这两个队列形成了特殊的生产者消费者模式
+刷盘服务GroupCommitService中维护了两个队列，这两个队列形成了特殊的生产者消费者模式，下面我们从run方法来看一下这两个队列的工作方式，因为这个类是ServiceThread类的实现类，所以我们来到run方法：
 
+```java
+public void run() {
+    CommitLog.log.info(this.getServiceName() + " service started");
 
+    while (!this.isStopped()) {
+        try {
+            this.waitForRunning(10);
+            this.doCommit();
+        } catch (Exception e) {
+            CommitLog.log.warn(this.getServiceName() + " service has exception. ", e);
+        }
+    }
 
+    // Under normal circumstances shutdown, wait for the arrival of the
+    // request, and then flush
+    try {
+        Thread.sleep(10);
+    } catch (InterruptedException e) {
+        CommitLog.log.warn("GroupCommitService Exception, ", e);
+    }
 
+    synchronized (this) {
+        this.swapRequests();
+    }
+
+    this.doCommit();
+
+    CommitLog.log.info(this.getServiceName() + " service end");
+}
+```
+
+可以看到GroupCommitService每10ms执行一次doCommit方法。我们进入这个方法：
+
+```java
+private void doCommit() {
+    //上锁
+    synchronized (this.requestsRead) {
+        if (!this.requestsRead.isEmpty()) {
+            //遍历读队列
+            for (GroupCommitRequest req : this.requestsRead) {
+                // There may be a message in the next file, so a maximum of
+                // two times the flush
+                boolean flushOK = false;
+                //下一个文件中可能有消息，所以最多刷新两次
+                for (int i = 0; i < 2 && !flushOK; i++) {
+                    //判断是否完成了刷盘
+                    flushOK = CommitLog.this.mappedFileQueue.getFlushedWhere() >= req.getNextOffset();
+
+                    if (!flushOK) {
+                        //刷盘，最终调用fileChannel.force进行刷盘
+                        CommitLog.this.mappedFileQueue.flush(0);
+                    }
+                }
+                //唤醒客户端线程
+                req.wakeupCustomer(flushOK);
+            }
+
+            long storeTimestamp = CommitLog.this.mappedFileQueue.getStoreTimestamp();
+            if (storeTimestamp > 0) {
+                CommitLog.this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(storeTimestamp);
+            }
+
+            this.requestsRead.clear();
+        } else {
+            // Because of individual messages is set to not sync flush, it
+            // will come to this process
+            CommitLog.this.mappedFileQueue.flush(0);
+        }
+    }
+}
+```
+
+在doCommit中我们可以看到会将requestsRead上锁，然后将requestsRead队列中的所有刷盘请求拿出来进行刷盘。为什么这里用的是requestsRead队列，而我们将请求放入requestsWrite队列呢？实际上RocketMQ这里用了读写分离的设计方式，在调用doCommit方法之前会先调用swapRequests方法，具体调用流程如下图：
+
+![image-20230705093325802](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230705093325802.png)
+
+```java
+private void swapRequests() {
+    List<GroupCommitRequest> tmp = this.requestsWrite;
+    this.requestsWrite = this.requestsRead;
+    this.requestsRead = tmp;
+}
+```
+
+这里在doCommit方法前会将读写两个队列进行交换，通过这种方式可以实现RocketMQ的读写分离GroupCommitService 的刷盘操作是同步的，刷盘期间仍然会有大量的刷盘请求被提交进来，拆分成两个读写列表，请求提交到写列表，刷盘时处理读列表，刷盘结束交换列表，循环往复，两者可以同时进行。同时也可以减少锁的竞争。
 
 消息刷盘（同步刷盘和异步刷盘）handleDiskFlush --》if判断同步和异步刷盘 --》
 
