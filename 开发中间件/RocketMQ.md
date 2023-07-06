@@ -5067,7 +5067,7 @@ public void handleDiskFlush(AppendMessageResult result, PutMessageResult putMess
             GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
             //提交刷盘请求
             service.putRequest(request);
-            //
+            //waitForFlush方法中会调用countDownLatch#await方法将当前线程阻塞，等待刷盘完成
             boolean flushOK = request.waitForFlush(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout());
             if (!flushOK) {
                 log.error("do groupcommit, wait for flush failed, topic: " + messageExt.getTopic() + " tags: " + messageExt.getTags()
@@ -5163,7 +5163,7 @@ private void doCommit() {
                         CommitLog.this.mappedFileQueue.flush(0);
                     }
                 }
-                //唤醒客户端线程
+                //唤醒客户端线程，这里是调用countDownLatch#countDown方法唤醒handleDiskFlush方法中的waitForFlush阻塞的线程。
                 req.wakeupCustomer(flushOK);
             }
 
@@ -5196,63 +5196,191 @@ private void swapRequests() {
 
 这里在doCommit方法前会将读写两个队列进行交换，通过这种方式可以实现RocketMQ的读写分离GroupCommitService 的刷盘操作是同步的，刷盘期间仍然会有大量的刷盘请求被提交进来，拆分成两个读写列表，请求提交到写列表，刷盘时处理读列表，刷盘结束交换列表，循环往复，两者可以同时进行。同时也可以减少锁的竞争。
 
-消息刷盘（同步刷盘和异步刷盘）handleDiskFlush --》if判断同步和异步刷盘 --》
+我们继续看doCommit方法，在将读队列上锁后从交换过的读队列拿取刷盘请求，然后进行刷盘，刷盘后，唤醒handleDiskFlush中的waitForFlush方法阻塞的线程。同步刷盘的流程如下：
 
-同步：
+![image-20230706132020404](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230706132020404.png)
 
-> 大体流程就是如果消息满足isWaitStoreMsgOk，就先获取刷盘线程，然后生成刷盘请求GroupCommitRequest，然后将请求放入刷盘线程，等待刷盘线程调用doCimmit，对列表中的消息进行刷盘，doCommit中每一个请求处理完成后，都会调用wakeupCustomer。如果等待5s或者请求countdownlatch计数为0，则对消息是否成功刷盘进行汇报，如果失败就设置一个刷盘超时的状态
+以上就是同步刷盘的源码和流程，下面我们来看异步的刷盘流程和源码，我们回到handleDiskFlush代码如下：
 
-获取刷盘服务FlushCommitLogService  --》判断消息是否满足waitStoreMsgOk的标志 --》
+![image-20230706135959798](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230706135959798.png)
 
-满足，构建提交请求GroupCommitRequest（构造时用wroteOffset+当前消息长度计算目标刷盘位置）--》
+如果是异步刷盘，那么就判断是否开启了二级（专用）缓存，根据此配置唤醒异步刷盘线程或者唤醒专用二级缓存的刷盘线程。
 
-将这个请求放入刷盘线程中的写入队列里 --》
+异步刷盘线程和二级缓存的刷盘线程都是抽象类FlushCommitLogService的实现类，FlushCommitLogService的代码如下：
 
-> 刷盘线程内部是一个特殊的生产者消费者模式，内部有一个写入队列，有一个读取队列。
+```java
+abstract class FlushCommitLogService extends ServiceThread {
+    protected static final int RETRY_TIMES_OVER = 10;
+}
+```
 
-等待刷盘线程执行完毕（内部是CountDownLatch）--》
+我们先看异步刷盘线程FlushRealTimeService，我们跟进run方法：
 
-如果没刷盘成功，就设置一个刷盘超时的状态 --》
+```java
+public void run() {
+    CommitLog.log.info(this.getServiceName() + " service started");
 
-异步：
+    while (!this.isStopped()) {
+        //是否定时刷新，默认为实时
+        boolean flushCommitLogTimed = CommitLog.this.defaultMessageStore.getMessageStoreConfig().isFlushCommitLogTimed();
+        //CommitLog刷新间隔  将数据刷新到磁盘 默认500ms
+        int interval = CommitLog.this.defaultMessageStore.getMessageStoreConfig().getFlushIntervalCommitLog();
+        //在刷新CommitLog时要刷新多少页 默认4
+        int flushPhysicQueueLeastPages = CommitLog.this.defaultMessageStore.getMessageStoreConfig().getFlushCommitLogLeastPages();
 
-> flushCommitLogTimed=false//刷盘策略，默认是实时刷盘
->
-> flushIntervalCommitLog=500//刷盘时间间隔，默认500ms
->
-> flushCommitLogTimedLeastPages//meici刷盘至少多少页，默认4个
->
-> flushCommitLogTimedThoroughInterval = 1000*10 //彻底刷盘时间间隔，默认10s
+        int flushPhysicQueueThoroughInterval =
+            CommitLog.this.defaultMessageStore.getMessageStoreConfig().getFlushCommitLogThoroughInterval();
 
-如果是异步，根据是否开启专用缓存才决定，没开启就唤醒异步刷盘线程，开启了就唤醒CommitRealTimeService专用缓存线程池。
+        boolean printFlushProgress = false;
 
-在该异步刷盘线程中：根据CommitLog的刷盘时间间隔（默认1s）来间隔性的调用CommitLog>MappedFileQueue.commit来进行刷盘，然后更新时间戳
+        // Print flush progress
+        long currentTimeMillis = System.currentTimeMillis();
+        if (currentTimeMillis >= (this.lastFlushTimestamp + flushPhysicQueueThoroughInterval)) {
+            this.lastFlushTimestamp = currentTimeMillis;
+            flushPhysicQueueLeastPages = 0;
+            printFlushProgress = (printTimes++ % 10) == 0;
+        }
 
-处理完消息刷盘就会处理消息的主从复制，
+        try {
+            if (flushCommitLogTimed) {
+                //定时刷新就休眠当前线程
+                Thread.sleep(interval);
+            } else {
+                //实时刷新就调用waitForRunning方法，因为此方法可以实时唤醒
+                this.waitForRunning(interval);
+            }
+
+            if (printFlushProgress) {
+                this.printFlushProgress();
+            }
+
+            long begin = System.currentTimeMillis();
+            //刷盘
+            CommitLog.this.mappedFileQueue.flush(flushPhysicQueueLeastPages);
+            long storeTimestamp = CommitLog.this.mappedFileQueue.getStoreTimestamp();
+            if (storeTimestamp > 0) {
+                CommitLog.this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(storeTimestamp);
+            }
+            long past = System.currentTimeMillis() - begin;
+            if (past > 500) {
+                log.info("Flush data to disk costs {} ms", past);
+            }
+        } catch (Throwable e) {
+            CommitLog.log.warn(this.getServiceName() + " service has exception. ", e);
+            this.printFlushProgress();
+        }
+    }
+
+    // Normal shutdown, to ensure that all the flush before exit
+    //正常关闭时 需要刷完盘在关闭
+    boolean result = false;
+    for (int i = 0; i < RETRY_TIMES_OVER && !result; i++) {
+        result = CommitLog.this.mappedFileQueue.flush(0);
+        CommitLog.log.info(this.getServiceName() + " service shutdown, retry " + (i + 1) + " times " + (result ? "OK" : "Not OK"));
+    }
+
+    this.printFlushProgress();
+
+    CommitLog.log.info(this.getServiceName() + " service end");
+}
+```
+
+从上面的源码我们可以看到，默认异步刷盘是每500ms执行一次，且由于继承了ServiceThread同时拥有了可以被随时唤醒去执行刷盘的能力。此方法中刷盘也是使用的mappedFileQueue.flush方法。以上就是异步刷盘的源码流程。
+
+下面我们再看看二级缓存CommitRealTimeService的刷盘线程的run方法：
+
+```java
+@Override
+public void run() {
+    CommitLog.log.info(this.getServiceName() + " service started");
+    while (!this.isStopped()) {
+        //CommitLog刷新间隔  将数据刷新到磁盘 默认200ms
+        int interval = CommitLog.this.defaultMessageStore.getMessageStoreConfig().getCommitIntervalCommitLog();
+        //在刷新CommitLog时要刷新多少页 默认4
+        int commitDataLeastPages = CommitLog.this.defaultMessageStore.getMessageStoreConfig().getCommitCommitLogLeastPages();
+
+        int commitDataThoroughInterval =
+            CommitLog.this.defaultMessageStore.getMessageStoreConfig().getCommitCommitLogThoroughInterval();
+
+        long begin = System.currentTimeMillis();
+        if (begin >= (this.lastCommitTimestamp + commitDataThoroughInterval)) {
+            this.lastCommitTimestamp = begin;
+            commitDataLeastPages = 0;
+        }
+
+        try {
+            //提交二级缓存
+            boolean result = CommitLog.this.mappedFileQueue.commit(commitDataLeastPages);
+            long end = System.currentTimeMillis();
+            if (!result) {
+                this.lastCommitTimestamp = end; // result = false means some data committed.
+                //now wake up flush thread.
+                //唤醒异步刷盘线程 去进行刷盘
+                flushCommitLogService.wakeup();
+            }
+
+            if (end - begin > 500) {
+                log.info("Commit data to file costs {} ms", end - begin);
+            }
+            this.waitForRunning(interval);
+        } catch (Throwable e) {
+            CommitLog.log.error(this.getServiceName() + " service has exception. ", e);
+        }
+    }
+
+    boolean result = false;
+    for (int i = 0; i < RETRY_TIMES_OVER && !result; i++) {
+        result = CommitLog.this.mappedFileQueue.commit(0);
+        CommitLog.log.info(this.getServiceName() + " service shutdown, retry " + (i + 1) + " times " + (result ? "OK" : "Not OK"));
+    }
+    CommitLog.log.info(this.getServiceName() + " service end");
+}
+```
+
+这里的逻辑与异步刷盘类似，此类是每200ms执行一次，这里是先将二级缓存提交到文件系统缓存中，然后唤醒异步刷盘线程，将其刷盘到磁盘中。
+
+以上就是消息刷盘的源码分析。处理完消息刷盘后就会处理消息的主从复制，
 
 #### 处理消息的主从复制
 
-step7：主从复制：handleHA -》判断当前消息是否需要同步复制或异步复制：
+我们进入到handleHA方法中，此方法源码如下：
 
-同步复制：
+```java
+public void handleHA(AppendMessageResult result, PutMessageResult putMessageResult, MessageExt messageExt) {
+    if (BrokerRole.SYNC_MASTER == this.defaultMessageStore.getMessageStoreConfig().getBrokerRole()) {
+        HAService service = this.defaultMessageStore.getHaService();
+        if (messageExt.isWaitStoreMsgOK()) {
+            // Determine whether to wait
+            if (service.isSlaveOK(result.getWroteOffset() + result.getWroteBytes())) {
+                //构建请求，这里通过wroteOffset和当前消息的长度计算目标的刷盘位置
+                GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
+                //然后将请求放入到HAService的请求队列中
+                service.putRequest(request);
+                service.getWaitNotifyObject().wakeupAll();
+                //等待HAService执行完毕
+                boolean flushOK =
+                    request.waitForFlush(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout());
+                if (!flushOK) {
+                    log.error("do sync transfer other node, wait return, but failed, topic: " + messageExt.getTopic() + " tags: "
+                              + messageExt.getTags() + " client address: " + messageExt.getBornHostNameString());
+                    //如果同步失败，设置消息存储结果为刷盘超时
+                    putMessageResult.setPutMessageStatus(PutMessageStatus.FLUSH_SLAVE_TIMEOUT);
+                }
+            }
+            // Slave problem
+            else {
+                // Tell the producer, slave not available
+                putMessageResult.setPutMessageStatus(PutMessageStatus.SLAVE_NOT_AVAILABLE);
+            }
+        }
+    }
 
-获取主从复制的服务 HAService  --》判断消息是否满足waitStoreMsgOk的标志 --》
+}
+```
 
-满足，构建请求GroupCommitRequest（构造时用wroteOffset+当前消息长度计算目标刷盘位置）--》
+在此方法中首先获取主从复制的服务 HAService，然后判断消息是否满足waitStoreMsgOk的标志，如果满足则构建请求GroupCommitRequest，然后将这个请求放入HAService 线程中的写入队列里，然后调用waitForFlush方法等待HAService 线程执行完毕（内部是CountDownLatch），如果没刷盘成功，就设置一个同步从节点失败的状态。 
 
-将这个请求放入HAService 线程中的写入队列里 --》启动线程--》
-
-等待HAService 线程执行完毕（内部是CountDownLatch）--》
-
-如果没刷盘成功，就设置一个同步从节点失败的状态 
-
-doWaitTransfer （类似doCommmit） --》
-
-异步复制：略
-
-最后一步就是返回，结束此方法，如果上述流程均正常，则putMessageResult对象的状态变量为PUT_OK。
-
-### 6.5.4 同步刷盘与异步刷盘流程
+### 6.5.4 同步刷盘与异步刷盘流程总结
 
 
 
