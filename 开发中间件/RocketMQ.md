@@ -4976,7 +4976,7 @@ public void run() {
 
 以上就是RocketMQ定时任务原理与线程设计，在Broker中比如刷盘线程中使用的非常多。
 
-### 6.5.3 CommitLog消息写入的流程todo
+### 6.5.3 CommitLog消息写入的流程
 
 在6.4.2中，我们只关注了消息写入的核心流程，下面我们详细的了解一下`CommitLog#putMessage`方法。
 
@@ -5380,7 +5380,7 @@ public void handleHA(AppendMessageResult result, PutMessageResult putMessageResu
 
 在此方法中首先获取主从复制的服务 HAService，然后判断消息是否满足waitStoreMsgOk的标志，如果满足则构建请求GroupCommitRequest，然后将这个请求放入HAService 线程中的写入队列里，然后调用waitForFlush方法等待HAService 线程执行完毕（内部是CountDownLatch），如果没刷盘成功，就设置一个同步从节点失败的状态。 
 
-### 6.5.4 同步刷盘与异步刷盘流程总结
+### 6.5.4 同步刷盘与异步刷盘流程总结todo
 
 
 
@@ -5416,11 +5416,78 @@ run流程：获取配置参数并检查 --》判断是否是定时刷盘，是�
 
 ### 6.5.5 文件预热+内存锁定
 
-mmap最大的劣势就是会占用内存，当操作系统内存数量达到低水位时，就会触发LRU内存回收，这时就有可能回收mq的映射内存，当再次存放内存时，就会触发page fault。所以mq有两种方式解决此问题，一是文件预热+内存锁定，二是使用二级缓存。
+mmap最大的劣势就是会占用内存，当操作系统内存数量达到低水位时，就会触发LRU内存回收，这时就有可能回收RocketMQ的映射内存，当再次存放内存时，就会触发page fault。所以RocketMQ有两种方式解决此问题，一是文件预热+内存锁定，二是使用二级缓存。
 
-文件预热+内存锁定
+我们先来看看RocketMQ如何使用文件预热和内存锁定的。
 
-首先内存锁定使用了mlock方法，可以传一段用户空间地址和内存大小，这样就可以锁定内存，操作系统在回收时就不会回收这段内存。而这个mlock会在warmMappedFile方法中调用的。warmMappedFile方法中会根据OS的页大小进行遍历，在循环中给每一页都存放一个字节，完成对应的内存分配，然后在调用mlock方法锁定分配的这段内存。
+首先内存锁定使用了mlock方法，可以传一段用户空间地址和内存大小，这样就可以锁定内存，操作系统在回收时就不会回收这段内存，源码如下：
+
+```java
+#org.apache.rocketmq.store.MappedFile#mlock
+public void mlock() {
+    final long beginTime = System.currentTimeMillis();
+    final long address = ((DirectBuffer) (this.mappedByteBuffer)).address();
+    Pointer pointer = new Pointer(address);
+    {
+        int ret = LibC.INSTANCE.mlock(pointer, new NativeLong(this.fileSize));
+        log.info("mlock {} {} {} ret = {} time consuming = {}", address, this.fileName, this.fileSize, ret, System.currentTimeMillis() - beginTime);
+    }
+
+    {
+        int ret = LibC.INSTANCE.madvise(pointer, new NativeLong(this.fileSize), LibC.MADV_WILLNEED);
+        log.info("madvise {} {} {} ret = {} time consuming = {}", address, this.fileName, this.fileSize, ret, System.currentTimeMillis() - beginTime);
+    }
+}
+```
+
+而这个mlock会在warmMappedFile方法中调用的。warmMappedFile方法中会根据OS的页大小进行遍历，在循环中给每一页都存放一个字节，完成对应的内存分配，然后在调用mlock方法锁定分配的这段内存。warmMappedFile方法的源码如下：
+
+```java
+public void warmMappedFile(FlushDiskType type, int pages) {
+    long beginTime = System.currentTimeMillis();
+    ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
+    int flush = 0;
+    long time = System.currentTimeMillis();
+    //MappedFile.OS_PAGE_SIZE 默认4K操作系统一页的大小 
+    for (int i = 0, j = 0; i < this.fileSize; i += MappedFile.OS_PAGE_SIZE, j++) {
+        //每一页都放入一个字节，达到预分配的目的
+        byteBuffer.put(i, (byte) 0);
+        // force flush when flush disk type is sync
+        //如果是同步刷盘就将预分配的这页刷入磁盘中
+        if (type == FlushDiskType.SYNC_FLUSH) {
+            if ((i / OS_PAGE_SIZE) - (flush / OS_PAGE_SIZE) >= pages) {
+                flush = i;
+                mappedByteBuffer.force();
+            }
+        }
+
+        // prevent gc 
+        //Thread.sleep(0)使用native方法进入安全点，加快GC频率，防止长时间的GC
+        if (j % 1000 == 0) {
+            log.info("j={}, costTime={}", j, System.currentTimeMillis() - time);
+            time = System.currentTimeMillis();
+            try {
+                Thread.sleep(0);
+            } catch (InterruptedException e) {
+                log.error("Interrupted", e);
+            }
+        }
+    }
+
+    // force flush when prepare load finished
+    if (type == FlushDiskType.SYNC_FLUSH) {
+        log.info("mapped file warm-up done, force to disk, mappedFile={}, costTime={}",
+                 this.getFileName(), System.currentTimeMillis() - beginTime);
+        mappedByteBuffer.force();
+    }
+    log.info("mapped file warm-up done. mappedFile={}, costTime={}", this.getFileName(),
+             System.currentTimeMillis() - beginTime);
+	//锁定内存
+    this.mlock();
+}
+```
+
+此方法功能是对每一页都放入一个字节达到内存预分配的目的（操作系统的一页shi）
 
 warmMappedFile是在mmapOperation中调用的，mmapOperation在创建好了映射文件后，在满足条件时就会调用warmMappedFile进行文件预热（预写入）。这里满足的条件是，只有当映射文件大小大于CommitLog文件大小（1G），并且预热选项被开启时（默认不开启），才会调用warmMappedFile进行文件预热。
 
@@ -5871,10 +5938,21 @@ RebalanceService#run -》 MQClientInstance#doRebalance -》DefaultMQPullConsumer
 # 参考资料
 
 - RocketMQ 源码 这里使用了4.6版本，注意学习源码切勿只看笔记，我在我其他的博客笔记中也写了一定要自行跟一边源码流程，自己下载看一遍源码，自己画图总结一遍，否则只是隔靴搔痒，学不到精髓。
+
 - 《横扫全网：rocketmq工业级高可用架构原理与实操v2》尼恩。尼恩大大的课质量很高，本文也是跟着尼恩大大的课，加上自己反复研读、debug源码，画图总结写出来的。
+
 - 《RocketMQ技术内幕：RocketMQ架构设计与实现原理（第2版）》
+
 - [RocketMQ官方文档](https://rocketmq.apache.org/zh/docs/4.x/)
+
 - [Windows安装RocketMQ](https://blog.csdn.net/qq_43849912/article/details/106351233)
+
 - [springboot整合rocketmq](https://blog.csdn.net/qq_36737803/article/details/112261352)
+
 - [Linux内核刷新机制](https://zhuanlan.zhihu.com/p/577116167)
+
 - [RocketMQ自动创建Topic的原理](https://blog.csdn.net/qq_39408435/article/details/125209812)
+
+- [RocketMQ preventGC原理](https://mp.weixin.qq.com/s/y0zt9a4WmwBE1DcDGtN6fA)
+
+  > 原文章名称《没有几十年功力，写不出这一行“看似无用”的代码！！》
