@@ -5487,19 +5487,131 @@ public void warmMappedFile(FlushDiskType type, int pages) {
 }
 ```
 
-此方法功能是对每一页都放入一个字节达到内存预分配的目的（操作系统的一页shi）
+此方法功能是对每一页都放入一个字节达到内存预分配的目的。
 
-warmMappedFile是在mmapOperation中调用的，mmapOperation在创建好了映射文件后，在满足条件时就会调用warmMappedFile进行文件预热（预写入）。这里满足的条件是，只有当映射文件大小大于CommitLog文件大小（1G），并且预热选项被开启时（默认不开启），才会调用warmMappedFile进行文件预热。
+> 这里RocketMQ有一段prevent gc 的代码，如下：
+>
+> ```java
+> // prevent gc
+> if (j % 1000 == 0) {
+>     log.info("j={}, costTime={}", j, System.currentTimeMillis() - time);
+>     time = System.currentTimeMillis();
+>     try {
+>         Thread.sleep(0);
+>     } catch (InterruptedException e) {
+>         log.error("Interrupted", e);
+>     }
+> }
+> ```
+>
+> 这段代码在可数循环中，在《深入理解JVM第三版》一书中解释了HotSpot虚拟机为了避免安全点过多带来过重的负担，给可数循环做了优化，所以使用 int 类型或范围更小的数据类型作为索引值的循环默认是不会被放置安全点的。这样的话就会导致warmMappedFile方法几乎执行过程中不会GC，所以RocketMQ引入了这样的一段代码，这里主要是通过`Thread.sleep(0);`来尝试进入安全点，从而尝试去GC。在[jvm安全点的源码](https://github.com/openjdk/jdk8/blob/master/hotspot/src/share/vm/runtime/safepoint.cpp)中有解释,在注释中写了一共有五种方式将系统带到安全点，其中有一种方式就是通过执行`native code`。原文如下：When returning from the native code, a Java thread must check the safepoint _state to see if we must block.翻译是当从native代码中返回时，Java线程必须检查安全点状态来判断是否需要阻塞。而`Thread.sleep`就是native方法，所以调用 sleep 方法的线程会进入 Safepoint。
+>
+> 这部分原理参考了《没有几十年功力，写不出这一行“看似无用”的代码！！》文章，具体地址见参考资料。
 
-mmapOperation是在AllocateMappedFileService的run方法中调用的，AllocateMappedFileService这个线程类似刷盘线程，也是一个MPSC的线程，他会不断的根据放入的分配文件的请求去分配文件调用mmapOperation。
+warmMappedFile是在mmapOperation中调用的，mmapOperation在创建好了映射文件后，在满足条件时就会调用warmMappedFile进行文件预热（预写入）。这里满足的条件是，只有当映射文件大小大于CommitLog文件大小（1G），并且预热选项被开启时（默认不开启），才会调用warmMappedFile进行文件预热，mmapOperation方法部分代码如下：
 
-那么这个分配文件的请求是调用putRequestAndReturnMappedFile方法放入的。这个方法会构建AllocateRequestnexReq和nextNextReq对象（也就是下个CommlitLog和下下个CommitLog文件），并把对象放入请求队列中，在run中就会获取需要创建的任务，并创建文件。
+```java
+private boolean mmapOperation() {
+    boolean isSuccess = false;
+    AllocateRequest req = null;
+    try {
+        //从请求队列requestQueue拿取请求
+        req = this.requestQueue.take();
+        AllocateRequest expectedRequest = this.requestTable.get(req.getFilePath());
+        if (null == expectedRequest) {
+            //省略日志代码
+            return true;
+        }
+        if (expectedRequest != req) {
+            //省略日志代码
+            return true;
+        }
 
-那么这个putRequestAndReturnMappedFile实际上就是在getLastMappedFile方法中获取的。只有CommitLog会开启这个AllocateMappedFileService服务。ConsumeQueue不会开启
+        if (req.getMappedFile() == null) {
+            long beginTime = System.currentTimeMillis();
 
+            MappedFile mappedFile;
+            if (messageStore.getMessageStoreConfig().isTransientStorePoolEnable()) {
+                try {
+                    mappedFile = ServiceLoader.load(MappedFile.class).iterator().next();
+                    mappedFile.init(req.getFilePath(), req.getFileSize(), messageStore.getTransientStorePool());
+                } catch (RuntimeException e) {
+                   //省略日志代码
+                    mappedFile = new MappedFile(req.getFilePath(), req.getFileSize(), messageStore.getTransientStorePool());
+                }
+            } else {
+                mappedFile = new MappedFile(req.getFilePath(), req.getFileSize());
+            }
 
+            long elapsedTime = UtilAll.computeElapsedTimeMilliseconds(beginTime);
+            if (elapsedTime > 10) {
+                int queueSize = this.requestQueue.size();
+                //省略日志代码
+            }
 
-### 6.5.5 消息写入的二级缓存
+            // pre write mappedFile
+            //如果mappedFile大于mappedFileSizeCommitLog默认1G 并且开启了内存预热，就调用warmMappedFile进行内存预热 默认false
+            if (mappedFile.getFileSize() >= this.messageStore.getMessageStoreConfig()
+                .getMappedFileSizeCommitLog()
+                &&
+                this.messageStore.getMessageStoreConfig().isWarmMapedFileEnable()) {
+                mappedFile.warmMappedFile(this.messageStore.getMessageStoreConfig().getFlushDiskType(),
+                                          this.messageStore.getMessageStoreConfig().getFlushLeastPagesWhenWarmMapedFile());
+            }
+
+            req.setMappedFile(mappedFile);
+            this.hasException = false;
+            isSuccess = true;
+        }
+    } catch (InterruptedException e) {
+        //省略日志代码
+        this.hasException = true;
+        return false;
+    } catch (IOException e) {
+        //省略日志代码
+        this.hasException = true;
+        if (null != req) {
+            requestQueue.offer(req);
+            try {
+                Thread.sleep(1);
+            } catch (InterruptedException ignored) {
+            }
+        }
+    } finally {
+        if (req != null && isSuccess)
+            req.getCountDownLatch().countDown();
+    }
+    return true;
+}
+```
+
+mmapOperation是在AllocateMappedFileService的run方法中调用的，AllocateMappedFileService这个线程类似刷盘线程，也是一个MPSC的线程，它继承了ServiceThread，它会不断的根据放入的分配文件的请求去分配文件调用mmapOperation。AllocateMappedFileService的run方法如下：
+
+```java
+public void run() {
+    log.info(this.getServiceName() + " service started");
+
+    while (!this.isStopped() && this.mmapOperation()) {
+
+    }
+    log.info(this.getServiceName() + " service end");
+}
+```
+
+上面mmapOperation方法中会从请求队列requestQueue拿到分配文件的请求，这个请求是调用putRequestAndReturnMappedFile方法放入的，部分源码如下：
+
+```java
+AllocateRequest nextReq = new AllocateRequest(nextFilePath, fileSize);
+boolean nextPutOK = this.requestTable.putIfAbsent(nextFilePath, nextReq) == null;
+```
+
+这个方法会构建AllocateRequestnexReq和nextNextReq对象（也就是下个CommlitLog和下下个CommitLog文件），并把对象放入请求队列中，在run中就会获取需要创建的任务，并创建文件。
+
+这个putRequestAndReturnMappedFile实际上就是在getLastMappedFile方法中获取的。只有CommitLog会开启这个AllocateMappedFileService服务。ConsumeQueue不会开启。getLastMappedFile部分源码如下图：
+
+![image-20230707103741639](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230707103741639.png)
+
+### 6.5.5 消息写入的二级缓存todo
 
 二级缓存writeBuffer
 
@@ -5531,7 +5643,7 @@ commit -》最终调用映射文件的commit方法 -》commit0 -》获取上次�
 
 
 
-### 6.5.7 番外 写入消息时的读写分离思想
+### 6.5.7 番外 写入消息时的读写分离思想todo
 
 读写分离
 
@@ -5545,7 +5657,7 @@ mq默认使用自旋锁进行数据put工作的同步，可重入锁涉及的线
 
 
 
-### 6.5.8 消息读取的流程
+### 6.5.8 消息读取的流程todo
 
 消息读取的流程
 
@@ -5561,7 +5673,7 @@ getMessage有三个参数比较重要，分别是queueOffset（分区偏移量�
 
 消息的读取是随机读取，但是CommitLog的读取整体来看还是有序的读，因为消息总是都最新的，只要还在最新的page cache中，还是可以充分的利用PageCache的。正常情况下，基本都可以命中。如果读取的消息没有命中pagecache，那么就会产生较多的随机读取，会影响性能。这是可以通过换更好的磁盘，比如ssd，然后选择合适的IO调度算法进行性能提升。比如ssd可以采用noop磁盘调度算法。
 
-## ——ConsumeQueue的源码分析
+## 6.6 ConsumeQueue的源码分析todo
 
 ```java
 private final DefaultMessageStore defaultMessageStore;
@@ -5607,7 +5719,7 @@ ReputMessageService维持一个commitLog文件中的消息偏移量reputFromOffs
 
 getIndexBuffer  ： 见上
 
-## ——index的源码分析
+## 6.7 index的源码分析todo
 
 indexFile哈希索引：主要是根据消息的业务Key进行消息的检索
 
@@ -5647,7 +5759,7 @@ indexService#putKey：通过hash算出槽位位置，然后构建条目对象（
 
 DefaultMessageStore#queryMessage -》queryOffset -》遍历所有的indexFile 调用selectPhyOffset，将详细正文的偏移量保存进一个List集合（phyOffsets）中  -》在selectPhyOffset中，就是核心的查找流程 -》首先根据Hash值计算槽位 slotPos-》然后根据`40+(n-1)*4`计算出slot在文件中的位置absSlotPos-》然后读取slot的值slotValue这里就是entry的编号 -》然后根据`40+5000000*4+(n-1)*20`计算出entry在文件中位置 -》然后读取entry的所有元素值 -》进行时间范围校验，将key 的hash值和传入的时间范围与index的keyhash值以及timeDiff值进行对比-》如果满足就加入结果集 -》一直遍历（根据entry的preIndexNo可以找到上一个entry），直到slot的indexLinkedList结束
 
-## ——RocketMQ文件映射总结
+## 6.8 RocketMQ文件映射总结todo
 
 主要有MappedFileQueue和MappedFile。
 
@@ -5693,7 +5805,7 @@ selectMappedBuffer方法：读的时候这个方法会接受第n个消息的起�
 
 一是timeup，每天凌晨4点去删除这些文件。二是spacefull，磁盘使用空间超过75%，会开始批量清理文件.第三种情况就是磁盘空间超过85%或90%就立即清理磁盘。每批删除会删除10个文件。
 
-## ——RPC层的源码分析
+## 6.9 RPC层的源码分析todo
 
 基础架构和使用：
 
@@ -5795,7 +5907,7 @@ rocketmq的线程池：
 
 在低性能场景下，rocketmq还是使用了快捷创建线程池。
 
-## ——Consumer的源码分析
+## 6.10 Consumer的源码分析todo
 
 消费者消费以组为单位，一个组可以包含多个消费者，每个消费者组可以订阅多个主题。消费者组之间有集群和广播模式两种消费模式：集群模式：主题下的同一条消息只允许被组内其中一个消费者消费。（一个主题下一个分区只允许被一个消费者消费）广播模式：主题下的同一条消息被集群内所有消费者消费。（一个主题下一个分区会被所有的消费者消费）
 
