@@ -568,12 +568,6 @@ compose 使用 YAML 文件来定义多容器之间的关系。一个 docker-comp
 
 `sudo curl -L "https://github.com/docker/compose/releases/download/v2.2.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose`
 
-你也可以通过下面的命令高速安装：
-
-~~~
-curl -L https://get.daocloud.io/docker/compose/releases/download/v2.4.1/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose
-~~~
-
 下载完成后使用命令给权限`sudo chmod +x /usr/local/bin/docker-compose`
 
 然后进行验证`docker-compose version`
