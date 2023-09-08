@@ -229,7 +229,7 @@ rocketmq有两种集群部署模式，主要是针对broker的。两种方式如
 ~~~sh
 #这里apacherocketmq是官方的docker镜像，rocketmq下的镜像很老不推荐使用
 docker pull apacherocketmq/rocketmq:4.6.0
-docker pull styletang/rocketmq-console-ng:latest
+docker pull apacherocketmq/rocketmq-dashboard:latest
 ~~~
 
 拉取成功后就可以看到这两个镜像了：
@@ -331,7 +331,7 @@ services:
         aliases:
           - rmqbroker-b
   rmqconsole:
-    image: styletang/rocketmq-console-ng
+    image: apacherocketmq/rocketmq-dashboard
     container_name: rmqconsole
     restart: always
     ports:
@@ -1315,6 +1315,22 @@ IndexFile文件的存储位置是：`$HOME\store\index${fileName}`，文件名fi
 
 我们启动两个namesrv，然后启动一个producer和两个consumer，我们先发送几条消息，看看消费者能不能正常接收，然后我们在干掉其中一个namesrv，再发几条消息，看看消息能否还是被正常接收。
 
+![image-20230908170649208](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908170649208.png)
+
+![image-20230908170711149](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908170711149.png)
+
+![image-20230908170729499](C:\Users\yhr\AppData\Roaming\Typora\typora-user-images\image-20230908170729499.png)
+
+然后我们干掉一个namesrv：
+
+![image-20230908170837317](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908170837317.png)
+
+![image-20230908170950588](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908170950588.png)
+
+![image-20230908171009004](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908171009004.png)
+
+![image-20230908171116823](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908171116823.png)
+
 ## 4.2 Broker高可用
 
 Broker的高可用是通过Master和Slave配合达到的。一个Master可以配置多个Slave，同时也支持多个Master-Slave组。想实现Broker高可用只需要部署多个Broker的Master-Slave组即可。
@@ -1325,6 +1341,8 @@ Broker的高可用是通过Master和Slave配合达到的。一个Master可以配
 - 由于配置了多个Master-Slave组，所以其他的组也可以保证消息的正常发送和消费。
 
 注意，创建Topic时需要在所有的Broker上指定这个Topic，如果某个Topic不在所有的Broker上，那么也不会保证Topic的高可用，可以在控制台查看，如下图：
+
+![image-20230908171203576](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908171203576.png)
 
 
 
