@@ -130,6 +130,19 @@ RocketMQ还提供了事务消息，使用事务消息可以保证数据的最终
 ## 1.4 RocketMQ的安装部署
 
 > 本文使用4.6版本RocketMQ进行学习安装
+>
+> 注意云服务器除了要在安全组开放端口外，服务器的防火墙端口也要打开
+>
+> 查看防火墙状态
+> systemctl status firewalld
+> 停止防火墙端口号
+> service firewalld stop
+> 查询防火墙端口号
+> firewall-cmd --query-port=3306/tcp
+> 重载防火墙端口号
+> firewall-cmd --reload
+> 开放端口号
+> firewall-cmd --zone=public --add-port=8848/tcp --permanent
 
 ### 1.4.1 单机部署
 
@@ -246,8 +259,8 @@ services:
       JAVA_OPTS: "-Duser.home=/opt"
       JAVA_OPT_EXT: "-server -Xms256m -Xmx512m"
     volumes:
-      - /usr/local/soft/rocketmq/data/namesrv-a/logs:/home/rocketmq/logs
-      - /usr/local/soft/rocketmq/data/namesrv-a/store:/home/rocketmq/store
+      - /root/rocketmq/data/nameserver-a/logs:/home/rocketmq/logs
+      - /root/rocketmq/data/nameserver-a/store:/home/rocketmq/store
     command: sh mqnamesrv
     networks:
       rmq:
@@ -264,8 +277,8 @@ services:
       JAVA_OPTS: "-Duser.home=/opt"
       JAVA_OPT_EXT: "-server -Xms256m -Xmx512m"
     volumes:
-      - /usr/local/soft/rocketmq/data/namesrv-b/logs:/home/rocketmq/logs
-      - /usr/local/soft/rocketmq/data/namesrv-b/store:/home/rocketmq/store
+      - /root/rocketmq/data/nameserver-b/logs:/home/rocketmq/logs
+      - /root/rocketmq/data/nameserver-b/store:/home/rocketmq/store
     command: sh mqnamesrv
     networks:
       rmq:
@@ -278,9 +291,9 @@ services:
      - 10911:10911
      - 10912:10912
     volumes:
-      - /usr/local/soft/rocketmq/data/broker-a/logs:/home/rocketmq/logs
-      - /usr/local/soft/rocketmq/data/broker-a/store:/home/rocketmq/store
-      - /usr/local/soft/rocketmq/conf/brokera.conf:/opt/rocketmq-4.6.0/conf/broker.conf
+      - /root/rocketmq/data/broker-a/logs:/home/rocketmq/logs
+      - /root/rocketmq/data/broker-a/store:/home/rocketmq/store
+      - /root/rocketmq/conf/brokera.conf:/opt/rocketmq-4.6.0/conf/broker.conf
     environment:
       TZ: Asia/Shanghai
       NAMESRV_ADDR: "rmqnamesrv-a:9876"
@@ -301,9 +314,9 @@ services:
      - 10921:10911
      - 10922:10912
     volumes:
-      - /usr/local/soft/rocketmq/data/broker-b/logs:/home/rocketmq/logs
-      - /usr/local/soft/rocketmq/data/broker-b/store:/home/rocketmq/store
-      - /usr/local/soft/rocketmq/conf/brokerb.conf:/opt/rocketmq-4.6.0/conf/broker.conf
+      - /root/rocketmq/data/broker-b/logs:/home/rocketmq/logs
+      - /root/rocketmq/data/broker-b/store:/home/rocketmq/store
+      - /root/rocketmq/conf/brokerb.conf:/opt/rocketmq-4.6.0/conf/broker.conf
     environment:
       TZ: Asia/Shanghai
       NAMESRV_ADDR: "rmqnamesrv-a:9876"
@@ -325,18 +338,12 @@ services:
       - 9001:9001
     environment:
       TZ: Asia/Shanghai
-      JAVA_OPTS: "-Duser.home=/opt"
       JAVA_OPT_EXT: "-server -Xms256m -Xmx512m"
-    environment:
-      JAVA_OPTS: "-Drocketmq.config.namesrvAddr=rmqnamesrv-a:9876;rmqnamesrv-b:9877 -Dcom.rocketmq.sendMessageWithVIPChannel=false -Dserver.port=9001"
+      JAVA_OPTS: "-Duser.home=/opt -Drocketmq.config.namesrvAddr=rmqnamesrv-a:9876;rmqnamesrv-b:9877 -Dcom.rocketmq.sendMessageWithVIPChannel=false -Dserver.port=9001"
     networks:
       rmq:
         aliases:
           - rmqconsole
-    networks:
-      rmq:
-        aliases:
-          - rmqbroker-b
 networks:
   rmq:
     name: rmq
@@ -1300,7 +1307,7 @@ IndexFile文件的存储位置是：`$HOME\store\index${fileName}`，文件名fi
   - 即使存在Hash冲突，也可以在Consumer端进行修正，保证万无一失。
   - Consumer可以对tag进行最终的判断，如果数据不对，可以丢弃
 
-# 四、RocketMQ的高可用todo
+# 四、RocketMQ的高可用
 
 ## 4.1 namesrv高可用
 
