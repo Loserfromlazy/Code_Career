@@ -259,8 +259,8 @@ services:
       JAVA_OPTS: "-Duser.home=/opt"
       JAVA_OPT_EXT: "-server -Xms256m -Xmx512m"
     volumes:
-      - /root/rocketmq/data/nameserver-a/logs:/home/rocketmq/logs
-      - /root/rocketmq/data/nameserver-a/store:/home/rocketmq/store
+      - /usr/local/soft/rocketmq/data/nameserver-a/logs:/home/rocketmq/logs
+      - /usr/local/soft/rocketmq/data/nameserver-a/store:/home/rocketmq/store
     command: sh mqnamesrv
     networks:
       rmq:
@@ -277,8 +277,8 @@ services:
       JAVA_OPTS: "-Duser.home=/opt"
       JAVA_OPT_EXT: "-server -Xms256m -Xmx512m"
     volumes:
-      - /root/rocketmq/data/nameserver-b/logs:/home/rocketmq/logs
-      - /root/rocketmq/data/nameserver-b/store:/home/rocketmq/store
+      - /usr/local/soft/rocketmq/data/nameserver-b/logs:/home/rocketmq/logs
+      - /usr/local/soft/rocketmq/data/nameserver-b/store:/home/rocketmq/store
     command: sh mqnamesrv
     networks:
       rmq:
@@ -291,12 +291,11 @@ services:
      - 10911:10911
      - 10912:10912
     volumes:
-      - /root/rocketmq/data/broker-a/logs:/home/rocketmq/logs
-      - /root/rocketmq/data/broker-a/store:/home/rocketmq/store
-      - /root/rocketmq/conf/brokera.conf:/opt/rocketmq-4.6.0/conf/broker.conf
+      - /usr/local/soft/rocketmq/data/broker-a/logs:/home/rocketmq/logs
+      - /usr/local/soft/rocketmq/data/broker-a/store:/home/rocketmq/store
+      - /usr/local/soft/rocketmq/conf/brokera.conf:/opt/rocketmq-4.6.0/conf/broker.conf
     environment:
       TZ: Asia/Shanghai
-      NAMESRV_ADDR: "rmqnamesrv-a:9876"
       JAVA_OPTS: "-Duser.home=/opt"
       JAVA_OPT_EXT: "-server -Xms256m -Xmx512m"
     command: sh mqbroker -c /opt/rocketmq-4.6.0/conf/broker.conf autoCreateTopicEnable=true &
@@ -314,12 +313,11 @@ services:
      - 10921:10911
      - 10922:10912
     volumes:
-      - /root/rocketmq/data/broker-b/logs:/home/rocketmq/logs
-      - /root/rocketmq/data/broker-b/store:/home/rocketmq/store
-      - /root/rocketmq/conf/brokerb.conf:/opt/rocketmq-4.6.0/conf/broker.conf
+      - /usr/local/soft/rocketmq/data/broker-b/logs:/home/rocketmq/logs
+      - /usr/local/soft/rocketmq/data/broker-b/store:/home/rocketmq/store
+      - /usr/local/soft/rocketmq/conf/brokerb.conf:/opt/rocketmq-4.6.0/conf/broker.conf
     environment:
       TZ: Asia/Shanghai
-      NAMESRV_ADDR: "rmqnamesrv-a:9876"
       JAVA_OPTS: "-Duser.home=/opt"
       JAVA_OPT_EXT: "-server -Xms256m -Xmx512m"
     command: sh mqbroker -c /opt/rocketmq-4.6.0/conf/broker.conf autoCreateTopicEnable=true &
@@ -339,7 +337,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       JAVA_OPT_EXT: "-server -Xms256m -Xmx512m"
-      JAVA_OPTS: "-Duser.home=/opt -Drocketmq.config.namesrvAddr=rmqnamesrv-a:9876;rmqnamesrv-b:9877 -Dcom.rocketmq.sendMessageWithVIPChannel=false -Dserver.port=9001"
+      JAVA_OPTS: "-Duser.home=/opt -Drocketmq.config.namesrvAddr=192.168.123.223:9876; 192.168.123.223:9877 -Dcom.rocketmq.sendMessageWithVIPChannel=false -Dserver.port=9001"
     networks:
       rmq:
         aliases:
@@ -363,9 +361,10 @@ deleteWhen = 04
 fileReservedTime = 48
 brokerRole = ASYNC_MASTER
 flushDiskType = ASYNC_FLUSH
-namesrvAddr = 192.168.123.223:9876;192.168.123.223:9877;
+namesrvAddr = 192.168.123.223:9876;192.168.123.223:9877
 autoCreateTopicEnable = true
-listenPort = 10911
+#brokera.conf中端口号也需要修改
+listenPort = 10921
 
 #haListenPort 此端口在haService中使用 默认值 listenPort+1
 ~~~
@@ -1344,11 +1343,29 @@ Broker的高可用是通过Master和Slave配合达到的。一个Master可以配
 
 ![image-20230908171203576](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908171203576.png)
 
-
+![image-20230912103930335](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912103930335.png)
 
 下面我们来做个实验：
 
-我们启动两个broker，然后启动一个producer和两个consumer，我们先发送几条消息，看看消费者能不能正常接收，然后我们在干掉其中一个broker，再发几条消息，看看消息能否还是被正常接收。也可以通过控制台看一下消费者的状态。
+我们启动两个broker，然后启动一个producer和两个consumer，我们先发送几条消息，看看消费者能不能正常接收：
+
+![image-20230912105337631](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912105337631.png)
+
+![image-20230912105351836](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912105351836.png)
+
+然后我们在干掉其中一个broker：
+
+![image-20230912104639969](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912104639969.png)
+
+再发几条消息，看看消息能否还是被正常接收。
+
+![image-20230912105409936](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912105409936.png)
+
+![image-20230912105423744](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912105423744.png)
+
+也可以通过控制台看一下消费者的状态。
+
+![image-20230912105452396](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912105452396.png)
 
 ## 4.3 生产者消费者高可用
 
@@ -1360,9 +1377,23 @@ Broker的高可用是通过Master和Slave配合达到的。一个Master可以配
 
 消费者的高可用可以通过部署多个服务来实现。
 
-我们可以做个实验：
+我们可以做个实验，先将刚才停掉的brokera重新起来：
 
-我们启动两个consumer，然后启动一个producer，我们先发送几条消息，看看消费者能不能正常接收，然后我们在干掉其中一个consumer，再发几条消息，看看消息能否还是**被正常的全部接收**。也可以通过控制台看一下消费者的状态。
+![image-20230912105816562](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912105816562.png)
+
+我们启动两个consumer，然后启动一个producer，我们先发送几条消息，看看消费者能不能正常接收，
+
+![image-20230912110105286](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912110105286.png)
+
+![image-20230912110043800](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912110043800.png)
+
+然后我们在干掉其中一个consumer，再发几条消息，看看消息能否还是**被正常的全部接收**。
+
+![image-20230912110135178](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912110135178.png)
+
+也可以通过控制台看一下消费者的状态。
+
+![image-20230912110201762](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912110201762.png)
 
 ### 4.3.3 消费者的消费模式
 
