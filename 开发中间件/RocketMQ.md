@@ -1332,7 +1332,7 @@ IndexFile文件的存储位置是：`$HOME\store\index${fileName}`，文件名fi
 
 ## 4.2 Broker高可用
 
-Broker的高可用是通过Master和Slave配合达到的。一个Master可以配置多个Slave，同时也支持多个Master-Slave组。想实现Broker高可用只需要部署多个Broker的Master-Slave组即可。
+Broker的高可用是通过Master和Slave配合达到的。一个Master可以配置多个Slave，同时也支持多个Master-Slave组。想实现Broker高可用需要部署多个Broker的Master-Slave组。
 
 当一个Master出问题时：
 
@@ -1343,7 +1343,15 @@ Broker的高可用是通过Master和Slave配合达到的。一个Master可以配
 
 ![image-20230908171203576](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908171203576.png)
 
+这样当broker-a挂了，topic就不可用了，应该跨Broker创建Topic如下图：
+
 ![image-20230912103930335](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230912103930335.png)
+
+在创建Topic的时候，把Topic的多个Message Queue创建在多个Broker上，这样当一个Broker组（一个组一般是一个Master多个Slave）不可用之后，其他组的Master仍然可用，Producer仍然可以发送消息。
+
+> 在RocketMQ中，是基于Message Queue来实现类似Kafka的分区效果，如果一个Topic的发送和接收的数据量非常大，需要增加并行处理速度，这时一个Topic可以根据需求设置一个或多个Message Queue。Topic有了多个Message Queue后，消息可以并行的向各个Message Queue发送，提升并发生产的能力；消费者也可以并行的从多个Message Queue中读取消息并消费，提升并发消费的能力。
+>
+> 上图中的写队列表示producer发送到MessageQueue的队列个数，读队列表示consumer读消息的MessageQueue队列个数。**注意**：这两个值**需要相等**，在集群模式下如果不相等，比如writeQueueNums=16,readQueueNums=8,那么每个broker上会有8个queue的消息是无法消费的
 
 下面我们来做个实验：
 
@@ -1414,29 +1422,71 @@ Broker的高可用是通过Master和Slave配合达到的。一个Master可以配
 
 ## 5.1 生产者消息可靠发送
 
-- 选择高可靠的消息投递方式
+### 5.1.1 选择高可靠的消息投递方式
 
-  生产者消息发送主要有三种方式：同步、异步回调、oneway。一般可以采用同步消息和异步回调的消息。
+生产者消息发送主要有三种方式：同步、异步回调、oneway。一般可以采用同步消息和异步回调的消息。
 
-  同步消息会同步的检查Broker返回的状态是否持久化成功。发送超时或失败则会默认重试两次，rocketmq确保消息一定发送成功，但有可能重复投递。
+同步消息会同步的检查Broker返回的状态是否持久化成功。发送超时或失败则会默认重试两次，rocketmq确保消息一定发送成功，但有可能重复投递。
 
-  异步投递时，需要设置回调接口，当broker存储成功或失败时，也可以根据状态来决定是否重试。
+异步投递时，需要设置回调接口，当broker存储成功或失败时，也可以根据状态来决定是否重试。
 
-- 合理设置消息重发的策略
+### 5.1.2 合理设置消息重发的策略
 
-  生产者发送消息时，同步消息失败会重新投递，异步消息会重试，oneway则没有保障。
+生产者发送消息时，同步消息失败会重新投递，异步消息会重试，oneway则没有保障。
 
-  > 消息的重投会保证消息尽可能发送成功不丢失，但可能会造成重复消费，消息重复是RocketMQ无法避免的问题，消息重复一般在消息多、网络波动时会大概率发生。当生产者主动重发、或者是consumer负载变化也会导致重复消息。
+消息的重投会保证消息尽可能发送成功不丢失，但可能会造成重复消费，消息重复是RocketMQ无法避免的问题，消息重复一般在消息多、网络波动时会大概率发生。当生产者主动重发、或者是consumer负载变化也会导致重复消息。
 
-  
+以下方式可以设置消息重试策略：
 
-  
+- retryTimesWhenSendFailed
 
-- 使用事务消息保证消息原子性
+  发送失败重投次数，默认为2，因此生产者最多会尝试发送retryTimesWhenSendFailed+1次。不会选择上次失败的Broker，而是会尝试向其他的broker发送，最大程度的保证消息不丢失。当超过重投次数，则抛出异常，由客户端保证消息不丢失。
+
+- retryTimesWhenSendAsyncFaild
+
+  异步发送失败的重试次数，异步重试不会换Broker，仅在同一个Broker上重试，不保证消息不丢失
+
+- retryAnotherBrokerWhenNotStoreOK
+
+  消息刷盘超时时或slave不可用，是否会尝试发送到其他Broker，默认为false。
+
+### 5.1.3 使用事务消息保证消息原子性
+
+可以使用事务消息保障传递与本地事务的原子性。保证消息的可靠投递。
 
 ## 5.2 broker消息的可靠存储
 
+由于消息分布在各个broker上，一旦某个broker宕机，则该broker上的消息都会受到影响。所以rocketmq提供了master-slave的模式，slave定时从master同步数据。如果master宕机，则slave提供服务，但是slave不能写入消息。
+
+这里有两点需要注意：
+
+- 一旦某个master宕机，生产者和消费者默认最多需要30s才能发现，这个时间段内，如果是单个master，则发往该broker的消息都是失败的，而且该broker的消息无法消费，因为此时消费者不知道该broker已经挂了。
+- 消费者得到master崩溃的消息后，会去slave进行消费，但是slave不能100%保证消息都会同步过去，因此会有少量的消息丢失，但是消息最终是不会丢的，只要master恢复，未同步的消息就会被消费。
+
+除了master-slave节点，所有的发往broker的消息还有同步和异步刷盘机制：
+
+- 同步刷盘时，消息写入物理文件才会返回成功，可靠性非常高
+- 异步刷盘时，只有机器宕机，才会产生消息丢失，broker挂掉有可能会发生，但是机器宕机很少发生。
+
+### 5.2.1 主从复制：同步和异步复制
+
+### 5.2.2 刷盘：同步和异步刷盘
+
 ## 5.3 消费者消息的可靠消费
+
+5.3.1 合理使用重试策略
+
+5.3.2 消费页业务异常
+
+5.3.3 重试队列
+
+5.3.4 死信队列
+
+5.3.5 消息投递的重复问题
+
+5.3.6 消息的幂等
+
+5.3.7 保证幂等
 
 # 六、RocketMQ源码分析
 
