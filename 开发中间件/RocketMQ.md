@@ -1318,7 +1318,7 @@ IndexFile文件的存储位置是：`$HOME\store\index${fileName}`，文件名fi
 
 ![image-20230908170711149](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908170711149.png)
 
-![image-20230908170729499](C:\Users\yhr\AppData\Roaming\Typora\typora-user-images\image-20230908170729499.png)
+![image-20230908170729499](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/image-20230908170729499.png)
 
 然后我们干掉一个namesrv：
 
