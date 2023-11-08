@@ -61,11 +61,21 @@ DDD首先从业务领域入手，划分 业务领域边界，采用事件风暴�
 
 DP的定义是在一个特定领域里，拥有精准定义的、可自我验证的、拥有行为的Value Object。DP在DDD里是无处不在的，它可以说是一切模型、方法、架构的基础。就像Integer、String一样。
 
-下面通过一个简单的例子了解下DP的概念。业务逻辑如下，需要一个用户注册功能，在注册时需要通过用户电话得到用户所在地区，后期会针对不同地域做定制化推广。
+下面通过一个简单的例子了解下DP的概念。业务逻辑如下，
 
 一个简单的代码实现如下：
 
 首先是实体类：
+
+```java
+public class User {
+    public Integer id;
+    public String name;
+    public String phone;
+    public String address;
+    public String email;
+}
+```
 
 
 
