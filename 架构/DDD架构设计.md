@@ -1,6 +1,6 @@
 # DDD架构设计
 
-> 写在前面，本文是DDD架构的学习笔记，原文是尼恩发布的文章（详见参考资料），仅保存在Git仓库学习使用。
+> 写在前面，本文是DDD架构的学习笔记，参考资料是尼恩发布的文章（详见参考资料章节），仅保存在Git仓库学习使用。
 >
 > 原文中的使用的例子均在学习后在本文中进行了替换以便加深学习印象并巩固知识。
 
@@ -61,14 +61,14 @@ DDD首先从业务领域入手，划分 业务领域边界，采用事件风暴�
 
 DP的定义是在一个特定领域里，拥有精准定义的、可自我验证的、拥有行为的Value Object。DP在DDD里是无处不在的，它可以说是一切模型、方法、架构的基础。就像Integer、String一样。
 
-下面通过一个简单的例子了解下DP的概念。业务逻辑如下，
+下面通过一个简单的例子了解下DP的概念。业务逻辑如下，需要根据创建的工单号匹配对应的工单类型。
 
 一个简单的代码实现如下：
 
 首先是实体类：
 
 ```java
-public class User {
+public class Order {
     public Integer id;
     public String name;
     public String phone;
@@ -76,6 +76,51 @@ public class User {
     public String email;
 }
 ```
+
+然后是业务类的代码：
+
+```java
+public class OrderServiceImpl implements OrderService {
+
+    private OrderMapper orderMapper;
+
+
+    @Override
+    public void createOrder(Order order) {
+        if (order.getOrderNo()== null || "".equals(order.getOrderNo())){
+            throw new ValidateException("invalid parameter");
+        }
+        //省略其他校验
+
+        //业务逻辑，根据工单号获取工单类型名称
+        String orderNo = order.getOrderNo();
+        String [] typeArray = new String[]{"REPAIR ","INSTALL","OTHER"};
+        for (String typePrefix : typeArray) {
+            if (orderNo.startsWith(typePrefix)){
+                order.setOrderType(typePrefix);
+            }
+        }
+
+        //处理实体类
+        Order orderSave = new Order();
+        orderSave.setOrderNo(order.getOrderNo());
+        orderSave.setOrderType(order.getOrderType());
+        orderSave.setDirector(order.getDirector());
+        orderSave.setPhone(order.getPhone());
+        orderSave.setOrderTerm(order.getOrderTerm());
+
+        //保存数据库
+        orderMapper.insertOrder(orderSave);
+    }
+}
+```
+
+日常的代码基本都是类似上面的形式，下面就从四个维度分析一下上面代码的问题：
+
+- 接口的清晰度（可读性）
+- 数据验证和错误处理
+- 业务代码逻辑清晰度
+- 可测试性
 
 
 
