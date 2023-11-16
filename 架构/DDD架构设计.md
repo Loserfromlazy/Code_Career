@@ -61,6 +61,8 @@ DDD首先从业务领域入手，划分 业务领域边界，采用事件风暴�
 
 DP的定义是在一个特定领域里，拥有精准定义的、可自我验证的、拥有行为的Value Object。DP在DDD里是无处不在的，它可以说是一切模型、方法、架构的基础。就像Integer、String一样。
 
+### 2.1 案例分析
+
 下面通过一个简单的例子了解下DP的概念。业务逻辑如下，需要根据创建的工单号匹配对应的工单类型。
 
 一个简单的代码实现如下：
@@ -86,33 +88,35 @@ public class OrderServiceImpl implements OrderService {
 
 
     @Override
-    public void createOrder(Order order) {
-        if (order.getOrderNo()== null || "".equals(order.getOrderNo())){
+    public void createOrder(String orderNo, String director, String phone, Date orderTerm) {
+        if (orderNo == null || "".equals(orderNo)) {
             throw new ValidateException("invalid parameter");
         }
         //省略其他校验
 
         //业务逻辑，根据工单号获取工单类型名称
-        String orderNo = order.getOrderNo();
-        String [] typeArray = new String[]{"REPAIR ","INSTALL","OTHER"};
+        String prefix = "";
+        String[] typeArray = new String[]{"REPAIR ", "INSTALL", "OTHER"};
         for (String typePrefix : typeArray) {
-            if (orderNo.startsWith(typePrefix)){
-                order.setOrderType(typePrefix);
+            if (orderNo.startsWith(typePrefix)) {
+                prefix = typePrefix;
             }
         }
+        String orderType = orderMapper.findOrderTypeByPrefix(prefix);
 
         //处理实体类
-        Order orderSave = new Order();
-        orderSave.setOrderNo(order.getOrderNo());
-        orderSave.setOrderType(order.getOrderType());
-        orderSave.setDirector(order.getDirector());
-        orderSave.setPhone(order.getPhone());
-        orderSave.setOrderTerm(order.getOrderTerm());
+        Order order = new Order();
+        order.setOrderNo(orderNo);
+        order.setOrderType(orderType);
+        order.setDirector(director);
+        order.setPhone(phone);
+        order.setOrderTerm(orderTerm);
 
         //保存数据库
-        orderMapper.insertOrder(orderSave);
+        orderMapper.insertOrder(order);
     }
 }
+
 ```
 
 日常的代码基本都是类似上面的形式，下面就从四个维度分析一下上面代码的问题：
@@ -121,6 +125,103 @@ public class OrderServiceImpl implements OrderService {
 - 数据验证和错误处理
 - 业务代码逻辑清晰度
 - 可测试性
+
+1. **接口的清晰度**：
+
+   在Java中，方法的参数名在编译时是会丢失的，所以方法实际上是这样的：`createOrder(String, String, String , Date)`，如果传入的参数是`createOrder(”随便的订单号“, "随便填的负责人", "随便填的手机号", 2023-01-01)`，这种编译器是无法发现的，也很难通过code review发现，只能是在运行时被发现。
+
+   在实际场景中，一般都通过方法名称命名来区分，如下：
+
+   ```java
+   Order findByOrderNo(String OrderNo);
+   Order findByDirector(String director);
+   Order findByOrderNoAndDirector(String OrderNo,String director);
+   ```
+
+   当然这种方式如果参数多了，不仅要保证参数正确，还要保证顺序正确。
+
+2. **数据验证和错误处理**：
+
+   在上面的代码中有类似这样的代码：
+
+   ```java
+   if (orderNo == null || "".equals(orderNo)) {
+       throw new ValidateException("invalid parameter");
+   }
+   ```
+
+   在日常开发中很常见，这样的代码是有弊端的，假设有多个类似的接口和入参，就要重复很多遍，且如果参数要拓展校验，比如orderNo又有其他的校验：
+
+   ```java
+   if (orderNo == null || "".equals(orderNo) || isValidNo(orderNo)) {
+       throw new ValidateException("invalid parameter");
+   }
+   ```
+
+   就需要这样扩展代码，而如果有很多地方有这个参数，而有一个地方忘记修改，那么就会造成bug。
+
+   > 这是一个DRY原则被违背导致经常会发生的问题：DRY原则就是Don't Repeat Youself ，不要重复自己，可以理解为不要写重复的代码。
+
+   在传统的Java开发中，可以使用BeanValidation注解或者类似的ValidationUtils工具类解决参数校验问题，但是这类工具一样有些问题：
+
+   - BeanValidation注解：通常只能解决简单的校验，且新逻辑产生时，如果某些地方忘记加注解，还是会造成一样的问题。
+   - ValidationUtils工具类：当大量的校验逻辑集中在一个类时，会违背单一性原则，导致代码混乱且不可维护。
+
+3. **业务代码逻辑清晰度**:
+
+   上面的代码有这么一段胶水代码：
+
+   ```java
+   //业务逻辑，根据工单号获取工单类型名称
+   String prefix = "";
+   String[] typeArray = new String[]{"REPAIR ", "INSTALL", "OTHER"};
+   for (String typePrefix : typeArray) {
+       if (orderNo.startsWith(typePrefix)) {
+           prefix = typePrefix;
+       }
+   }
+   String orderType = orderMapper.findOrderTypeByPrefix(prefix);
+   ```
+
+   常见的处理这种代码的方式是抽离出来，变成独立的一个或多个方法：
+
+   ```java
+   private String getOrderType(String orderNo){
+       String prefix = "";
+       String[] typeArray = new String[]{"REPAIR ", "INSTALL", "OTHER"};
+       for (String typePrefix : typeArray) {
+           if (orderNo.startsWith(typePrefix)) {
+               prefix = typePrefix;
+           }
+       }
+       return orderMapper.findOrderTypeByPrefix(prefix);
+   }
+   ```
+
+   原方法变成这样：
+
+   ```java
+   //业务逻辑，根据工单号获取工单类型名称
+   String orderType = getOrderType(orderNo);
+   ```
+
+   如果这个方法需要复用，可能还会抽取工具类，如果项目中有大量的静态工具类，那么核心业务逻辑就变得异常难找。
+
+4. **可测试性**:
+
+   为了保证代码质量，一般每个方法的每个入参都需要有TC覆盖，我们上面的方法需要以下的TC：
+
+   > TC：Test Case 测试用例，包含输入、期望输出等
+
+   | 条件\入参              | orderNo | director | phone | orderTerm |
+   | ---------------------- | ------- | -------- | ----- | --------- |
+   | 入参为null             |         |          |       |           |
+   | 入参为空               |         |          |       |           |
+   | 入参不符合要求（多个） |         |          |       |           |
+
+   一般来说，假设一个方法有N个参数，每个参数有M个校验逻辑，那么就至少要有`N*M`个TC。假设有P个方法都用到了某字段，那么就一共需要`P*N*M`个TC才能完全覆盖所有数据验证问题。而这个成本非常高，所以日常开发中不可能全被覆盖到，而这个地方才是最容易出问题的地方。这时降低测试成本等于提高代码质量。
+
+### 2.2 提高代码质量
 
 
 
