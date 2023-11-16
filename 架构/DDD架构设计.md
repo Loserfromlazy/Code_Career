@@ -223,7 +223,7 @@ public class OrderServiceImpl implements OrderService {
 
 ### 2.2 提高代码质量
 
-
+我们来看一下上面的业务，根据创建的工单号匹配对应的工单类型，分析一下就会发现这里订单类型的概念被隐藏到了代码中，这里可以分析一下，取工单的类型前缀这个逻辑是属于工单还是属于创建工单，如果都不是很贴切，说明这个逻辑应该属于一个独立的概念，所以这里引入第一个原则：`Make Implicit Concepts Expecit`将隐性的概念显性化。下面我们将工单号的概念显性化，代码如下：
 
 ```java
 public class OrderNo {
@@ -256,7 +256,13 @@ public class OrderNo {
 }
 ```
 
+这里有几个很重要的点：
 
+1. 首先orderNo是final的，确保OrderNo是一个不可变的Value Object。
+2. 其次校验逻辑都放在构造函数中，确保OrderNo一被创建出来后，一定是校验通过的。
+3. 然后把getOrderType变成OrderNo类的一个方法，将orderType的前缀变成了一个OrderNo的计算属性。
+
+这样生成了OrderNo类之后，其实是生成了一个Type(数据类型)和一个Class（类），Type是指在今后的代码里通过OrderNo去显性的表示工单号这个概念，Class表示可以把所有跟工单号有关的逻辑都放到一个类里。使用了DP之后，其他类代码如下：
 
 ```java
 @Data
@@ -291,6 +297,62 @@ public void createOrder(@NotNull OrderNo orderNo,@NotNull String director,@NotNu
     orderMapper.insertOrder(order);
 }
 ```
+
+下面我们在重新用上面的四个维度分析一下这段代码：
+
+1. **接口的清晰度**：
+
+   假设我们的参数都用DP重构后，`createOrder(OrderNo orderNo,Director director,Phone phone,OrderTerm orderTerm)`,这样的接口很清晰，即使用之前那种传参`createOrder(new Order(”随便的订单号“), new Director("随便填的负责人"), new Phone("随便填的手机号"),new OrderTerm(2023-01-01))`也能在编译期被及时发现。
+
+   同样的，查询方法也可以充分使用方法重载：
+
+   ```java
+   Order find(OrderNo orderNo);
+   Order find(Director director);
+   Order find(OrderNo OrderNo,Director director);
+   ```
+
+2. **数据验证和错误处理**：
+
+   ```java
+   public void createOrder(@NotNull OrderNo orderNo,@NotNull Director director,@NotNull Phone phone,@NotNull OrderTerm orderTerm) {
+   }
+   ```
+
+   这里可以看到，因为DP的特性，重构后的方法里不会有任何的数据验证的逻辑，只要是能够带到入参里的一定是正确的，把数据验证的工作量前置到了调用方，而调用方本来就是应该提供合法数据的，所以更加合适。
+
+   同时使用DP的另一个好处就是代码遵循了DRY原则和单一性原则，如果未来需要修改OrderNo的校验逻辑，只需要在一个文件里修改即可，所有使用到了OrderNo的地方都会生效。
+
+3. **业务代码的清晰度**：
+
+   ```java
+   String orderType = orderMapper.findOrderTypeByPrefix(orderNo.getPrefix());
+   ```
+
+   除了不再需要校验数据之外，原来的胶水代码被改为了OrderNo的一个计算属性getPrefix，让代码清晰度大大提升。
+
+   而且胶水代码通常都不可复用，但是使用了DP后，变成了可复用、可测试的代码。
+
+4. **可测试**：
+
+   | 条件\入参              | orderNo | director | phone | orderTerm |
+   | ---------------------- | ------- | -------- | ----- | --------- |
+   | 入参为null             |         |          |       |           |
+   | 入参为空               |         |          |       |           |
+   | 入参不符合要求（多个） |         |          |       |           |
+
+   当把OrderNo抽取之后，再来看一下TC：首先 PhoneNumber 本身还是需要 个测试用例，但是由于我们只需要测试单一对象，每个用例的代码量会大大降低，维护成本降低。且每个方法里的每个参数，现在只需要覆盖为null的情况就可以了，其他的case不可能发生（因为只要不是null就一定是合法的）。所以，单个方法的TC从`N*M`变成了`N+M`，多个方法的TC数量从`N*M*P`变成了`N+M+P`。
+
+   > 这里其实本质上就是
+
+### 2.3 DP的进阶使用
+
+上面2.2章节中介绍了DP的第一个原则，将隐形的概念显性化，下面将通过转账的案例介绍另两个原则即：
+
+- Make Implicit Context Expecit 将隐性的上下文显性化
+- Encapsulate Multi-Object Behavior 封装多对象行为
+
+下面通过转账功能让A用户支付X元给B：
 
 
 
