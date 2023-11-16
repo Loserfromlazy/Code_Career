@@ -225,6 +225,75 @@ public class OrderServiceImpl implements OrderService {
 
 
 
+```java
+public class OrderNo {
+
+    private final String orderNo;
+
+    public String getOrderNo() {
+        return orderNo;
+    }
+
+    public OrderNo(String orderNo) {
+        if (orderNo == null) {
+            throw new ValidateException("参数不能为空");
+        }else if ("".equals(orderNo)){
+            throw new ValidateException("参数不能为空串");
+        }
+        this.orderNo = orderNo;
+    }
+
+    public String getPrefix(){
+        String prefix = "";
+        String[] typeArray = new String[]{"REPAIR ", "INSTALL", "OTHER"};
+        for (String typePrefix : typeArray) {
+            if (orderNo.startsWith(typePrefix)) {
+                prefix = typePrefix;
+            }
+        }
+        return prefix;
+    }
+}
+```
+
+
+
+```java
+@Data
+public class Order {
+    //工单编号
+    public OrderNo orderNo;
+    //工单类型
+    public String orderType;
+    //工单负责人电话
+    public String phone;
+    //工单负责人
+    public String director;
+    //工单期限
+    public Date orderTerm;
+}
+//-------------------------分割线--------------------------------
+@Override
+public void createOrder(@NotNull OrderNo orderNo,@NotNull String director,@NotNull String phone,@NotNull Date orderTerm) {
+    //业务逻辑，根据工单号获取工单类型名称
+    String orderType = orderMapper.findOrderTypeByPrefix(orderNo.getPrefix());
+
+
+    //处理实体类
+    Order order = new Order();
+    order.setOrderNo(orderNo);
+    order.setOrderType(orderType);
+    order.setDirector(director);
+    order.setPhone(phone);
+    order.setOrderTerm(orderTerm);
+
+    //保存数据库
+    orderMapper.insertOrder(order);
+}
+```
+
+
+
 ## 参考资料
 
 - [《阿里DDD大佬：从0到1，带大家精通DDD》](https://mp.weixin.qq.com/s/_FKXKC-M22FyCv9K7slISg)
