@@ -354,6 +354,12 @@ public void createOrder(@NotNull OrderNo orderNo,@NotNull String director,@NotNu
 
 下面通过转账功能让A用户支付X元给B：
 
+```java
+public void sendMessage(String message,Long userId){
+    unifiedMessageService.send(message,"Chinese",userId);
+}
+```
+
 
 
 ## 参考资料
