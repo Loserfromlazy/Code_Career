@@ -1514,11 +1514,11 @@ volatile语义中的有序性是通过内存屏障指令来确保的。为了实
 
 volatile写操作的内存屏障插入策略为：在每个volatile写操作前插入StoreStore（SS）屏障，在写操作后面插入StoreLoad屏障。
 
-<img src="C:\Users\yhr\Pictures\Saved Pictures\SSSL20220425.png" alt="SSSL20220425" style="zoom:50%;" />
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/SSSL20220425.png)
 
 volatile读操作的内存屏障插入策略为：在每个volatile读操作后插入LoadLoad（LL）屏障和LoadStore屏障，禁止后面的普通读、普通写和前面的volatile读操作发生重排序，
 
-<img src="C:\Users\yhr\Pictures\Saved Pictures\LLLS120220425.png" alt="LLLS120220425" style="zoom:50%;" />
+![](https://mypic-12138.oss-cn-beijing.aliyuncs.com/blog/picgo/LLLS120220425.png)
 
 > 上述JMM建议的volatile写和volatile读的内存屏障插入策略是针对任意处理器平台的，所以非常保守。不同的处理器有不同“松紧度”的处理器内存模型，只要不改变volatile读写操作的内存语义，不同JVM编译器可以根据具体情况省略不必要的JMM屏障。以X86处理器为例，该平台的JVM实现仅仅在volatile写操作后面插入一个StoreLoad屏障，其他的JMM屏障都会被省略。由于StoreLoad屏障的开销大，因此在X86处理器中，volatile写操作比volatile读操作的开销会大很多。
 
