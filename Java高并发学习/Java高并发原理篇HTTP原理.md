@@ -1364,7 +1364,293 @@ SSL/TLS位于应用层和传输层之间，除HTTP外，它可以为任何基于
 
 ## 4.2 加密算法原理
 
-暂略
+### 4.2.1 散列单向加密
+
+散列算法比较简单，就是将待加密的信息，生成一个固定大小的字符串。
+
+> 比如字符串通过MD5加密之后是32个字符
+
+常见的常用的散列算法有MD5、SHA1、SHA-512等。散列转换过程是不可逆的，也就是说一旦数据被转换成散列值，原始数据就无法恢复。散列加密在用户注册和密码存储时非常有用，因为服务端存储的是密码的哈希值而非明文。这样即使数据库被攻击，也不会造成用户密码泄露。当用户下次登录时，会对用户的登入密码（明文）使用相同的散列算法（哈希函数）进行散列，并将散列结果与来自数据库的哈希密码进行匹配，如果它是相同的，用户将登录成功，否则用户将登录失败。
+
+MD5曾广泛用于安全领域，但现在由于安全性问题，主要用于文件完整性校验。除了MD5，Java还提供了SHA1、SHA256、SHA512等散列摘要函数的实现。除了在算法上有些差异之外，这些散列函数的主要不同在于摘要长度，MD5的生成的摘要是128位，SHA1生成的摘要是160位，SHA256生成的摘要是256位，SHA512生成的摘要长度是512位。
+
+例子如下：
+
+```java
+package com.learn.test;
+
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
+public class HashingExample {
+
+    // 生成散列摘要的方法
+    public static String generateHash(String data, String algorithm) throws NoSuchAlgorithmException {
+        MessageDigest digest = MessageDigest.getInstance(algorithm);
+        byte[] hash = digest.digest(data.getBytes());
+        return bytesToHex(hash);
+    }
+
+    // 将字节数组转换为十六进制字符串
+    private static String bytesToHex(byte[] hash) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : hash) {
+            String hex = Integer.toHexString(0xff & b);
+            if(hex.length() == 1) hexString.append('0');
+            hexString.append(hex);
+        }
+        return hexString.toString();
+    }
+
+    // 验证散列摘要的方法
+    public static boolean verifyHash(String data, String originalHash, String algorithm) throws NoSuchAlgorithmException {
+        String newHash = generateHash(data, algorithm);
+        return newHash.equalsIgnoreCase(originalHash);
+    }
+
+    public static void main(String[] args) {
+        try {
+            String originalData = "Hello World";
+            String[] algorithms = {"MD5", "SHA-1", "SHA-256", "SHA-512"};
+
+            for (String algorithm : algorithms) {
+                // 生成散列摘要
+                String hash = generateHash(originalData, algorithm);
+                System.out.println(algorithm + " Generated Hash: " + hash);
+
+                // 验证散列摘要
+                boolean isVerified = verifyHash(originalData, hash, algorithm);
+                System.out.println(algorithm + " Verification: " + isVerified + "\n");
+            }
+
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+```
+
+运行结果：
+
+```
+MD5 Generated Hash: b10a8db164e0754105b7a99be72e3fe5
+MD5 Verification: true
+
+SHA-1 Generated Hash: 0a4d55a8d778e5022fab701977c5d840bbc486d0
+SHA-1 Verification: true
+
+SHA-256 Generated Hash: a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e
+SHA-256 Verification: true
+
+SHA-512 Generated Hash: 2c74fd17edafd80e8447b0d46741ee243b7eb74dd2149a0ab1b9246fb30382f27e853d8585719e0e67cbda0daa8f51671064615d645ae27acb15bfb1447f459b
+SHA-512 Verification: true
+```
+
+### 4.2.2 对称加密算法
+
+对称加密算法是一种加密和解密使用相同密钥的加密方法。这意味着加密和解密双方必须共享同一个密钥，并且保护这个密钥不被第三方获取。对称加密算法通常比非对称加密算法更快，适用于加密大量数据的场景。常见的对称加密算法包括DES、AES、3DES等。
+
+DES（Data Encryption Standard）是一种较早的对称加密算法，虽然因其密钥长度较短（56位密钥）而被认为不够安全，但它在教学和了解对称加密的基本概念中仍然是一个很好的例子。案例如下：
+
+```java
+package com.learn.test;
+
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+
+public class DesExample {
+
+    public static void main(String[] args) {
+        try {
+            // 生成DES密钥
+            KeyGenerator keyGenerator = KeyGenerator.getInstance("DES");
+            keyGenerator.init(56); // 指定密钥长度为56位
+            SecretKey secretKey = keyGenerator.generateKey();
+            byte[] keyBytes = secretKey.getEncoded();
+
+            // 创建DES密钥规范
+            SecretKeySpec keySpec = new SecretKeySpec(keyBytes, "DES");
+
+            // 原始数据
+            String data = "Hello, DES!";
+            System.out.println("Original Data: " + data);
+
+            // 加密数据
+            Cipher cipher = Cipher.getInstance("DES/ECB/PKCS5Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, keySpec);
+            byte[] encryptedData = cipher.doFinal(data.getBytes());
+            System.out.println("Encrypted Data: " + new String(encryptedData));
+
+            // 解密数据
+            cipher.init(Cipher.DECRYPT_MODE, keySpec);
+            byte[] decryptedData = cipher.doFinal(encryptedData);
+            System.out.println("Decrypted Data: " + new String(decryptedData));
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+```
+
+### 4.2.3 非对称加密算法
+
+非对称加密算法，也称为公钥加密算法，使用一对密钥：公钥和私钥。如果公钥用于加密数据，则私钥用于解密。如果私钥用于加密数据，则公钥用于解密。由于加密和解密使用的是不同的密钥，这种机制允许公钥可以公开分享，而私钥保持私密。非对称加密常用于安全的数据传输、数字签名和身份验证。RSA是最早和最广泛使用的非对称加密算法之一。
+
+Java使用RSA的例子：
+
+```java
+package com.learn.test;
+
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+
+import javax.crypto.Cipher;
+
+public class RsaExample {
+
+    public static void main(String[] args) {
+        try {
+            // 1. 生成RSA密钥对
+            KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+            keyPairGenerator.initialize(2048); // 密钥长度推荐为2048位
+            KeyPair keyPair = keyPairGenerator.generateKeyPair();
+            PublicKey publicKey = keyPair.getPublic();
+            PrivateKey privateKey = keyPair.getPrivate();
+
+            // 2. 加密数据
+            Cipher cipher = Cipher.getInstance("RSA");
+            cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+            String originalData = "Hello, RSA!";
+            byte[] encryptedData = cipher.doFinal(originalData.getBytes());
+            System.out.println("Encrypted Data: " + bytesToHex(encryptedData));
+
+            // 3. 解密数据
+            cipher.init(Cipher.DECRYPT_MODE, privateKey);
+            byte[] decryptedData = cipher.doFinal(encryptedData);
+            System.out.println("Decrypted Data: " + new String(decryptedData));
+
+        } catch (NoSuchAlgorithmException | javax.crypto.NoSuchPaddingException e) {
+            e.printStackTrace();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // 将字节数组转换为十六进制字符串的辅助方法
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) hexString.append('0');
+            hexString.append(hex);
+        }
+        return hexString.toString();
+    }
+}
+```
+
+非对称加密算法包含两种密钥，其中的公钥本来是公开的，这就不需要像对称加密算法那样将私钥给对方，对方解密时使用公开的公钥就行，这就大大提高了加密算法的安全性。退一步说，即使不法之徒获知了非对称加密算法的公钥，甚至获知了加密算法的源码，只要没有获取公钥对应的私钥，也是无法进行解密的。
+
+### 4.2.4 数字签名
+
+数字签名是一种用于验证数字信息完整性和来源认证的技术，它使接收者能够确认信息确实来自签名者，并且自签名之后未被篡改。数字签名广泛应用于软件分发、电子文档签署、在线交易等领域，是确保数字信息安全的关键技术之一。
+
+在非对称加密算法中，发送方A通过接收方B的的公钥将数据加密后，将加密后的密文发给接收方B，B利用私钥解密就能得到需要的数据。这里有一个问题，那就是接收方B公钥是公开的，B如何检查发送方A的身份。
+
+一种比较简单的方式就是发送方A利用A自己的私钥进行加密，然后B在利用A的公钥进行解密，由于私钥只有A知道，只要接收方解密成功，就可以确定消息来自A而不是其他地方。
+
+签名过程涉及以下几个步骤：
+
+1. **创建消息的散列（哈希）**：首先，对原始消息使用散列（哈希）函数生成一个固定长度的散列值（消息摘要）。这个散列值作为消息的唯一表示，任何对消息的微小改动都会导致散列值发生显著变化。
+2. **加密散列值**：然后，发送方使用自己的私钥对散列值进行加密，生成数字签名。私钥的保密性确保了签名的独特性和不可伪造性。
+3. **发送消息和数字签名**：发送方将原始消息和数字签名一起发送给接收方。
+
+接收方收到消息和数字签名后，进行以下步骤验证签名：
+
+1. **使用相同的散列函数生成散列值**：接收方对收到的原始消息应用相同的散列函数，生成一个散列值。
+2. **使用公钥解密数字签名**：接收方使用发送方的公钥对数字签名进行解密，得到一个散列值。公钥的使用确保了只有对应的私钥签名者才能生成的签名。
+3. **比较散列值**：接收方比较自己生成的散列值和解密得到的散列值。如果两者相同，说明消息在传输过程中未被篡改，且确认消息确实来自声称的发送者。
+
+数字签名的特点和优势主要有以下几点：
+
+- **认证**：数字签名帮助接收者验证消息的真实来源，确保消息是由预期的发送者签名的。
+- **完整性**：通过比较散列值，接收者可以确认消息自签名后未被修改，保证了消息的完整性。
+- **不可否认**：数字签名是签名者特有的，发送者不能否认他们签名的消息，提供了电子交易的法律依据。
+
+数字签名的安全性和有效性依赖于私钥的保密性，以及所用散列函数和加密算法的强度。在实际应用中，通常会用证书（由可信第三方颁发的公钥证书）来进一步增强数字签名机制的信任度。
+
+Java规范要求JDK版本提供的数字签名实现：
+
+| Java规范      | 描述                                              |
+| ------------- | ------------------------------------------------- |
+| SHA1withDSA   | 使用SHA1算法生成摘要，使用DSA算法进行摘要加密。   |
+| SHA1withRSA   | 使用SHA1算法生成摘要，使用RSA算法进行摘要加密。   |
+| SHA256withRSA | 使用SHA256算法生成摘要，使用RSA算法进行摘要加密。 |
+
+Java如何生成RSA密钥对，使用私钥对数据进行签名，以及使用公钥验证签名的案例如下：
+
+```java
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.Signature;
+
+public class DigitalSignatureExample {
+
+    public static void main(String[] args) {
+        try {
+            // 生成RSA密钥对
+            KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+            keyPairGenerator.initialize(2048);
+            KeyPair keyPair = keyPairGenerator.generateKeyPair();
+            PublicKey publicKey = keyPair.getPublic();
+            PrivateKey privateKey = keyPair.getPrivate();
+
+            // 创建要签名的数据
+            String data = "Hello, this is a message to sign";
+            byte[] dataBytes = data.getBytes();
+
+            // 创建Signature实例并初始化为签名模式
+            Signature signature = Signature.getInstance("SHA512withRSA");
+            signature.initSign(privateKey);
+            signature.update(dataBytes);
+            byte[] digitalSignature = signature.sign();
+
+            System.out.println("Digital Signature: " + bytesToHex(digitalSignature));
+
+            // 验证签名
+            signature.initVerify(publicKey);
+            signature.update(dataBytes);
+            boolean verified = signature.verify(digitalSignature);
+            System.out.println("Signature verified: " + verified);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // 将字节数组转换为十六进制字符串的辅助方法
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) hexString.append('0');
+            hexString.append(hex);
+        }
+        return hexString.toString();
+    }
+}
+```
+
+
 
 ## 4.3 SSL/TLS运行过程
 
@@ -1444,7 +1730,9 @@ SSL/TLS握手的第三阶段工作为：客户端进行回应，这个阶段一�
 
 ## 4.4 Keytool工具
 
-未完结
+> 未完结
+
+SSL/TSL在握手过程中，客户端需要服务端提供身份证书（也叫数字证书），有的场景下，甚至要求客户端也提供身份证书。安全数字证书主要包含自己的身份信息（如所有人的名称），以及其对外的公钥。
 
 ## 4.5 Java程序管理密钥和证书
 
